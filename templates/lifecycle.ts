@@ -31,7 +31,8 @@ export const customerListPagination: Template = {
     const k = g.int(3, 5);
     const steps: Step[] = [];
     for (let i = 1; i <= k; i++) steps.push(customer("customer-list-pagination", n, `c${i}`, `Parity ${n} #${i}`));
-    // created[gte] keeps earlier runs' customers (same deterministic email) out of the pages.
+    // ponytail: created[gte] scopes out earlier runs' customers (same deterministic email); two concurrent
+    // recordings of one seed within the same second would still collide — add a per-run email if that happens.
     const list = { email: email("customer-list-pagination", n), limit: 2, created: { gte: "$c1.created" } };
     for (let p = 1; p <= Math.ceil(k / 2); p++) {
       steps.push({

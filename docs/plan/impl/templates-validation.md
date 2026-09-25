@@ -1,6 +1,6 @@
 # Templates #1–#15: live validation
 
-Date 2026-09-25. Target: the Stripe sandbox (claimable `rkcs_test_` key), API version `2026-08-26.dahlia`. Each template was run for seeds 1 and 2 with `runSequence` via `runCorpus` (concurrency 5, the shared 20 req/s limiter). This ran from a throwaway script, `buildCorpus(TEMPLATES, [1, 2])` followed by `runCorpus(seqs, sandboxTarget(key), …)`, and took 58 s for all 30 sequences.
+Date 2026-09-25. Target: the Stripe sandbox (unclaimed, as the error-message prefix below confirms; the key type is `rkcs_test_` according to the Task 4 brief and was not inspected here), API version `2026-08-26.dahlia`. Each template was run for seeds 1 and 2 with `runSequence` via `runCorpus` (concurrency 5, the shared 20 req/s limiter). This ran from a throwaway script, `buildCorpus(TEMPLATES, [1, 2])` followed by `runCorpus(seqs, sandboxTarget(key), …)`, and took 58 s for all 30 sequences.
 
 **Every step returned the status its template intends.** Happy-path steps returned 2xx, and each error step returned the intended 4xx. Template #13 has two branches: seeds 1 and 2 take the default `payment_behavior` branch, and seed 3 was run as well to cover the `error_if_incomplete` branch.
 
