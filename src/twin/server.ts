@@ -67,6 +67,9 @@ const RESOURCE_ROUTES: Route[] = (
 ).flatMap((m) => m.routes ?? []);
 
 const IDEMPOTENCY_TTL = 24 * 3600;
+/** JSON.stringify replacer: param order does not change the idempotency hash. */
+const sortKeys = (_: string, v: unknown) =>
+  v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v;
 
 /** API key from `Bearer <key>` or Basic `<key>:`. */
 function apiKey(authorization: string | undefined): string {
@@ -128,7 +131,7 @@ export function createTwin(opts: { routes?: Route[] } = {}) {
 
       // Validation errors above are never stored, like the real API: only requests that reach a handler are.
       const idemKey = method === "POST" ? headers["idempotency-key"] : undefined;
-      const hash = createHash("sha256").update(JSON.stringify([method, req.path, params])).digest("hex");
+      const hash = createHash("sha256").update(JSON.stringify([method, req.path, params], sortKeys)).digest("hex");
       if (idemKey) {
         const hit = store.idem.get(idemKey);
         if (hit && now - hit.at < IDEMPOTENCY_TTL) {

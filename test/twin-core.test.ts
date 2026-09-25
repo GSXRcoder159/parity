@@ -170,8 +170,13 @@ test("idempotency: replay, mismatch, replayed errors, validation errors not stor
   const replay = await call(t, "POST", "/v1/customers", { email: "a@example.com" }, K);
   assert.equal(replay.headers["Idempotent-Replayed"], "true");
   assert.deepEqual(replay.body, first.body);
-  assert.equal(t.store.objects.size, 1);
-  assert.equal(t.store.events.length, 1);
+  const O = { "Idempotency-Key": "k-order" };
+  const ab = await call(t, "POST", "/v1/customers", { email: "o@example.com", metadata: { a: "1", b: "2" } }, O);
+  const ba = await call(t, "POST", "/v1/customers", { metadata: { b: "2", a: "1" }, email: "o@example.com" }, O);
+  assert.equal(ba.headers["Idempotent-Replayed"], "true", "param order does not matter");
+  assert.equal(ba.body.id, ab.body.id);
+  assert.equal(t.store.objects.size, 2);
+  assert.equal(t.store.events.length, 2);
 
   const mismatch = await call(t, "POST", "/v1/customers", { email: "b@example.com" }, K);
   assert.equal(mismatch.status, 400);
