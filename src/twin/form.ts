@@ -19,7 +19,8 @@ export function parseForm(body: string): Obj {
     }
     cur[at(segs.at(-1)!)] = value;
   }
-  return arrays(root) as Obj;
+  for (const k of Object.keys(root)) root[k] = arrays(root[k]); // the top level stays an object
+  return root;
 }
 
 // ponytail: an object keyed exactly "0".."n-1" becomes an array, so metadata[0]=x parses as ["x"];

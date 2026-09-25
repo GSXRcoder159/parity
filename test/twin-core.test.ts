@@ -72,6 +72,7 @@ test("parseForm inverts the harness's encodeForm", () => {
   assert.deepEqual(parseForm("expand[]=x&expand[]=y"), { expand: ["x", "y"] });
   assert.deepEqual(parseForm("a[b][0][c]=x"), { a: { b: [{ c: "x" }] } });
   assert.deepEqual(parseForm("name=&metadata[k]="), { name: "", metadata: { k: "" } });
+  assert.deepEqual(parseForm("0=a"), { 0: "a" });
   assert.deepEqual(parseForm("__proto__[polluted]=1&a=1"), { a: "1" });
   assert.equal(({} as Obj).polluted, undefined);
 });
