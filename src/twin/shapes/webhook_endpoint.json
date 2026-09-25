@@ -1,0 +1,14 @@
+{
+  "api_version": null,
+  "application": null,
+  "created": 0,
+  "description": null,
+  "enabled_events": [],
+  "id": "",
+  "livemode": false,
+  "metadata": {},
+  "object": "webhook_endpoint",
+  "secret": "",
+  "status": "",
+  "url": ""
+}

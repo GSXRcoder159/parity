@@ -1,0 +1,20 @@
+{
+  "active": false,
+  "created": 0,
+  "default_price": null,
+  "description": null,
+  "id": "",
+  "images": [],
+  "livemode": false,
+  "marketing_features": [],
+  "metadata": {},
+  "name": "",
+  "object": "product",
+  "package_dimensions": null,
+  "shippable": null,
+  "statement_descriptor": null,
+  "tax_code": null,
+  "unit_label": null,
+  "updated": 0,
+  "url": null
+}

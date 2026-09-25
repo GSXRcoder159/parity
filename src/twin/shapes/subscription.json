@@ -1,0 +1,74 @@
+{
+  "application": null,
+  "application_fee_percent": null,
+  "automatic_tax": {
+    "disabled_reason": null,
+    "enabled": false,
+    "liability": null
+  },
+  "billing_cycle_anchor": 0,
+  "billing_cycle_anchor_config": null,
+  "billing_mode": {
+    "flexible": null,
+    "type": "classic",
+    "updated_at": 0
+  },
+  "billing_schedules": [],
+  "billing_thresholds": null,
+  "cancel_at": null,
+  "cancel_at_period_end": false,
+  "canceled_at": null,
+  "cancellation_details": null,
+  "collection_method": "charge_automatically",
+  "created": 0,
+  "currency": "",
+  "customer": "",
+  "customer_account": null,
+  "days_until_due": null,
+  "default_payment_method": null,
+  "default_source": null,
+  "default_tax_rates": null,
+  "description": null,
+  "discounts": [],
+  "ended_at": null,
+  "id": "",
+  "invoice_settings": {
+    "account_tax_ids": null,
+    "custom_fields": null,
+    "description": null,
+    "footer": null,
+    "issuer": {
+      "account": "",
+      "type": "account"
+    }
+  },
+  "items": {
+    "data": [],
+    "has_more": false,
+    "object": "list",
+    "url": ""
+  },
+  "latest_invoice": null,
+  "livemode": false,
+  "managed_payments": null,
+  "metadata": {},
+  "next_pending_invoice_item_invoice": null,
+  "object": "subscription",
+  "on_behalf_of": null,
+  "pause_collection": null,
+  "payment_settings": null,
+  "pending_invoice_item_interval": null,
+  "pending_setup_intent": null,
+  "pending_update": null,
+  "presentment_details": {
+    "presentment_currency": ""
+  },
+  "schedule": null,
+  "start_date": 0,
+  "status": "active",
+  "test_clock": null,
+  "transfer_data": null,
+  "trial_end": null,
+  "trial_settings": null,
+  "trial_start": null
+}

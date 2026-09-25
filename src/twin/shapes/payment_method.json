@@ -1,0 +1,211 @@
+{
+  "acss_debit": {
+    "bank_name": null,
+    "fingerprint": null,
+    "institution_number": null,
+    "last4": null,
+    "transit_number": null
+  },
+  "affirm": {},
+  "afterpay_clearpay": {},
+  "alipay": {},
+  "allow_redisplay": "always",
+  "alma": {},
+  "amazon_pay": {},
+  "au_becs_debit": {
+    "bsb_number": null,
+    "fingerprint": null,
+    "last4": null
+  },
+  "bacs_debit": {
+    "fingerprint": null,
+    "last4": null,
+    "sort_code": null
+  },
+  "bancontact": {},
+  "billie": {},
+  "billing_details": {
+    "address": null,
+    "email": null,
+    "name": null,
+    "phone": null,
+    "tax_id": null
+  },
+  "bizum": {
+    "buyer_id": null
+  },
+  "blik": {
+    "buyer_id": null
+  },
+  "boleto": {
+    "tax_id": ""
+  },
+  "card": {
+    "brand": "",
+    "checks": null,
+    "country": null,
+    "display_brand": null,
+    "exp_month": 0,
+    "exp_year": 0,
+    "fingerprint": null,
+    "funding": "",
+    "generated_from": null,
+    "last4": "",
+    "networks": null,
+    "regulated_status": null,
+    "three_d_secure_usage": null,
+    "wallet": null
+  },
+  "card_present": {
+    "brand": null,
+    "brand_product": null,
+    "cardholder_name": null,
+    "country": null,
+    "description": null,
+    "exp_month": 0,
+    "exp_year": 0,
+    "fingerprint": null,
+    "funding": null,
+    "issuer": null,
+    "last4": null,
+    "networks": null,
+    "offline": null,
+    "preferred_locales": null,
+    "read_method": null,
+    "wallet": {
+      "type": "apple_pay"
+    }
+  },
+  "cashapp": {
+    "buyer_id": null,
+    "cashtag": null
+  },
+  "created": 0,
+  "crypto": {},
+  "custom": {
+    "display_name": null,
+    "logo": null,
+    "type": ""
+  },
+  "customer": null,
+  "customer_account": null,
+  "customer_balance": {},
+  "eps": {
+    "bank": null
+  },
+  "fpx": {
+    "bank": "affin_bank"
+  },
+  "giropay": {},
+  "grabpay": {},
+  "id": "",
+  "ideal": {
+    "bank": null,
+    "bic": null
+  },
+  "interac_present": {
+    "brand": null,
+    "cardholder_name": null,
+    "country": null,
+    "description": null,
+    "exp_month": 0,
+    "exp_year": 0,
+    "fingerprint": null,
+    "funding": null,
+    "issuer": null,
+    "last4": null,
+    "networks": null,
+    "preferred_locales": null,
+    "read_method": null
+  },
+  "kakao_pay": {},
+  "klarna": {
+    "dob": null
+  },
+  "konbini": {},
+  "kr_card": {
+    "brand": null,
+    "last4": null
+  },
+  "link": {
+    "email": null
+  },
+  "livemode": false,
+  "mb_way": {},
+  "metadata": null,
+  "mobilepay": {},
+  "multibanco": {},
+  "naver_pay": {
+    "buyer_id": null,
+    "funding": "card"
+  },
+  "nz_bank_account": {
+    "account_holder_name": null,
+    "bank_code": "",
+    "bank_name": "",
+    "branch_code": "",
+    "last4": "",
+    "suffix": null
+  },
+  "object": "payment_method",
+  "oxxo": {},
+  "p24": {
+    "bank": null
+  },
+  "pay_by_bank": {},
+  "payco": {},
+  "paynow": {},
+  "paypal": {
+    "country": null,
+    "payer_email": null,
+    "payer_id": null
+  },
+  "payto": {
+    "bsb_number": null,
+    "last4": null,
+    "pay_id": null
+  },
+  "pix": {
+    "fingerprint": null
+  },
+  "promptpay": {},
+  "radar_options": {
+    "session": ""
+  },
+  "revolut_pay": {},
+  "samsung_pay": {},
+  "satispay": {},
+  "scalapay": {},
+  "sepa_debit": {
+    "bank_code": null,
+    "branch_code": null,
+    "country": null,
+    "fingerprint": null,
+    "generated_from": null,
+    "last4": null
+  },
+  "sequra": {},
+  "sofort": {
+    "country": null
+  },
+  "sunbit": {},
+  "swish": {},
+  "twint": {},
+  "type": "acss_debit",
+  "upi": {
+    "vpa": null
+  },
+  "us_bank_account": {
+    "account_holder_type": null,
+    "account_type": null,
+    "bank_name": null,
+    "financial_connections_account": null,
+    "fingerprint": null,
+    "last4": null,
+    "networks": null,
+    "routing_number": null,
+    "status_details": null
+  },
+  "wechat_pay": {},
+  "zip": {}
+}

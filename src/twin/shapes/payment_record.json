@@ -1,0 +1,49 @@
+{
+  "amount": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_authorized": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_canceled": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_failed": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_guaranteed": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_refunded": {
+    "currency": "",
+    "value": 0
+  },
+  "amount_requested": {
+    "currency": "",
+    "value": 0
+  },
+  "application": null,
+  "created": 0,
+  "customer_details": null,
+  "customer_presence": null,
+  "description": null,
+  "id": "",
+  "latest_payment_attempt_record": null,
+  "livemode": false,
+  "metadata": {},
+  "object": "payment_record",
+  "payment_method_details": null,
+  "processor_details": {
+    "custom": {
+      "payment_reference": null
+    },
+    "type": "custom"
+  },
+  "reported_by": "self",
+  "shipping_details": null
+}

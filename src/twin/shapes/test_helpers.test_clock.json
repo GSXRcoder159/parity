@@ -1,0 +1,15 @@
+{
+  "created": 0,
+  "deletes_after": 0,
+  "frozen_time": 0,
+  "id": "",
+  "livemode": false,
+  "name": null,
+  "object": "test_helpers.test_clock",
+  "status": "advancing",
+  "status_details": {
+    "advancing": {
+      "target_frozen_time": 0
+    }
+  }
+}

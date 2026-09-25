@@ -1,0 +1,12 @@
+{
+  "amount": 0,
+  "balance_transaction": null,
+  "created": 0,
+  "currency": "",
+  "destination_payment_refund": null,
+  "id": "",
+  "metadata": null,
+  "object": "transfer_reversal",
+  "source_refund": null,
+  "transfer": ""
+}

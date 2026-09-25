@@ -1,0 +1,25 @@
+{
+  "amount": 0,
+  "currency": "",
+  "description": null,
+  "discount_amounts": null,
+  "discountable": false,
+  "discounts": [],
+  "id": "",
+  "invoice": null,
+  "livemode": false,
+  "metadata": {},
+  "object": "line_item",
+  "parent": null,
+  "period": {
+    "end": 0,
+    "start": 0
+  },
+  "pretax_credit_amounts": null,
+  "pricing": null,
+  "quantity": null,
+  "quantity_decimal": null,
+  "subscription": null,
+  "subtotal": 0,
+  "taxes": null
+}

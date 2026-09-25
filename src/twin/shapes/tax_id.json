@@ -1,0 +1,13 @@
+{
+  "country": null,
+  "created": 0,
+  "customer": null,
+  "customer_account": null,
+  "id": "",
+  "livemode": false,
+  "object": "tax_id",
+  "owner": null,
+  "type": "ad_nrt",
+  "value": "",
+  "verification": null
+}

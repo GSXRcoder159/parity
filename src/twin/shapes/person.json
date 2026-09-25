@@ -1,0 +1,74 @@
+{
+  "account": "",
+  "additional_tos_acceptances": {
+    "account": null
+  },
+  "address": {
+    "city": null,
+    "country": null,
+    "line1": null,
+    "line2": null,
+    "postal_code": null,
+    "state": null
+  },
+  "address_kana": null,
+  "address_kanji": null,
+  "created": 0,
+  "dob": {
+    "day": null,
+    "month": null,
+    "year": null
+  },
+  "email": null,
+  "first_name": null,
+  "first_name_kana": null,
+  "first_name_kanji": null,
+  "full_name_aliases": [],
+  "future_requirements": null,
+  "gender": null,
+  "id": "",
+  "id_number_provided": false,
+  "id_number_secondary_provided": false,
+  "last_name": null,
+  "last_name_kana": null,
+  "last_name_kanji": null,
+  "maiden_name": null,
+  "metadata": {},
+  "nationality": null,
+  "object": "person",
+  "phone": null,
+  "political_exposure": "existing",
+  "registered_address": {
+    "city": null,
+    "country": null,
+    "line1": null,
+    "line2": null,
+    "postal_code": null,
+    "state": null
+  },
+  "relationship": {
+    "authorizer": null,
+    "director": null,
+    "executive": null,
+    "legal_guardian": null,
+    "owner": null,
+    "percent_ownership": null,
+    "representative": null,
+    "title": null
+  },
+  "requirements": null,
+  "ssn_last_4_provided": false,
+  "us_cfpb_data": null,
+  "verification": {
+    "additional_document": null,
+    "details": null,
+    "details_code": null,
+    "document": {
+      "back": null,
+      "details": null,
+      "details_code": null,
+      "front": null
+    },
+    "status": ""
+  }
+}

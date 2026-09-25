@@ -1,0 +1,21 @@
+{
+  "account": null,
+  "account_holder_name": null,
+  "account_holder_type": null,
+  "account_type": null,
+  "available_payout_methods": null,
+  "bank_name": null,
+  "country": "",
+  "currency": "",
+  "customer": null,
+  "default_for_currency": null,
+  "fingerprint": null,
+  "future_requirements": null,
+  "id": "",
+  "last4": "",
+  "metadata": null,
+  "object": "bank_account",
+  "requirements": null,
+  "routing_number": null,
+  "status": ""
+}

@@ -1,0 +1,95 @@
+{
+  "amount": 0,
+  "balance_transactions": [],
+  "charge": "",
+  "created": 0,
+  "currency": "",
+  "enhanced_eligibility_types": [],
+  "evidence": {
+    "access_activity_log": null,
+    "billing_address": null,
+    "cancellation_policy": null,
+    "cancellation_policy_disclosure": null,
+    "cancellation_rebuttal": null,
+    "customer_communication": null,
+    "customer_email_address": null,
+    "customer_name": null,
+    "customer_purchase_ip": null,
+    "customer_signature": null,
+    "duplicate_charge_documentation": null,
+    "duplicate_charge_explanation": null,
+    "duplicate_charge_id": null,
+    "enhanced_evidence": {
+      "mastercard_compliance": {
+        "fee_acknowledged": false
+      },
+      "visa_compelling_evidence_3": {
+        "disputed_transaction": null,
+        "prior_undisputed_transactions": []
+      },
+      "visa_compliance": {
+        "fee_acknowledged": false
+      }
+    },
+    "product_description": null,
+    "receipt": null,
+    "refund_policy": null,
+    "refund_policy_disclosure": null,
+    "refund_refusal_explanation": null,
+    "service_date": null,
+    "service_documentation": null,
+    "shipping_address": null,
+    "shipping_carrier": null,
+    "shipping_date": null,
+    "shipping_documentation": null,
+    "shipping_tracking_number": null,
+    "uncategorized_file": null,
+    "uncategorized_text": null
+  },
+  "evidence_details": {
+    "due_by": null,
+    "enhanced_eligibility": {
+      "mastercard_compliance": {
+        "status": "fee_acknowledged"
+      },
+      "visa_compelling_evidence_3": {
+        "required_actions": [],
+        "status": "not_qualified"
+      },
+      "visa_compliance": {
+        "status": "fee_acknowledged"
+      }
+    },
+    "has_evidence": false,
+    "past_due": false,
+    "submission_count": 0
+  },
+  "id": "",
+  "is_charge_refundable": false,
+  "livemode": false,
+  "metadata": {},
+  "object": "dispute",
+  "payment_intent": null,
+  "payment_method_details": {
+    "amazon_pay": {
+      "dispute_type": null
+    },
+    "card": {
+      "brand": "",
+      "case_type": "block",
+      "network": "",
+      "network_reason_code": null
+    },
+    "klarna": {
+      "chargeback_loss_reason_code": "",
+      "reason_code": null
+    },
+    "paypal": {
+      "case_id": null,
+      "reason_code": null
+    },
+    "type": "amazon_pay"
+  },
+  "reason": "",
+  "status": "lost"
+}

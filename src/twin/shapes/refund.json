@@ -1,0 +1,124 @@
+{
+  "amount": 0,
+  "balance_transaction": null,
+  "charge": null,
+  "created": 0,
+  "currency": "",
+  "customer": null,
+  "customer_account": null,
+  "description": "",
+  "destination_details": {
+    "affirm": {},
+    "afterpay_clearpay": {},
+    "alipay": {},
+    "alma": {},
+    "amazon_pay": {},
+    "au_bank_transfer": {},
+    "blik": {
+      "network_decline_code": null,
+      "reference": null,
+      "reference_status": null
+    },
+    "br_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "card": {
+      "reference": "",
+      "reference_status": "",
+      "reference_type": "",
+      "type": "pending"
+    },
+    "cashapp": {},
+    "crypto": {
+      "reference": null
+    },
+    "customer_cash_balance": {},
+    "eps": {},
+    "eu_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "gb_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "giropay": {},
+    "grabpay": {},
+    "jp_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "klarna": {},
+    "mb_way": {
+      "reference": null,
+      "reference_status": null
+    },
+    "multibanco": {
+      "reference": null,
+      "reference_status": null
+    },
+    "mx_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "nz_bank_transfer": {},
+    "p24": {
+      "reference": null,
+      "reference_status": null
+    },
+    "paynow": {},
+    "paypal": {
+      "network_decline_code": null
+    },
+    "pix": {},
+    "revolut": {},
+    "scalapay": {},
+    "sofort": {},
+    "swish": {
+      "network_decline_code": null,
+      "reference": null,
+      "reference_status": null
+    },
+    "th_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "twint": {},
+    "type": "",
+    "us_bank_transfer": {
+      "reference": null,
+      "reference_status": null
+    },
+    "wechat_pay": {},
+    "zip": {}
+  },
+  "failure_balance_transaction": "",
+  "failure_reason": "",
+  "id": "",
+  "instructions_email": "",
+  "metadata": null,
+  "next_action": {
+    "display_details": {
+      "email_sent": {
+        "email_sent_at": 0,
+        "email_sent_to": ""
+      },
+      "expires_at": 0
+    },
+    "type": ""
+  },
+  "object": "refund",
+  "payment_intent": null,
+  "payment_method": null,
+  "pending_reason": "charge_pending",
+  "presentment_details": {
+    "presentment_amount": 0,
+    "presentment_currency": ""
+  },
+  "reason": null,
+  "receipt_number": null,
+  "source_transfer_reversal": null,
+  "status": null,
+  "transfer_reversal": null
+}

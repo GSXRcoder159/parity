@@ -1,0 +1,24 @@
+{
+  "active": false,
+  "code": "",
+  "created": 0,
+  "customer": null,
+  "customer_account": null,
+  "expires_at": null,
+  "id": "",
+  "livemode": false,
+  "max_redemptions": null,
+  "metadata": null,
+  "object": "promotion_code",
+  "promotion": {
+    "coupon": null,
+    "type": "coupon"
+  },
+  "restrictions": {
+    "currency_options": {},
+    "first_time_transaction": false,
+    "minimum_amount": null,
+    "minimum_amount_currency": null
+  },
+  "times_redeemed": 0
+}

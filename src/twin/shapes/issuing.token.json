@@ -1,0 +1,51 @@
+{
+  "card": "",
+  "created": 0,
+  "device_fingerprint": null,
+  "id": "",
+  "last4": "",
+  "livemode": false,
+  "network": "mastercard",
+  "network_data": {
+    "device": {
+      "device_fingerprint": "",
+      "ip_address": "",
+      "location": "",
+      "name": "",
+      "phone_number": "",
+      "type": "other"
+    },
+    "mastercard": {
+      "card_reference_id": "",
+      "token_reference_id": "",
+      "token_requestor_id": "",
+      "token_requestor_name": ""
+    },
+    "type": "mastercard",
+    "visa": {
+      "card_reference_id": null,
+      "token_reference_id": "",
+      "token_requestor_id": "",
+      "token_risk_score": ""
+    },
+    "wallet_provider": {
+      "account_id": "",
+      "account_trust_score": 0,
+      "card_number_source": "app",
+      "cardholder_address": {
+        "line1": "",
+        "postal_code": ""
+      },
+      "cardholder_name": "",
+      "device_trust_score": 0,
+      "hashed_account_email_address": "",
+      "reason_codes": [],
+      "suggested_decision": "approve",
+      "suggested_decision_version": ""
+    }
+  },
+  "network_updated_at": 0,
+  "object": "issuing.token",
+  "status": "active",
+  "wallet_provider": "apple_pay"
+}

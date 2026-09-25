@@ -1,0 +1,20 @@
+{
+  "active": false,
+  "country": null,
+  "created": 0,
+  "description": null,
+  "display_name": "",
+  "effective_percentage": null,
+  "flat_amount": null,
+  "id": "",
+  "inclusive": false,
+  "jurisdiction": null,
+  "jurisdiction_level": null,
+  "livemode": false,
+  "metadata": null,
+  "object": "tax_rate",
+  "percentage": 0,
+  "rate_type": null,
+  "state": null,
+  "tax_type": null
+}

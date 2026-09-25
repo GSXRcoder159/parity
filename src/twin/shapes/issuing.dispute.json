@@ -1,0 +1,73 @@
+{
+  "amount": 0,
+  "balance_transactions": null,
+  "created": 0,
+  "currency": "",
+  "evidence": {
+    "canceled": {
+      "additional_documentation": null,
+      "canceled_at": null,
+      "cancellation_policy_provided": null,
+      "cancellation_reason": null,
+      "expected_at": null,
+      "explanation": null,
+      "product_description": null,
+      "product_type": null,
+      "return_status": null,
+      "returned_at": null
+    },
+    "duplicate": {
+      "additional_documentation": null,
+      "card_statement": null,
+      "cash_receipt": null,
+      "check_image": null,
+      "explanation": null,
+      "original_transaction": null
+    },
+    "fraudulent": {
+      "additional_documentation": null,
+      "explanation": null
+    },
+    "merchandise_not_as_described": {
+      "additional_documentation": null,
+      "explanation": null,
+      "received_at": null,
+      "return_description": null,
+      "return_status": null,
+      "returned_at": null
+    },
+    "no_valid_authorization": {
+      "additional_documentation": null,
+      "explanation": null
+    },
+    "not_received": {
+      "additional_documentation": null,
+      "expected_at": null,
+      "explanation": null,
+      "product_description": null,
+      "product_type": null
+    },
+    "other": {
+      "additional_documentation": null,
+      "explanation": null,
+      "product_description": null,
+      "product_type": null
+    },
+    "reason": "canceled",
+    "service_not_as_described": {
+      "additional_documentation": null,
+      "canceled_at": null,
+      "cancellation_reason": null,
+      "explanation": null,
+      "received_at": null
+    }
+  },
+  "id": "",
+  "livemode": false,
+  "loss_reason": "cardholder_authentication_issuer_liability",
+  "metadata": {},
+  "object": "issuing.dispute",
+  "status": "expired",
+  "transaction": "",
+  "treasury": null
+}

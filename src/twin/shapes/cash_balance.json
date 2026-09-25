@@ -1,0 +1,11 @@
+{
+  "available": null,
+  "customer": "",
+  "customer_account": null,
+  "livemode": false,
+  "object": "cash_balance",
+  "settings": {
+    "reconciliation_mode": "automatic",
+    "using_merchant_default": false
+  }
+}

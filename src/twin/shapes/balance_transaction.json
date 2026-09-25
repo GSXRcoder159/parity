@@ -1,0 +1,18 @@
+{
+  "amount": 0,
+  "available_on": 0,
+  "balance_type": "issuing",
+  "created": 0,
+  "currency": "",
+  "description": null,
+  "exchange_rate": null,
+  "fee": 0,
+  "fee_details": [],
+  "id": "",
+  "net": 0,
+  "object": "balance_transaction",
+  "reporting_category": "",
+  "source": null,
+  "status": "",
+  "type": "adjustment"
+}

@@ -1,0 +1,18 @@
+{
+  "active": false,
+  "created": 0,
+  "delivery_estimate": null,
+  "display_name": null,
+  "fixed_amount": {
+    "amount": 0,
+    "currency": "",
+    "currency_options": {}
+  },
+  "id": "",
+  "livemode": false,
+  "metadata": {},
+  "object": "shipping_rate",
+  "tax_behavior": null,
+  "tax_code": null,
+  "type": "fixed_amount"
+}

@@ -1,0 +1,10 @@
+{
+  "amount": 0,
+  "balance_transaction": null,
+  "created": 0,
+  "currency": "",
+  "fee": "",
+  "id": "",
+  "metadata": null,
+  "object": "fee_refund"
+}

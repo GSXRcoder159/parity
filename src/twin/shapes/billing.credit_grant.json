@@ -1,0 +1,27 @@
+{
+  "amount": {
+    "monetary": null,
+    "type": "monetary"
+  },
+  "applicability_config": {
+    "scope": {
+      "price_type": "metered",
+      "prices": []
+    }
+  },
+  "category": "paid",
+  "created": 0,
+  "customer": "",
+  "customer_account": null,
+  "effective_at": null,
+  "expires_at": null,
+  "id": "",
+  "livemode": false,
+  "metadata": {},
+  "name": null,
+  "object": "billing.credit_grant",
+  "priority": null,
+  "test_clock": null,
+  "updated": 0,
+  "voided_at": null
+}

@@ -1,0 +1,51 @@
+{
+  "application": null,
+  "billing_mode": {
+    "flexible": null,
+    "type": "classic",
+    "updated_at": 0
+  },
+  "canceled_at": null,
+  "completed_at": null,
+  "created": 0,
+  "current_phase": null,
+  "customer": "",
+  "customer_account": null,
+  "default_settings": {
+    "application_fee_percent": null,
+    "automatic_tax": {
+      "disabled_reason": null,
+      "enabled": false,
+      "liability": null
+    },
+    "billing_cycle_anchor": "automatic",
+    "billing_thresholds": null,
+    "collection_method": null,
+    "default_payment_method": null,
+    "description": null,
+    "invoice_settings": {
+      "account_tax_ids": null,
+      "custom_fields": null,
+      "days_until_due": null,
+      "description": null,
+      "footer": null,
+      "issuer": {
+        "account": "",
+        "type": "account"
+      }
+    },
+    "on_behalf_of": null,
+    "transfer_data": null
+  },
+  "end_behavior": "cancel",
+  "id": "",
+  "livemode": false,
+  "metadata": null,
+  "object": "subscription_schedule",
+  "phases": [],
+  "released_at": null,
+  "released_subscription": null,
+  "status": "active",
+  "subscription": null,
+  "test_clock": null
+}

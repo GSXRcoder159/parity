@@ -1,0 +1,246 @@
+{
+  "ach_credit_transfer": {
+    "account_number": null,
+    "bank_name": null,
+    "fingerprint": null,
+    "refund_account_holder_name": null,
+    "refund_account_holder_type": null,
+    "refund_routing_number": null,
+    "routing_number": null,
+    "swift_code": null
+  },
+  "ach_debit": {
+    "bank_name": null,
+    "country": null,
+    "fingerprint": null,
+    "last4": null,
+    "routing_number": null,
+    "type": null
+  },
+  "acss_debit": {
+    "bank_address_city": null,
+    "bank_address_line_1": null,
+    "bank_address_line_2": null,
+    "bank_address_postal_code": null,
+    "bank_name": null,
+    "category": null,
+    "country": null,
+    "fingerprint": null,
+    "last4": null,
+    "routing_number": null
+  },
+  "alipay": {
+    "data_string": null,
+    "native_url": null,
+    "statement_descriptor": null
+  },
+  "allow_redisplay": null,
+  "amount": null,
+  "au_becs_debit": {
+    "bsb_number": null,
+    "fingerprint": null,
+    "last4": null
+  },
+  "bancontact": {
+    "bank_code": null,
+    "bank_name": null,
+    "bic": null,
+    "iban_last4": null,
+    "preferred_language": null,
+    "statement_descriptor": null
+  },
+  "card": {
+    "address_line1_check": null,
+    "address_zip_check": null,
+    "brand": null,
+    "country": null,
+    "cvc_check": null,
+    "dynamic_last4": null,
+    "exp_month": null,
+    "exp_year": null,
+    "fingerprint": "",
+    "funding": null,
+    "last4": null,
+    "name": null,
+    "three_d_secure": "",
+    "tokenization_method": null
+  },
+  "card_present": {
+    "application_cryptogram": "",
+    "application_preferred_name": "",
+    "authorization_code": null,
+    "authorization_response_code": "",
+    "brand": null,
+    "country": null,
+    "cvm_type": "",
+    "data_type": null,
+    "dedicated_file_name": "",
+    "emv_auth_data": "",
+    "evidence_customer_signature": null,
+    "evidence_transaction_certificate": null,
+    "exp_month": null,
+    "exp_year": null,
+    "fingerprint": "",
+    "funding": null,
+    "last4": null,
+    "pos_device_id": null,
+    "pos_entry_mode": "",
+    "read_method": null,
+    "reader": null,
+    "terminal_verification_results": "",
+    "transaction_status_information": ""
+  },
+  "client_secret": "",
+  "code_verification": {
+    "attempts_remaining": 0,
+    "status": ""
+  },
+  "created": 0,
+  "currency": null,
+  "customer": "",
+  "eps": {
+    "reference": null,
+    "statement_descriptor": null
+  },
+  "flow": "",
+  "giropay": {
+    "bank_code": null,
+    "bank_name": null,
+    "bic": null,
+    "statement_descriptor": null
+  },
+  "id": "",
+  "ideal": {
+    "bank": null,
+    "bic": null,
+    "iban_last4": null,
+    "statement_descriptor": null
+  },
+  "klarna": {
+    "background_image_url": "",
+    "client_token": null,
+    "first_name": "",
+    "last_name": "",
+    "locale": "",
+    "logo_url": "",
+    "page_title": "",
+    "pay_later_asset_urls_descriptive": "",
+    "pay_later_asset_urls_standard": "",
+    "pay_later_name": "",
+    "pay_later_redirect_url": "",
+    "pay_now_asset_urls_descriptive": "",
+    "pay_now_asset_urls_standard": "",
+    "pay_now_name": "",
+    "pay_now_redirect_url": "",
+    "pay_over_time_asset_urls_descriptive": "",
+    "pay_over_time_asset_urls_standard": "",
+    "pay_over_time_name": "",
+    "pay_over_time_redirect_url": "",
+    "payment_method_categories": "",
+    "purchase_country": "",
+    "purchase_type": "",
+    "redirect_url": "",
+    "shipping_delay": 0,
+    "shipping_first_name": "",
+    "shipping_last_name": ""
+  },
+  "livemode": false,
+  "metadata": null,
+  "multibanco": {
+    "entity": null,
+    "reference": null,
+    "refund_account_holder_address_city": null,
+    "refund_account_holder_address_country": null,
+    "refund_account_holder_address_line1": null,
+    "refund_account_holder_address_line2": null,
+    "refund_account_holder_address_postal_code": null,
+    "refund_account_holder_address_state": null,
+    "refund_account_holder_name": null,
+    "refund_iban": null
+  },
+  "object": "source",
+  "owner": null,
+  "p24": {
+    "reference": null
+  },
+  "receiver": {
+    "address": null,
+    "amount_charged": 0,
+    "amount_received": 0,
+    "amount_returned": 0,
+    "refund_attributes_method": "",
+    "refund_attributes_status": ""
+  },
+  "redirect": {
+    "failure_reason": null,
+    "return_url": "",
+    "status": "",
+    "url": ""
+  },
+  "sepa_debit": {
+    "bank_code": null,
+    "branch_code": null,
+    "country": null,
+    "fingerprint": null,
+    "last4": null,
+    "mandate_reference": null,
+    "mandate_url": null
+  },
+  "sofort": {
+    "bank_code": null,
+    "bank_name": null,
+    "bic": null,
+    "country": null,
+    "iban_last4": null,
+    "preferred_language": null,
+    "statement_descriptor": null
+  },
+  "source_order": {
+    "amount": 0,
+    "currency": "",
+    "email": "",
+    "items": null,
+    "shipping": {
+      "address": {
+        "city": null,
+        "country": null,
+        "line1": null,
+        "line2": null,
+        "postal_code": null,
+        "state": null
+      },
+      "carrier": null,
+      "name": "",
+      "phone": null,
+      "tracking_number": null
+    }
+  },
+  "statement_descriptor": null,
+  "status": "",
+  "three_d_secure": {
+    "address_line1_check": null,
+    "address_zip_check": null,
+    "authenticated": null,
+    "brand": null,
+    "card": null,
+    "country": null,
+    "customer": null,
+    "cvc_check": null,
+    "dynamic_last4": null,
+    "exp_month": null,
+    "exp_year": null,
+    "fingerprint": "",
+    "funding": null,
+    "last4": null,
+    "name": null,
+    "three_d_secure": "",
+    "tokenization_method": null
+  },
+  "type": "ach_credit_transfer",
+  "usage": null,
+  "wechat": {
+    "prepay_id": "",
+    "qr_code_url": null,
+    "statement_descriptor": ""
+  }
+}

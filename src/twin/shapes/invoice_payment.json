@@ -1,0 +1,22 @@
+{
+  "amount_paid": null,
+  "amount_requested": 0,
+  "created": 0,
+  "currency": "",
+  "id": "",
+  "invoice": "",
+  "is_default": false,
+  "livemode": false,
+  "object": "invoice_payment",
+  "payment": {
+    "charge": "",
+    "payment_intent": "",
+    "payment_record": "",
+    "type": "charge"
+  },
+  "status": "",
+  "status_transitions": {
+    "canceled_at": null,
+    "paid_at": null
+  }
+}

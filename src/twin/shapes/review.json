@@ -1,0 +1,16 @@
+{
+  "billing_zip": null,
+  "charge": null,
+  "closed_reason": null,
+  "created": 0,
+  "id": "",
+  "ip_address": null,
+  "ip_address_location": null,
+  "livemode": false,
+  "object": "review",
+  "open": false,
+  "opened_reason": "manual",
+  "payment_intent": "",
+  "reason": "",
+  "session": null
+}

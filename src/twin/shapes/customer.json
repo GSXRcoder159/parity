@@ -1,0 +1,58 @@
+{
+  "address": null,
+  "balance": 0,
+  "business_name": "",
+  "cash_balance": null,
+  "created": 0,
+  "currency": null,
+  "customer_account": null,
+  "default_source": null,
+  "delinquent": null,
+  "description": null,
+  "discount": null,
+  "email": null,
+  "id": "",
+  "individual_name": "",
+  "invoice_credit_balance": {},
+  "invoice_prefix": null,
+  "invoice_settings": {
+    "custom_fields": null,
+    "default_payment_method": null,
+    "footer": null,
+    "rendering_options": null
+  },
+  "livemode": false,
+  "metadata": {},
+  "name": null,
+  "next_invoice_sequence": 0,
+  "object": "customer",
+  "phone": null,
+  "preferred_locales": null,
+  "shipping": null,
+  "sources": {
+    "data": [],
+    "has_more": false,
+    "object": "list",
+    "url": ""
+  },
+  "subscriptions": {
+    "data": [],
+    "has_more": false,
+    "object": "list",
+    "url": ""
+  },
+  "tax": {
+    "automatic_tax": "failed",
+    "ip_address": null,
+    "location": null,
+    "provider": "anrok"
+  },
+  "tax_exempt": null,
+  "tax_ids": {
+    "data": [],
+    "has_more": false,
+    "object": "list",
+    "url": ""
+  },
+  "test_clock": null
+}

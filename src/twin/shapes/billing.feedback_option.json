@@ -1,0 +1,10 @@
+{
+  "description": "",
+  "id": "",
+  "livemode": false,
+  "object": "billing.feedback_option",
+  "status": "active",
+  "status_transitions": {
+    "deactivated_at": null
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "checkout_session": null,
+  "customer": null,
+  "customer_account": null,
+  "deleted": true,
+  "id": "",
+  "invoice": null,
+  "invoice_item": null,
+  "object": "discount",
+  "promotion_code": null,
+  "source": {
+    "coupon": null,
+    "type": "coupon"
+  },
+  "start": 0,
+  "subscription": null,
+  "subscription_item": null
+}

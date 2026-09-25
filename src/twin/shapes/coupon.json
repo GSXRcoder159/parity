@@ -1,0 +1,21 @@
+{
+  "amount_off": null,
+  "applies_to": {
+    "products": []
+  },
+  "created": 0,
+  "currency": null,
+  "currency_options": {},
+  "duration": "forever",
+  "duration_in_months": null,
+  "id": "",
+  "livemode": false,
+  "max_redemptions": null,
+  "metadata": null,
+  "name": null,
+  "object": "coupon",
+  "percent_off": null,
+  "redeem_by": null,
+  "times_redeemed": 0,
+  "valid": false
+}

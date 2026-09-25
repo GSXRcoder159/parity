@@ -1,0 +1,12 @@
+{
+  "discount_amount": null,
+  "id": "",
+  "object": "payment_intent_amount_details_line_item",
+  "payment_method_options": null,
+  "product_code": null,
+  "product_name": "",
+  "quantity": 0,
+  "tax": null,
+  "unit_cost": 0,
+  "unit_of_measure": null
+}

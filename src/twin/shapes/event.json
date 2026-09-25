@@ -1,0 +1,16 @@
+{
+  "account": "",
+  "api_version": null,
+  "context": "",
+  "created": 0,
+  "data": {
+    "object": {},
+    "previous_attributes": {}
+  },
+  "id": "",
+  "livemode": false,
+  "object": "event",
+  "pending_webhooks": 0,
+  "request": null,
+  "type": ""
+}

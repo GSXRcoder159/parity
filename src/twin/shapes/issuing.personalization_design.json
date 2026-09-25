@@ -1,0 +1,21 @@
+{
+  "card_logo": null,
+  "carrier_text": null,
+  "created": 0,
+  "id": "",
+  "livemode": false,
+  "lookup_key": null,
+  "metadata": {},
+  "name": null,
+  "object": "issuing.personalization_design",
+  "physical_bundle": "",
+  "preferences": {
+    "is_default": false,
+    "is_platform_default": null
+  },
+  "rejection_reasons": {
+    "card_logo": null,
+    "carrier_text": null
+  },
+  "status": "active"
+}

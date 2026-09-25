@@ -1,0 +1,12 @@
+{
+  "created": 0,
+  "credit": null,
+  "credit_grant": "",
+  "debit": null,
+  "effective_at": 0,
+  "id": "",
+  "livemode": false,
+  "object": "billing.credit_balance_transaction",
+  "test_clock": null,
+  "type": null
+}

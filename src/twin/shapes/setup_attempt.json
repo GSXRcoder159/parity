@@ -1,0 +1,90 @@
+{
+  "application": null,
+  "attach_to_self": false,
+  "created": 0,
+  "customer": null,
+  "customer_account": null,
+  "flow_directions": null,
+  "id": "",
+  "livemode": false,
+  "object": "setup_attempt",
+  "on_behalf_of": null,
+  "payment_method": "",
+  "payment_method_details": {
+    "acss_debit": {},
+    "amazon_pay": {},
+    "au_becs_debit": {},
+    "bacs_debit": {},
+    "bancontact": {
+      "bank_code": null,
+      "bank_name": null,
+      "bic": null,
+      "generated_sepa_debit": null,
+      "generated_sepa_debit_mandate": null,
+      "iban_last4": null,
+      "preferred_language": null,
+      "verified_name": null
+    },
+    "boleto": {},
+    "card": {
+      "brand": null,
+      "checks": null,
+      "country": null,
+      "exp_month": null,
+      "exp_year": null,
+      "fingerprint": null,
+      "funding": null,
+      "last4": null,
+      "network": null,
+      "three_d_secure": null,
+      "wallet": null
+    },
+    "card_present": {
+      "generated_card": null,
+      "offline": null
+    },
+    "cashapp": {},
+    "ideal": {
+      "bank": null,
+      "bic": null,
+      "generated_sepa_debit": null,
+      "generated_sepa_debit_mandate": null,
+      "iban_last4": null,
+      "verified_name": null
+    },
+    "kakao_pay": {},
+    "klarna": {},
+    "kr_card": {},
+    "link": {},
+    "naver_pay": {
+      "buyer_id": ""
+    },
+    "nz_bank_account": {},
+    "paypal": {},
+    "payto": {},
+    "pix": {
+      "fingerprint": null
+    },
+    "revolut_pay": {},
+    "satispay": {},
+    "sepa_debit": {},
+    "sofort": {
+      "bank_code": null,
+      "bank_name": null,
+      "bic": null,
+      "generated_sepa_debit": null,
+      "generated_sepa_debit_mandate": null,
+      "iban_last4": null,
+      "preferred_language": null,
+      "verified_name": null
+    },
+    "twint": {},
+    "type": "",
+    "upi": {},
+    "us_bank_account": {}
+  },
+  "setup_error": null,
+  "setup_intent": "",
+  "status": "",
+  "usage": ""
+}
