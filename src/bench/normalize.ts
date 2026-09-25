@@ -39,7 +39,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "list-order",
     rationale:
-      "Objects created within the same second list in arbitrary order; `data` of `list`/`search_result` is sorted by raw `created` descending, ties by normalized JSON. Hides: wrong order among same-second objects, and wrong order for elements without `created`.",
+      "Objects created within the same second list in arbitrary order; `data` of `list`/`search_result` is sorted by raw `created` descending, ties by normalized JSON. Hides: any wrong list order (e.g. ascending instead of newest-first, or misordered elements without `created`), not just same-second ties; page membership and `has_more` are still compared.",
   },
 ];
 
