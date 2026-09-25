@@ -63,6 +63,8 @@ export interface StepRecord {
   ms: number;
   /** Set when a ref could not be resolved or the transport failed. */
   error?: string;
+  /** 429 retries spent on this step (absent when none). */
+  retries?: number;
 }
 
 export interface StripeEvent {
