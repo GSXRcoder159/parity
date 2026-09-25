@@ -62,6 +62,8 @@ const INVOICE_NUMBER = /^[A-Z0-9]+-(\d+)$/;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
+/** JSON.stringify replacer: canonical key order, so tie-breaks ignore a target's key order. */
+const sortKeys = (_: string, x: unknown): unknown => (isObj(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x);
 
 /** First integer `created`, depth-first, own key before children. */
 function firstCreated(v: unknown): number | undefined {
@@ -125,7 +127,7 @@ export function normalizeRecording(r: Recording): Recording {
     if ((v.object === "list" || v.object === "search_result") && Array.isArray(v.data)) {
       const norm = out.data as unknown[];
       out.data = v.data
-        .map((raw, i) => ({ c: isObj(raw) && typeof raw.created === "number" ? raw.created : 0, n: norm[i], j: JSON.stringify(norm[i]) }))
+        .map((raw, i) => ({ c: isObj(raw) && typeof raw.created === "number" ? raw.created : 0, n: norm[i], j: JSON.stringify(norm[i], sortKeys) }))
         .sort((a, b) => b.c - a.c || (a.j < b.j ? -1 : a.j > b.j ? 1 : 0))
         .map((e) => e.n);
     }

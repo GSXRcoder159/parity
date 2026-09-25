@@ -143,6 +143,15 @@ test("lists: data sorted by raw created desc, ties by normalized JSON; livemode 
     ["c@x", "a@x", "b@x"],
   );
   assert.equal(body(a, 0).livemode, false);
+
+
+  // Ties ignore key order (a twin need not emit Stripe's): fields cross-ordered so a key-order-sensitive tie-break flips.
+  const x = { email: "a@x", name: "z", created: T0 };
+  const y = { email: "b@x", name: "a", created: T0 };
+  const flip = (o: typeof x) => ({ name: o.name, email: o.email, created: o.created });
+  const p = normalizeRecording(rec([step(0, { object: "list", data: [x, y] })]));
+  const q = normalizeRecording(rec([step(0, { object: "list", data: [flip(y), flip(x)] })]));
+  assert.deepEqual(body(p, 0), body(q, 0));
 });
 
 test("normalizeRecording and normalizeRaw do not mutate the input", () => {
