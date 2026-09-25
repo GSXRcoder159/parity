@@ -1,0 +1,17 @@
+{
+  "name": "paritybench",
+  "version": "0.0.1",
+  "description": "Measure how faithfully a Stripe-compatible server reproduces the real Stripe sandbox, and a Stripe Billing twin that is scored nightly.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22.18.0" },
+  "bin": { "paritybench": "src/cli.ts" },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}
