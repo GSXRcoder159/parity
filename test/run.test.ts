@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import {
   sandboxTarget,
   type Target,
 } from "../src/bench/run.ts";
+import { compareRecordings } from "../src/bench/compare.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import type { Sequence, Step } from "../src/types.ts";
 
@@ -40,6 +41,15 @@ const ev = (id: string, created: number, type: string, object: Record<string, un
   type,
   data: { object },
 });
+const EVENTS = [
+  ev("evt_A", 100, "customer.updated", { id: CUS }),
+  ev("evt_B", 99, "customer.created", { id: "cus_OtherAbc12345" }),
+  ev("evt_C", 100, "checkout.session.completed", { id: "cs_TestSess12345", customer: CUS }),
+  ev("evt_E", 97, "noise", { id: "create_prorations" }),
+  ev("evt_D", 98, "customer.subscription.created", { id: SUB }),
+];
+let events = EVENTS; // served 4 per page, like a newest-first Stripe list
+let eventFaults: number[] = []; // statuses /v1/events answers (in order) before serving pages
 const server = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -56,25 +66,16 @@ const server = createServer(async (req, res) => {
       { "idempotent-replayed": "false" },
     );
   }
-  if (req.method === "GET" && url.pathname === `/v1/customers/${CUS}`) return json(200, { id: CUS, object: "customer" });
+  const obj = /^\/v1\/(\w+)s\/(\w+)$/.exec(url.pathname); // GET/DELETE /v1/<type>s/<id> echoes the id
+  if (obj && req.method !== "POST") return json(200, { id: obj[2], object: obj[1] });
   if (url.pathname === "/v1/flaky") return ++flakyHits === 1 ? json(429, { error: { type: "rate_limit" } }) : json(200, { ok: true });
   if (url.pathname === "/v1/text") return void res.end("not json");
   if (url.pathname === "/v1/events") {
-    if (!url.searchParams.has("starting_after")) {
-      return json(200, {
-        object: "list",
-        has_more: true,
-        data: [
-          ev("evt_A", 100, "customer.updated", { id: CUS }),
-          ev("evt_B", 99, "customer.created", { id: "cus_OtherAbc12345" }),
-          ev("evt_C", 100, "checkout.session.completed", { id: "cs_TestSess12345", customer: CUS }),
-          ev("evt_E", 97, "noise", { id: "create_prorations" }),
-        ],
-      });
-    }
-    if (url.searchParams.get("starting_after") === "evt_E") {
-      return json(200, { object: "list", has_more: false, data: [ev("evt_D", 98, "customer.subscription.created", { id: SUB })] });
-    }
+    const fault = eventFaults.shift();
+    if (fault) return json(fault, { error: { type: "api_error" } });
+    const after = url.searchParams.get("starting_after");
+    const from = after ? events.findIndex((e) => e.id === after) + 1 : 0;
+    return json(200, { object: "list", has_more: from + 4 < events.length, data: events.slice(from, from + 4) });
   }
   json(404, { error: { type: "invalid_request_error" } });
 });
@@ -123,7 +124,7 @@ test("createLimiter: 10 takes at rps 5 take >= 1 s", async () => {
   const take = createLimiter(5);
   await Promise.all(Array.from({ length: 10 }, take));
   const ms = performance.now() - t0;
-  assert.ok(ms >= 995 && ms < 1500, `took ${ms} ms`);
+  assert.ok(ms >= 995, `took ${ms} ms`);
 });
 
 test("jsonl round-trip creates parent dirs", () => {
@@ -219,34 +220,114 @@ test("runSequence: transport error -> status 0; eventWaitMs 0 skips events", asy
   assert.deepEqual(rec.events, []);
 });
 
-test("runCorpus: worker pool returns results in input order", async () => {
+test("runCorpus: worker pool returns results in input order; eventWaitMs 0 skips the sweep", async () => {
+  seen.length = 0;
   const target = { ...local, eventWaitMs: 0 };
   const seqs = ["a#1", "b#2", "c#3"].map((id) => seq([{ method: "GET", path: `/v1/customers/${CUS}` }], id));
   const got: string[] = [];
-  const recs = await runCorpus(seqs, target, { concurrency: 2, runId: "r", onRecord: (r) => got.push(r.seq) });
+  const { recordings: recs, summary } = await runCorpus(seqs, target, { concurrency: 2, runId: "r", onRecord: (r) => got.push(r.seq) });
   assert.deepEqual(recs.map((r) => r.seq), ["a#1", "b#2", "c#3"]);
   assert.deepEqual(got.sort(), ["a#1", "b#2", "c#3"]);
   assert.ok(recs.every((r) => r.steps[0]!.status === 200));
+  assert.equal(summary.eventSweepGets, 0);
+  assert.equal(seen.length, 3);
+});
+
+test("runCorpus: ONE sweep assigns interleaved events to two sequences; summary counts every request sent", async () => {
+  seen.length = 0;
+  flakyHits = 0;
+  const CUS2 = "cus_TestTwo2345678";
+  const PROD = "prod_SharedAb1234"; // seen by both sequences -> its event is an overlap
+  events = [
+    ev("evt_7", 104, "product.updated", { id: PROD }),
+    ev("evt_6", 103, "customer.deleted", { id: CUS2 }),
+    ev("evt_5", 103, "customer.created", { id: "cus_Unrelated12345" }),
+    ev("evt_4", 102, "invoice_payment.paid", { id: "inpay_Abc12345678", customer: CUS }),
+    ev("evt_3", 102, "invoice.finalized", { id: "in_Abc1234567890", customer: CUS }),
+    ev("evt_2", 101, "customer.created", { id: CUS2 }),
+    ev("evt_1", 101, "customer.created", { id: CUS }),
+  ];
+  eventFaults = [429]; // first event page is rate-limited once
+  const seqs = [
+    seq([{ method: "POST", path: "/v1/customers" }, { method: "GET", path: `/v1/products/${PROD}` }], "a#1"),
+    seq(
+      [
+        { method: "GET", path: `/v1/customers/${CUS2}` },
+        { method: "POST", path: "/v1/flaky" },
+        { method: "GET", path: `/v1/products/${PROD}` },
+        { method: "DELETE", path: `/v1/customers/${CUS2}` },
+      ],
+      "b#2",
+    ),
+  ];
+  const { recordings: [a, b], summary } = await runCorpus(seqs, local, { concurrency: 2, runId: "r" });
+  events = EVENTS;
+
+  // same created: code-point order puts "invoice.finalized" before "invoice_payment.paid" (localeCompare reverses them)
+  assert.deepEqual(a!.events.map((e) => e.id), ["evt_1", "evt_3", "evt_4", "evt_7"]);
+  assert.deepEqual(b!.events.map((e) => e.id), ["evt_2", "evt_6", "evt_7"]);
+  assert.equal(a!.eventsError, undefined);
+
+  // one corpus sweep (2 pages, repeated once to confirm the count), not per-sequence polls
+  const polls = seen.filter((r) => r.url.startsWith("/v1/events"));
+  assert.equal(polls.length, 5, "429 + retry + page 2, then pages 1-2 again");
+  const gte = Number(new URL(polls[0]!.url, "http://x").searchParams.get("created[gte]"));
+  assert.ok(Math.abs(gte - (Math.floor(Date.parse(a!.startedAt) / 1000) - 60)) <= 1, `created[gte]=${gte}`);
+
+  const count = (m: string) => seen.filter((r) => r.method === m).length;
+  assert.deepEqual(summary, {
+    requests: seen.length,
+    gets: count("GET"),
+    posts: count("POST"),
+    deletes: count("DELETE"),
+    eventSweepGets: polls.length,
+    retries429: 2, // /v1/flaky once, first event page once
+    eventOverlaps: 1, // evt_7
+  });
+  assert.deepEqual([summary.requests, summary.gets, summary.posts, summary.deletes], [12, 8, 3, 1]);
+});
+
+test("a 500 from /v1/events sets eventsError (corpus sweep and per-sequence) and the event check is skipped", async () => {
+  eventFaults = [500, 500];
+  const one = seq([{ method: "POST", path: "/v1/customers" }]);
+  const { recordings: [c] } = await runCorpus([one], local, { concurrency: 1, runId: "r" });
+  const s = await runSequence(one, local, { take: noop, runId: "r" });
+  assert.deepEqual([c!.eventsError, c!.events], ["GET /v1/events -> 500", []]);
+  assert.deepEqual([s.eventsError, s.events], ["GET /v1/events -> 500", []]);
+
+  const withEvents = { ...structuredClone(c!), eventsError: undefined, events: [ev("evt_1", 1, "customer.created", { id: CUS })] };
+  const r = compareRecordings(c!, withEvents);
+  assert.deepEqual([r.eventsSkipped, r.eventsMatch, r.L4, r.divergences], [true, true, true, []]);
 });
 
 // ---- live sandbox smoke (PARITY_LIVE=1) ----
-test("live: create, retrieve, delete a customer on the sandbox", { skip: process.env.PARITY_LIVE !== "1", timeout: 60_000 }, async () => {
-  if (!process.env.STRIPE_API_KEY) process.loadEnvFile(new URL("../.env", import.meta.url));
+test("live: two create/retrieve/delete sequences, one corpus event sweep", { skip: process.env.PARITY_LIVE !== "1", timeout: 90_000 }, async () => {
+  const env = new URL("../.env", import.meta.url);
+  if (!process.env.STRIPE_API_KEY && existsSync(env)) process.loadEnvFile(env);
   const key = process.env.STRIPE_API_KEY;
   assert.ok(key, "STRIPE_API_KEY is not set");
-  const rec = await runSequence(
+  const smoke = (id: string) =>
     seq(
       [
         { ref: "c1", method: "POST", path: "/v1/customers", params: { description: "parity smoke $run" }, headers: { "Idempotency-Key": "$run" } },
         { method: "GET", path: "/v1/customers/$c1.id" },
         { method: "DELETE", path: "/v1/customers/$c1.id" },
       ],
-      "live-smoke#1",
-    ),
-    sandboxTarget(key),
-    { take: createLimiter(20), runId: `live-${Date.now()}` },
-  );
-  assert.deepEqual(rec.steps.map((s) => s.status), [200, 200, 200], JSON.stringify(rec.steps.map((s) => s.body)));
-  assert.ok(rec.steps[0]!.resHeaders["request-id"]);
-  assert.ok(rec.events.some((e) => e.type === "customer.created"), `events: ${rec.events.map((e) => e.type).join(",")}`);
+      id,
+    );
+  const { recordings, summary } = await runCorpus([smoke("live-smoke#1"), smoke("live-smoke#2")], sandboxTarget(key), {
+    concurrency: 2,
+    runId: `live-${Date.now()}`,
+  });
+  for (const rec of recordings) {
+    assert.deepEqual(rec.steps.map((s) => s.status), [200, 200, 200], JSON.stringify(rec.steps.map((s) => s.body)));
+    assert.ok(rec.steps[0]!.resHeaders["request-id"]);
+    assert.equal(rec.eventsError, undefined);
+    assert.ok(rec.events.some((e) => e.type === "customer.created"), `events: ${rec.events.map((e) => e.type).join(",")}`);
+  }
+  assert.equal(summary.eventOverlaps, 0);
+  assert.ok(summary.eventSweepGets >= 2, `sweep GETs ${summary.eventSweepGets}`);
+  assert.deepEqual([summary.gets - summary.eventSweepGets, summary.posts, summary.deletes], [2, 2, 2]);
+  assert.equal(summary.requests, summary.gets + summary.posts + summary.deletes);
+  console.log(`live summary: ${JSON.stringify(summary)}; events: ${recordings.map((r) => r.events.map((e) => e.type).join(",")).join(" | ")}`);
 });

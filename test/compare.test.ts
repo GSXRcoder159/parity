@@ -40,6 +40,7 @@ test("identical recordings pass every level", () => {
   assert.deepEqual(r.steps, [{ i: 0, L1: true, L2: true, L3: true }]);
   assert.equal(r.L4, true);
   assert.equal(r.eventsMatch, true);
+  assert.equal(r.eventsSkipped, false);
   assert.deepEqual(r.divergences, []);
   assert.deepEqual([r.seq, r.template, r.stratum, r.heldOut], ["tmpl#1", "tmpl", "refunds", true]);
 });
@@ -128,4 +129,17 @@ test("a missing target step fails L1 with a STATUS_MISMATCH", () => {
   const r = compareRecordings(rec([step(0, 200, sub), step(1, 200, sub)]), rec([step(0, 200, sub)]));
   assert.deepEqual(r.steps[1], { i: 1, L1: false, L2: false, L3: false });
   assert.deepEqual(r.divergences, [{ seq: "tmpl#1", step: 1, path: "$", cls: "STATUS_MISMATCH", expected: 200, actual: undefined }]);
+});
+
+test("eventsError on either side skips the event check: eventsMatch, no EVENT_SET_MISMATCH, eventsSkipped", () => {
+  const a = rec([step(0, 200, sub)], [ev("customer.created")]);
+  const b = rec([step(0, 200, sub)]);
+  assert.deepEqual([compareRecordings(a, b).eventsMatch, compareRecordings(a, b).eventsSkipped], [false, false]);
+  for (const [o, t] of [
+    [{ ...a, eventsError: "GET /v1/events -> 500" }, b],
+    [a, { ...b, eventsError: "fetch failed" }],
+  ] as const) {
+    const r = compareRecordings(o, t);
+    assert.deepEqual([r.eventsSkipped, r.eventsMatch, r.L4, r.divergences], [true, true, true, []]);
+  }
 });

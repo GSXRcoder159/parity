@@ -88,6 +88,8 @@ export interface Recording {
   steps: StepRecord[];
   /** Events observed via GET /v1/events, filtered to objects this run touched. */
   events: StripeEvent[];
+  /** Set when event collection failed (`events` is then [] and not evidence of "no events"). */
+  eventsError?: string;
 }
 
 export type Level = "L1" | "L2" | "L3" | "L4";

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeRaw, normalizeRecording, RULES } from "../src/bench/normalize.ts";
+import { NORMALIZATION_VERSION, normalizeRaw, normalizeRecording, RULES } from "../src/bench/normalize.ts";
 import { runNonce } from "../src/bench/run.ts";
 import type { Recording, StepRecord, StripeEvent } from "../src/types.ts";
 
@@ -30,7 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(RULES.length, 7);
+  assert.equal(NORMALIZATION_VERSION, "v1.1");
+  assert.equal(RULES.length, 8);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -55,6 +56,40 @@ test("ids: prefixed ids normalize, lowercase enums stay", () => {
     payment_behavior: "default_incomplete",
     short: "cus_Ab1",
   });
+});
+
+test("ids embedded in longer strings normalize word-bounded; enums, short tails and `_`-joined tokens stay", () => {
+  const nonce = runNonce("run1", "tmpl#1");
+  const r = normalizeRecording(
+    rec([
+      step(0, {
+        error: {
+          message: "No such customer: 'cus_T8aBcDeFgHiJkL'",
+          detail: "Invoice in_1AbcDEFghij12 for sub_sched_1AbcDEFghij, not cus_Ab1 (create_prorations)",
+          note: "pi_3AbcDEF12345_secret_XyZ12345678", // `_` after the tail is a word char: no match
+          key: `${nonce}-cus_T8aBcDeFgHiJkL`,
+        },
+      }),
+    ]),
+  );
+  assert.deepEqual(body(r, 0).error, {
+    message: "No such customer: '<id:cus>'",
+    detail: "Invoice <id:in> for <id:sub_sched>, not cus_Ab1 (create_prorations)",
+    note: "pi_3AbcDEF12345_secret_XyZ12345678",
+    key: "<run>-<id:cus>",
+  });
+});
+
+test("sandbox banner: the exact unclaimed-sandbox prefix is stripped, elsewhere it stays", () => {
+  const banner = "This is an unclaimed Stripe sandbox. Dashboard links in this error message will not work until the sandbox is claimed. ";
+  const r = normalizeRecording(
+    rec([
+      step(0, { error: { message: `${banner}No such customer: 'cus_T8aBcDeFgHiJkL'` } }, 404),
+      step(1, { error: { message: `Oops. ${banner}` } }, 400),
+    ]),
+  );
+  assert.equal(body(r, 0).error.message, "No such customer: '<id:cus>'");
+  assert.equal(body(r, 1).error.message, `Oops. ${banner}`);
 });
 
 test("timestamps: hour offsets from t0 = first created in step order", () => {

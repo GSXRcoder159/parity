@@ -1,15 +1,16 @@
-// Normalization v1: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
-// per-account opaques, list order) so two faithful runs compare equal. Published with every score.
+// Normalization v1.1: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
+// per-account opaques, list order, the unclaimed-sandbox banner) so two faithful runs compare equal.
+// Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1";
+export const NORMALIZATION_VERSION = "v1.1";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
     name: "ids",
     rationale:
-      "Object ids are random per run; `cus_Ab12…` → `<id:cus>` keeps the prefix. Hides: an id pointing at the wrong object of the right type (e.g. `customer` set to another customer), and malformed id tails.",
+      "Object ids are random per run; `cus_Ab12…` → `<id:cus>` keeps the prefix, both as a whole string and embedded word-bounded in a longer one (`No such customer: 'cus_Ab12…'` → `No such customer: '<id:cus>'`). Hides: an id pointing at the wrong object of the right type (e.g. `customer` set to another customer, or an error message citing another customer), and malformed id tails.",
   },
   {
     name: "timestamps",
@@ -41,9 +42,16 @@ export const RULES: { name: string; rationale: string }[] = [
     rationale:
       "Objects created within the same second list in arbitrary order; `data` of `list`/`search_result` is sorted by raw `created` descending, ties by normalized JSON. Hides: any wrong list order (e.g. ascending instead of newest-first, or misordered elements without `created`), not just same-second ties; page membership and `has_more` are still compared.",
   },
+  {
+    name: "sandbox-banner",
+    rationale:
+      "Unclaimed sandboxes prefix error messages with `This is an unclaimed Stripe sandbox. Dashboard links in this error message will not work until the sandbox is claimed. `; that exact prefix is stripped (account state, not API behavior; it disappears once the sandbox is claimed). Hides: a target that emits the banner itself, and a claimed-vs-unclaimed oracle difference in that prefix.",
+  },
 ];
 
-const ID = /^([a-z]+(?:_[a-z]+)*)_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}$/;
+// Same grammar as run.ts ID, word-bounded so ids inside messages match too (`_` is a word char: `pi_…_secret_…` does not).
+const ID = /\b([a-z]+(?:_[a-z]+)*)_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}\b/g;
+const BANNER = "This is an unclaimed Stripe sandbox. Dashboard links in this error message will not work until the sandbox is claimed. ";
 const TS_KEYS = new Set([
   "created",
   "date",
@@ -87,16 +95,15 @@ export function normalizeRecording(r: Recording): Recording {
   let t0: number | undefined;
   for (const s of r.steps) if ((t0 = firstCreated(s.body)) !== undefined) break;
 
-  const str = (s: string): string => {
-    const id = ID.exec(s);
-    if (id) return `<id:${id[1]}>`;
+  const str = (raw: string): string => {
+    const s = raw.startsWith(BANNER) ? raw.slice(BANNER.length) : raw;
     if (s.startsWith("https://")) {
       try {
         const host = new URL(s).hostname;
         if (STRIPE_HOST.test(host)) return `<url:${host}>`;
       } catch {}
     }
-    return s.replaceAll(nonce, "<run>");
+    return s.replaceAll(nonce, "<run>").replace(ID, (_, prefix: string) => `<id:${prefix}>`);
   };
 
   const field = (parent: Obj, k: string, v: unknown): unknown => {

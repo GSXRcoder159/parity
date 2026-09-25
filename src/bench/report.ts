@@ -35,6 +35,8 @@ export function renderMarkdown(input: ReportInput): string {
     "",
     `**Summary:** ${LEVELS.map((l) => `${l} ${cell(score.overall[l])}`).join(" · ")} — L1 status, L2 shape, L3 value (per step), L4 sequence pass; 95% Wilson intervals.`,
     "",
+    `Event check skipped for ${results.filter((r) => r.eventsSkipped).length} of ${results.length} sequences (event collection failed; their L4 rests on the steps alone).`,
+    "",
     "## Noise floor and ceiling",
     "",
   ];
@@ -62,7 +64,8 @@ export function renderMarkdown(input: ReportInput): string {
     else groups.set(k, { n: 1, d });
   }
   md.push("", "## Top divergence paths", "", "| Path | Class | Count | Example |", "|---|---|---|---|");
-  for (const { n, d } of [...groups.values()].sort((a, b) => b.n - a.n).slice(0, 20)) {
+  const nondet = (g: { d: { cls: string } }): number => Number(g.d.cls === "NONDETERMINISTIC");
+  for (const { n, d } of [...groups.values()].sort((a, b) => nondet(a) - nondet(b) || b.n - a.n).slice(0, 20)) {
     md.push(`| \`${esc(d.path)}\` | ${d.cls} | ${n} | ${esc(d.seq)} step ${d.step}: expected \`${val(d.expected)}\` → actual \`${val(d.actual)}\` |`);
   }
   if (groups.size === 0) md.push("| — | — | 0 | no divergences |");

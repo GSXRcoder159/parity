@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { SeqResult } from "../src/bench/compare.ts";
 import { renderMarkdown, toJson } from "../src/bench/report.ts";
 import { score, wilson } from "../src/bench/score.ts";
-import { RULES } from "../src/bench/normalize.ts";
+import { NORMALIZATION_VERSION, RULES } from "../src/bench/normalize.ts";
 
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-4, `${a} ≉ ${b}`);
 
@@ -30,6 +30,7 @@ const res = (template: string, stratum: SeqResult["stratum"], heldOut: boolean, 
   steps: l3.map((L3, i) => ({ i, L1: true, L2: true, L3 })),
   L4,
   eventsMatch: L4,
+  eventsSkipped: false,
   divergences: l3.flatMap((ok, i) =>
     ok ? [] : [{ seq: `${template}#1`, step: i, path: "$.amount_refunded", cls: "VALUE_MISMATCH" as const, expected: 500, actual: 0 }],
   ),
@@ -53,7 +54,7 @@ test("score: L1–L3 per step, L4 per sequence, split by stratum and held-out", 
 
 test("markdown report has every required section; the invalid-score warning depends on noise", () => {
   const s = score(results);
-  const base = { title: "W0 noise", date: "2026-09-25", target: "twin", oracle: "sandbox", score: s, normalization: "v1", results };
+  const base = { title: "W0 noise", date: "2026-09-25", target: "twin", oracle: "sandbox", score: s, normalization: NORMALIZATION_VERSION, results };
   const md = renderMarkdown(base);
   for (const h of ["# W0 noise", "**Summary:**", "## Noise floor and ceiling", "## Per stratum", "## Held-out vs train", "## Top divergence paths", "## Per-template L4", "## Normalization"]) {
     assert.ok(md.includes(h), h);
@@ -64,6 +65,14 @@ test("markdown report has every required section; the invalid-score warning depe
   assert.match(md, /\| `\$\.amount_refunded` \| VALUE_MISMATCH \| 3 \| refund-full#1 step 1: expected `500` → actual `0` \|/);
   assert.match(md, /\| refund-partial-then-rest \| refunds \| yes \| 0\.0% \[0\.0–79\.3\] \(1\) \|/);
   for (const r of RULES) assert.ok(md.includes(r.name), r.name);
+  assert.match(md, /Event check skipped for 0 of 3 sequences/);
+  const skipped = results.map((r, i) => ({ ...r, eventsSkipped: i > 0 }));
+  assert.match(renderMarkdown({ ...base, results: skipped }), /Event check skipped for 2 of 3 sequences/);
+
+  // NONDETERMINISTIC groups list after every other class, even when more frequent
+  const noisy = results.map((r) => ({ ...r, divergences: [...r.divergences, ...[1, 2, 3, 4].map((step) => ({ seq: r.seq, step, path: "$.created", cls: "NONDETERMINISTIC" as const }))] }));
+  const rows = renderMarkdown({ ...base, results: noisy }).split("\n").filter((l) => l.startsWith("| `$."));
+  assert.deepEqual(rows.map((l) => l.split(" | ")[1]), ["VALUE_MISMATCH", "NONDETERMINISTIC"]);
 
   const withNoise = renderMarkdown({ ...base, noise: s });
   assert.doesNotMatch(withNoise, /is invalid/);
