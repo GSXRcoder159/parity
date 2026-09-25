@@ -14,7 +14,7 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 
 | # | Action | Why | Deadline |
 |---|---|---|---|
-| B1 | **HUMAN:** claim the sandbox (`stripe sandbox claim` or the claim URL), then create a full `sk_test_` key and put it in `.env` as `STRIPE_API_KEY` | Claimable key (`rkcs_test_`) is refused on `/v1/test_helpers/test_clocks` and `/v1/account`; sandbox is deleted 2026-10-02 | before W0 clock measurement; hard stop 2026-10-02 |
+| B1 | **HUMAN:** claim the sandbox (`stripe sandbox claim` or the claim URL), then create a full `sk_test_` key and put it in `.env` as `STRIPE_API_KEY` | Claimable key (`rkcs_test_`) is refused on `/v1/test_helpers/test_clocks` and `/v1/account`; **it also has an undocumented request quota (tripped after ~577 requests in ~2 min on 2026-09-25, still 429 8+ min later) that blocks sustained-throughput and noise-floor measurement** (`reports/2026-09-25-w0-oracle.md`); sandbox is deleted 2026-10-02 | before W0 clock measurement; hard stop 2026-10-02 |
 | B2 | **HUMAN:** add `STRIPE_API_KEY` (and later an LLM key) as GitHub repo secrets | Nightly cron (W3) | W2 end |
 | B3 | **HUMAN:** send the 20 drafted messages in `docs/demand/outreach.md` (14 cohort A, 5 cohort B, Autumn); paste replies into `docs/demand/funnel.md` | H3; ≥5 replies by Oct 10 or shift to cohort B | now |
 | B4 | **HUMAN:** ask Stripe Support (from the claimed account) whether the read-API allocation ("must not exceed an average of 500 per transaction", floor 10,000/30 days) applies to sandboxes, and whether sandbox test charges count as transactions. Draft: `docs/decisions/0001-clean-room-and-legal-gate.md` C2 | Until answered, the harness hard-caps sandbox GETs at 10,000 per rolling 30 days, which limits the nightly corpus size. Increases need ~6 weeks' notice | after B1 |
@@ -29,12 +29,12 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - [x] Legal gate: SSA + Services Terms + Marks + rate-limits read from raw HTML → `docs/decisions/0001-clean-room-and-legal-gate.md`: **GO WITH CONDITIONS** (private work only; counsel before public release; ≤10,000 sandbox GETs/30 days; no raw Stripe data in git; no "Stripe" in product names)
 - [x] Competitor terms: LocalStack ToS/MSA forbid benchmarking without written consent → not scored; Arga has no ToS → not scored without written permission; WonderTwin OSS twin is Connect-only → nothing to score. W1 baselines = stripe-mock (pinned digest) + localstripe 1.15.10
 - [~] Sandbox cap: "up to five sandboxes" per account (verified). Concurrent test-clock cap: none documented, measure after B1. Claimable-sandbox counting: open (B1)
-- [ ] Throughput: non-clock sequences/hour at ≤20 req/s
+- [x] Throughput: non-clock sequences/hour at ≤20 req/s — c=8: **3,950/h wall** (7,786/h steps-phase), 7.7 req/seq, 2.18 GETs/seq, 0 429s (60 seqs, 54.7 s). c=16 and a second c=8 run 3 min later hit the claimable-key quota (450 / 516 429 retries); sustained volume unmeasured until B1. `reports/2026-09-25-w0-oracle.md`
 - [ ] Throughput: seconds per test-clock advance; parallel clocks (blocked on B1)
-- [ ] Raw noise floor: 50 sequences run twice on the sandbox
+- [~] Raw noise floor: 60 sequences recorded (A); **clean second run blocked by the claimable-key quota** (B1). On the 115 step pairs B answered (#1–#6): raw L3 agreement 0.0% (floor 100%), normalized v1.1 L3 89.6% [82.6–93.9] (floor 10.4%, all from 2 normalization gaps: `updated`, same-second list order); L1/L2 100%
 - [ ] Scenario templates 1–15
 - [x] Outreach: 34 targets in `docs/demand/cohorts.md`, 20 fact-checked messages in `docs/demand/outreach.md`, tracker `docs/demand/funnel.md` (sending = B3)
-- [ ] Exit: go/no-go on "nightly"
+- [x] Exit: go/no-go on "nightly" — **no-go today**: read budget allows ~150 seqs/night (2.18 GETs/seq; a 500-seq run ≈ 850–1,060 GETs → weekly), and the claimable key cannot sustain a corpus. Go after B1 (quota) + B4 (read cap). Throughput itself passes H0 ~8×
 
 ## Plan changes from W0 research (see `docs/research/2026-09-25-w0-verifications.md` §"Plan changes implied")
 - Read-API allocation added to §4/§10: per-sequence event polling replaced by one sweep per corpus; GET ledger `budget/reads.jsonl`; nightly corpus sized to the budget until B4 is answered.
@@ -75,3 +75,4 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 ## Log
 - 2026-09-25: kickoff; repo scaffolded; sandbox provisioned; W0 started.
 - 2026-09-25: W0 research workflow done (legal gate, verifications, demand). Harness Tasks 1–3 done and reviewed; Task 4 (oracle hygiene) inserted; Tasks 4–5 running.
+- 2026-09-25: Task 5: `paritybench` CLI (record/compare/bench/help, budget-gated sandbox runs, ledger `budget/reads.jsonl`). W0 runs: throughput passes on rate; claimable-key quota discovered (blocks noise floor + sustained throughput → B1); nightly no-go on read budget. `reports/2026-09-25-w0-oracle.md`.
