@@ -78,15 +78,15 @@ export const paymentMethodAttach: Template = {
   stratum: "lifecycle",
   build(g) {
     const [first, second] = g.bool() ? (["pm_card_visa", "pm_card_mastercard"] as const) : (["pm_card_mastercard", "pm_card_visa"] as const);
-    const list: Step = { method: "GET", path: "/v1/payment_methods", params: { customer: "$c1.id" } };
+    const list = (): Step => ({ method: "GET", path: "/v1/payment_methods", params: { customer: "$c1.id" } });
     return [
       customer("payment-method-attach", tag(g)),
       attach(first),
-      list,
+      list(),
       { method: "POST", path: "/v1/customers/$c1.id", params: { invoice_settings: { default_payment_method: "$pm1.id" } } },
       attach(second, "pm2"),
       { method: "POST", path: "/v1/payment_methods/$pm1.id/detach" },
-      list,
+      list(),
     ];
   },
 };

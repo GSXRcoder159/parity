@@ -64,4 +64,4 @@ export function subscribed(
 }
 
 /** The first-invoice PaymentIntent of c1 (invoice.payment_intent is gone on dahlia). */
-export const findPaymentIntent: Step = { ref: "pis", method: "GET", path: "/v1/payment_intents", params: { customer: "$c1.id" } };
+export const findPaymentIntent = (): Step => ({ ref: "pis", method: "GET", path: "/v1/payment_intents", params: { customer: "$c1.id" } });
