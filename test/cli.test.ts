@@ -99,7 +99,7 @@ test("budget: refuses only when rolling 30-day GETs + projected exceed the budge
   assert.equal(budgetRefusal(ledger, 200, now, 10_000), null); // 9800 + 200 = budget exactly
   const msg = budgetRefusal(ledger, 201, now, 10_000);
   assert.match(msg ?? "", /refusing to run: 9800 sandbox GETs in the last 30 days \+ 201 projected .* = 10001 > read budget 10000/);
-  assert.equal(budgetRefusal([], 10_001, now, 10_000) !== null, true);
+  assert.notEqual(budgetRefusal([], 10_001, now, 10_000), null);
 });
 
 test("runId: UTC YYYYMMDDTHHMMSS plus 4 random base36 chars", () => {

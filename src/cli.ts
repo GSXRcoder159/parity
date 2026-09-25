@@ -22,7 +22,8 @@ const USAGE = `usage:
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
   Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger budget/reads.jsonl.
-  --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.`;
+  --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
+  compare/bench outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
 const FLAGS: Record<string, string[]> = {
@@ -89,7 +90,8 @@ const today = (): string => new Date().toISOString().slice(0, 10);
 
 /** Runs `seqs` against `target` (budget-gated and ledgered on the sandbox), writes the recordings, prints a summary. */
 async function recordCorpus(target: Target, seqs: Sequence[], concurrency: number, runId: string, out: string): Promise<Recording[]> {
-  const sandbox = target.name === "sandbox";
+  // By host, not name: `--target https://api.stripe.com` or `--name sandbox` must not dodge (or fake) the budget.
+  const sandbox = new URL(target.baseUrl).hostname === "api.stripe.com";
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
   if (sandbox) {
     const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + 20;
@@ -208,9 +210,10 @@ export async function main(argv: string[]): Promise<number> {
     const url = positional[0]!;
     const oraclePath = need(flags, "oracle");
     const seqs = readJsonl<Recording>(oraclePath).map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
+    const target = resolveTarget(url);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
-    await recordCorpus(resolveTarget(url), seqs, 8, runId, recPath);
+    await recordCorpus(target, seqs, 8, runId, recPath);
     compareFiles(oraclePath, recPath, flags.noise, false, flags.out ?? `recordings/${today()}/bench-${name}-${runId}`);
     return 0;
   } catch (e) {
