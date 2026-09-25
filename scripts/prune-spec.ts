@@ -1,6 +1,6 @@
 // Vendors the pinned OpenAPI description of the Stripe API (MIT), pruned to the twin's operations
 // and the component schemas they reference transitively. Run: node scripts/prune-spec.ts
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,9 +75,11 @@ function sortKeys(v: unknown): unknown {
   return Object.fromEntries(Object.keys(o).sort().map((k) => [k, sortKeys(o[k])]));
 }
 
-const tmp = join(mkdtempSync(join(tmpdir(), "parity-spec-")), "openapi.spec3.json");
+const tmpDir = mkdtempSync(join(tmpdir(), "parity-spec-"));
+const tmp = join(tmpDir, "openapi.spec3.json");
 writeFileSync(tmp, await download(SPEC_URL));
 const spec = JSON.parse(readFileSync(tmp, "utf8"));
+rmSync(tmpDir, { recursive: true });
 const schemas: Record<string, unknown> = spec.components.schemas;
 
 const paths: Record<string, Record<string, unknown>> = {};
