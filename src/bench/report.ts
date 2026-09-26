@@ -11,6 +11,8 @@ export interface ReportInput {
   oracle: string;
   score: Score;
   noise?: Score;
+  /** How much of the oracle the noise floor covers: the ceiling holds for those sequences only. */
+  noiseCoverage?: { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number };
   normalization: string;
   results: SeqResult[];
 }
@@ -41,7 +43,11 @@ export function renderMarkdown(input: ReportInput): string {
     "",
   ];
   if (noise) {
-    md.push("Oracle vs a second sandbox recording of the same corpus. Floor = 1 − noise agreement; ceiling = noise agreement.", "");
+    const c = input.noiseCoverage;
+    md.push("Oracle vs a second sandbox recording of the same sequences. Floor = 1 − noise agreement; ceiling = noise agreement.", "");
+    if (c && c.seqs < c.oracleSeqs) {
+      md.push(`**Coverage: the noise recording covers ${c.seqs} of ${c.oracleSeqs} oracle sequences (${c.templates} of ${c.oracleTemplates} templates).** The floor and ceiling hold for those only; the other sequences have no measured floor.`, "");
+    }
     md.push("| Level | Noise agreement | Floor | Ceiling |", "|---|---|---|---|");
     for (const l of LEVELS) {
       const w = noise.overall[l];

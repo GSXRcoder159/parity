@@ -82,6 +82,39 @@ test("compare fails clearly when the target lacks an oracle sequence", () => {
   assert.match(r.stderr, /b\.jsonl has no recording for oracle sequence customer-crud#1/);
 });
 
+test("--noise covering part of the oracle: the floor is measured on the covered sequences and the report says so", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pb-cmp-"));
+  writeJsonl(join(dir, "a.jsonl"), [rec("customer-crud#1", "cus_AAAAAAAAAAAAAA"), rec("customer-crud#2", "cus_BBBBBBBBBBBBBB")]);
+  writeJsonl(join(dir, "b.jsonl"), [rec("customer-crud#2", "cus_DDDDDDDDDDDDDD"), rec("customer-crud#1", "cus_CCCCCCCCCCCCCC")]);
+  writeJsonl(join(dir, "n.jsonl"), [rec("customer-crud#2", "cus_EEEEEEEEEEEEEE")]);
+  const r = cli(["compare", "--oracle", "a.jsonl", "--target", "b.jsonl", "--noise", "n.jsonl", "--out", "out/part"], dir);
+  assert.equal(r.status, 0, r.stderr);
+  const j = JSON.parse(readFileSync(join(dir, "out/part.json"), "utf8"));
+  assert.deepEqual([j.noise.overall.L3.n, j.noiseCoverage], [1, { seqs: 1, oracleSeqs: 2, templates: 1, oracleTemplates: 1 }]);
+  assert.equal(j.results.length, 2, "the target is still scored on the whole oracle");
+  assert.match(readFileSync(join(dir, "out/part.md"), "utf8"), /covers 1 of 2 oracle sequences/);
+  // A noise file with no oracle sequence is refused; bench refuses it before recording anything.
+  writeJsonl(join(dir, "none.jsonl"), [rec("customer-crud#9", "cus_FFFFFFFFFFFFFF")]);
+  const bad = cli(["compare", "--oracle", "a.jsonl", "--target", "b.jsonl", "--noise", "none.jsonl", "--out", "out/x"], dir);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /none\.jsonl has no clean recording of any oracle sequence/);
+  const bench = cli(["bench", "http://127.0.0.1:9", "--oracle", "a.jsonl", "--noise", "none.jsonl"], dir);
+  assert.equal(bench.status, 1);
+  assert.match(bench.stderr, /no clean recording of any oracle sequence/);
+  assert.doesNotMatch(bench.stdout, /run \d{8}T/, "nothing was recorded");
+});
+
+test("resolveTarget: the fully qualified api.stripe.com. is the sandbox too", () => {
+  const key = process.env.STRIPE_API_KEY;
+  process.env.STRIPE_API_KEY = "sk_test_x";
+  try {
+    assert.equal(resolveTarget("https://api.stripe.com.").name, "sandbox");
+  } finally {
+    if (key === undefined) delete process.env.STRIPE_API_KEY;
+    else process.env.STRIPE_API_KEY = key;
+  }
+});
+
 test("argv errors exit 2 with a usage line", () => {
   for (const args of [
     [],

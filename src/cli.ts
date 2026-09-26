@@ -11,7 +11,7 @@ import { appendLedger, readLedger, rollingGets, type LedgerEntry } from "./bench
 import { compareRecordings, noiseKeys } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION, normalizeRaw, normalizeRecording } from "./bench/normalize.ts";
-import { buildOracle, dataDir } from "./bench/oracle.ts";
+import { buildOracle, contaminated, dataDir } from "./bench/oracle.ts";
 import { renderMarkdown, toJson, type ReportInput } from "./bench/report.ts";
 import { idsIn, runCorpus, sandboxTarget, touching, type Target } from "./bench/run.ts";
 import { score } from "./bench/score.ts";
@@ -43,7 +43,8 @@ const USAGE = `usage:
   bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence (not to the sandbox),
     and its event sweep starts at the earliest Parity-Now − 60 s.
   oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
-  --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
+  --noise C.jsonl: a second sandbox recording of (part of) the oracle's corpus; oracle-vs-C on the oracle sequences C
+    records cleanly is the noise floor, and the report says how many it covers (bench checks this before recording).
   twin: serves the twin until SIGINT/SIGTERM (port also from env PORT).
   mcp: an MCP server on stdio (initialize handshake, protocol 2025-11-25) over an in-process twin until stdin closes: one
     tool per twin route named from its spec operation (post_v1_customers, get_v1_customers_customer, ...) taking path,
@@ -168,7 +169,7 @@ export function budgetRefusal(ledger: LedgerEntry[], projected: number, nowIso: 
 export function resolveTarget(spec: string, name?: string): Target {
   if (spec !== "sandbox" && !URL.canParse(spec)) throw new UsageError(`target must be "sandbox" or a URL, got "${spec}"`);
   // By host: a URL naming api.stripe.com is the sandbox and gets its 20 req/s bucket and event wait, never a URL target's unthrottled defaults.
-  if (spec === "sandbox" || new URL(spec).hostname === "api.stripe.com") {
+  if (spec === "sandbox" || stripeHost(spec)) {
     const key = process.env.STRIPE_API_KEY;
     if (!key) throw new Error("STRIPE_API_KEY is not set (put it in .env)");
     return sandboxTarget(key);
@@ -195,7 +196,9 @@ export function readsLedger(dir: string, legacy = join(REPO_ROOT, LEDGER)): stri
 const fileName = (spec: string, name?: string): string => name ?? (spec === "sandbox" ? "sandbox" : new URL(spec).host.replace(/[^A-Za-z0-9.-]/g, "-"));
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-const isSandbox = (t: Target): boolean => new URL(t.baseUrl).hostname === "api.stripe.com";
+/** api.stripe.com, also in its fully qualified form `api.stripe.com.` (the same host), which must not dodge the budget. */
+const stripeHost = (url: string): boolean => new URL(url).hostname.replace(/\.$/, "") === "api.stripe.com";
+const isSandbox = (t: Target): boolean => stripeHost(t.baseUrl);
 
 interface RecordOpts {
   concurrency: number;
@@ -303,22 +306,47 @@ export function oracleBuild(maxAgeDays: number | undefined, dir = dataDir()): st
 /** Recordings named for error messages (a file path). */
 export type Side = [name: string, recordings: Recording[]];
 
-/** Normalizes (or not), pairs each side with the oracle by `seq` (oracle order), compares and scores; `noise` is the floor and marks NONDETERMINISTIC. */
-export function compareSets(oracleRecs: Recording[], target: Side, noise: Side | undefined, raw: boolean): Pick<ReportInput, "score" | "noise" | "normalization" | "results"> {
+/**
+ * The oracle sequences a noise recording covers with a clean recording: the noise floor is measured on those only (the
+ * nightly's rule). Throws when it covers none. `coverage` is what the report prints next to the floor.
+ */
+export function noiseCovered(oracleRecs: Recording[], [name, recs]: Side): { clean: Recording[]; coverage: NonNullable<ReportInput["noiseCoverage"]> } {
+  const bySeq = new Map(recs.filter((r) => !contaminated(r)).map((r) => [r.seq, r]));
+  const covered = oracleRecs.filter((o) => bySeq.has(o.seq));
+  if (!covered.length) throw new Error(`${name} has no clean recording of any oracle sequence: no noise floor`);
+  const templates = (rs: Recording[]) => new Set(rs.map((r) => r.template)).size;
+  return {
+    clean: covered.map((o) => bySeq.get(o.seq)!),
+    coverage: { seqs: covered.length, oracleSeqs: oracleRecs.length, templates: templates(covered), oracleTemplates: templates(oracleRecs) },
+  };
+}
+
+/**
+ * Normalizes (or not), pairs the target with the oracle by `seq` (oracle order; every oracle sequence needed), compares
+ * and scores. `noise` is the floor, on the oracle sequences it covers (noiseCovered), and marks NONDETERMINISTIC.
+ */
+export function compareSets(
+  oracleRecs: Recording[],
+  target: Side,
+  noise: Side | undefined,
+  raw: boolean,
+): Pick<ReportInput, "score" | "noise" | "noiseCoverage" | "normalization" | "results"> {
   const norm = raw ? normalizeRaw : normalizeRecording;
   const oracle = oracleRecs.map(norm);
-  const paired = ([name, recs]: Side): Recording[] => {
+  const paired = ([name, recs]: Side, os: Recording[]): Recording[] => {
     const bySeq = new Map(recs.map((r) => [r.seq, r]));
-    return oracle.map((o) => {
+    return os.map((o) => {
       const r = bySeq.get(o.seq);
       if (!r) throw new Error(`${name} has no recording for oracle sequence ${o.seq}`);
       return norm(r);
     });
   };
-  const floor = noise && paired(noise).map((c, i) => compareRecordings(oracle[i]!, c));
+  const n = noise && noiseCovered(oracleRecs, noise);
+  const noiseOracle = n && oracle.filter((o) => n.clean.some((r) => r.seq === o.seq)); // oracle order
+  const floor = n && paired([noise![0], n.clean], noiseOracle!).map((c, i) => compareRecordings(noiseOracle![i]!, c));
   const keys = floor && noiseKeys(floor);
-  const results = paired(target).map((t, i) => compareRecordings(oracle[i]!, t, keys));
-  return { score: score(results), noise: floor && score(floor), normalization: raw ? "raw" : NORMALIZATION_VERSION, results };
+  const results = paired(target, oracle).map((t, i) => compareRecordings(oracle[i]!, t, keys));
+  return { score: score(results), noise: floor && score(floor), ...(n && { noiseCoverage: n.coverage }), normalization: raw ? "raw" : NORMALIZATION_VERSION, results };
 }
 
 const side = (path: string): Side => [path, readJsonl<Recording>(path)];
@@ -482,8 +510,14 @@ export async function main(argv: string[]): Promise<number> {
     // bench: re-record the oracle's exact (template, seed) pairs against the URL, then compare.
     const url = positional[0]!;
     const oraclePath = need(flags, "oracle");
-    const { seqs, headersFor } = replay(readJsonl<Recording>(oraclePath));
+    const oracleRecs = readJsonl<Recording>(oraclePath);
+    const { seqs, headersFor } = replay(oracleRecs);
     const target = resolveTarget(url);
+    // Before recording (against the sandbox that spends the read budget): a noise file that covers none of the oracle fails now.
+    if (flags.noise !== undefined) {
+      const c = noiseCovered(oracleRecs, side(flags.noise)).coverage;
+      console.log(`noise floor: ${flags.noise} covers ${c.seqs} of ${c.oracleSeqs} oracle sequences (${c.templates} of ${c.oracleTemplates} templates)`);
+    }
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
     // The sandbox ignores Parity-Now; sending it would also move the event sweep back to the oracle's day (outside the budget's projection).
