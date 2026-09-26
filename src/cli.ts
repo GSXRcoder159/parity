@@ -72,7 +72,7 @@ const USAGE = `usage:
     and writes the public files to a temp dir.
   agree: runs the command once per target (--runs order) with STRIPE_API_BASE and STRIPE_API_KEY set: twin = an in-process
     twin on an ephemeral port with sk_test_parity, sandbox = https://api.stripe.com with STRIPE_API_KEY (refused when the
-    read budget is already spent; the command's own requests are not ledgered). Outcomes come from the JUnit XML the command
+    read budget is already exceeded; the command's own requests are not ledgered). Outcomes come from the JUnit XML the command
     writes to --junit, else from node --test TAP on stdout (pass --test-reporter=tap; top-level tests only). Reports per-test
     outcomes, agreement with a Wilson 95% CI and the disagreeing tests (names and outcomes only) to stdout, and to
     <out>.md + <out>.json with --out. The suite's contract: send requests to STRIPE_API_BASE. Example: examples/agree-suite.

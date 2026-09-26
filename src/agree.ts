@@ -144,7 +144,7 @@ export async function agreeRuns(o: { cmd: string; junit?: string; runs: ("twin" 
     const ledger = readsLedger(dataDir());
     const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
     // ponytail: the command talks to api.stripe.com directly, so its GETs are neither projected nor ledgered and no circuit
-    // breaker watches its 429s; this only refuses an account already at its read budget. Route it through a counting proxy
+    // breaker watches its 429s; this only refuses an account already over its read budget. Route it through a counting proxy
     // if agree runs on the sandbox routinely.
     const refusal = budgetRefusal(readLedger(ledger), 0, new Date().toISOString(), budget, ledger);
     if (refusal) throw new Refused(refusal);
