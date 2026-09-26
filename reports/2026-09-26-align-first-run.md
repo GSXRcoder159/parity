@@ -6,7 +6,7 @@ The report lists data-file paths, JSON pointers, operations, loci, classes, coun
 
 ## Result: 185 automatic patches pass the gate, and none has landed yet
 
-- **What ran.** `paritybench align` ran on oracle v0 in plan mode. Wall time was 9.0 s, including 12 `score-twin` runs in temp copies of the repo.
+- **What ran.** `paritybench align` ran on oracle v0 in plan mode. Wall time was 9.0 s, including 13 `score-twin` runs in temp copies of the repo: 1 baseline and 12 gate runs.
 - **The gate result.** Triage produced 185 mechanical candidates. The held-out gate accepted all 185, blocked 0 as blocked-by-code, and rejected 0.
 - **Why `align --apply` was not run on the repo.** Applying any template patch fails an existing scaffold test. The test is `test/twin-shapes.test.ts`, "generator is deterministic and the committed templates are current". It asserts that `src/twin/shapes/*.json` equals `scripts/gen-shapes.ts` output byte for byte. That was the W2 invariant, from decision 0002 §4.1. After the freeze, the align loop edits these files by design (0002 §3), so the invariant has to become "the generator reproduces the templates at `twin-scaffold-v0`". That test is outside this task's paths, and the sealed log is append-only. So the apply waits for a ruling. After the ruling it takes one command: `node src/cli.ts align --apply`.
 - **Dry run of the apply.**

@@ -137,7 +137,7 @@ export function planText(r: AlignResult): string {
       ` · earliest divergent step: 0 in ${first.filter((s) => s === 0).length} sequences, later in ${first.filter((s) => s !== null && s > 0).length}, none in ${first.filter((s) => s === null).length}`,
     `candidates: ${r.candidates.length} mechanical (${r.candidates.filter((c) => c.op === "set").length} set, ${r.candidates.filter((c) => c.op === "delete").length} delete)` +
       ` · not mechanical: ${r.notMechanical.length} train loci (${Object.entries(reasons).map(([k, n]) => `${n} ${k}`).join("; ")})`,
-    `gate: ${g.evaluations} score-twin runs · accepted ${g.accepted.length} · blocked-by-code ${g.blocked.length} · rejected ${g.rejected.length}` + (g.notGated.length ? ` · not gated ${g.notGated.length} (--max-batches)` : ""),
+    `gate: ${g.evaluations} score-twin runs after the baseline · accepted ${g.accepted.length} · blocked-by-code ${g.blocked.length} · rejected ${g.rejected.length}` + (g.notGated.length ? ` · not gated ${g.notGated.length} (--max-batches)` : ""),
     `after: ${split(g.after)}`,
   ];
   const list = (title: string, js: Candidate[]) => js.length && out.push(`${title}:`, ...js.map(line));

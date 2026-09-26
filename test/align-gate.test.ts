@@ -146,7 +146,7 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   for (const bad of [["--bogus"], ["--max-batches", "0"], ["extra"], ["--max-batches"]]) assert.equal(cli(...bad).status, 2, bad.join(" "));
   const viaCli = cli("--max-batches", "5");
   assert.equal(viaCli.status, 0, viaCli.stderr);
-  assert.match(viaCli.stdout, /^gate: 1 score-twin runs · accepted 1 · blocked-by-code 0 · rejected 0$/m);
+  assert.match(viaCli.stdout, /^gate: 1 score-twin runs after the baseline · accepted 1 · blocked-by-code 0 · rejected 0$/m);
   assert.match(viaCli.stdout, /^plan only: --apply writes the 1 accepted edits, logs them and commits$/m);
 
   const repo = mkdtempSync(join(tmpdir(), "pb-align-repo-"));
