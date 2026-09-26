@@ -24,6 +24,7 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - [ ] B5 counsel review cleared (decision 0001 C7)
 - [ ] Git history scrubbed of raw Stripe values (a W1b fixture commit contained one; fixed at HEAD, still in history) → publish from a fresh squashed repo, then grep the whole tree for `rkcs_`/`sk_`/`cus_`/`pi_`/`ch_` real ids
 - [ ] Compiled JS build + npm publish of `paritybench` (name currently unclaimed on npm; anyone could take it)
+- [ ] Draft PRs from `align --assist` carry normalized sandbox values in their bodies → delete or scrub them; the read ledger's early lines name the sandbox account id → gone with the squashed history
 - [ ] Repo made public (ask Adam), GitHub Pages enabled for `site/`
 
 ## W0 (Sep 26–28): gates and measurements
@@ -62,11 +63,13 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - [ ] Nightly ParityBench run; per-stratum curve with "surface added" annotations
 
 ## W3 (Oct 13–19): align loop + launch
-- [ ] Triage, localization, step minimization, mechanical auto-patch, LLM-assisted patch, held-out gate, sealed log
-- [ ] Nightly GitHub Actions cron; score page on GitHub Pages; drift feed stub
+- [x] Align loop (`paritybench align`): triage → locus → mechanical data-file candidates (train only) → held-out gate → sealed hash-chained log with oracle provenance (`../parity-data/align/log.jsonl`). Day-0 (`reports/2026-09-26-twin-day0.md`, tag `twin-scaffold-v0`) → first apply: **174 automatic patches**, train L3 3.8%→18.8%, L4 0→5.6%; held-out L3 0→8.8% (`reports/2026-09-26-align-first-run.md`, caveats listed there). Minimization = prefix truncation (step dropping deferred until the read budget allows)
+- [~] LLM-assisted patches (`align --assist`, draft PRs, $15/day cap, `budget/llm.jsonl`): built and tested against a fake Messages API only — **no live run yet (needs `ANTHROPIC_API_KEY`, B2)**
+- [~] Nightly (`paritybench nightly` + `.github/workflows/nightly.yml`, `ci.yml`): degraded path verified live 2026-09-26 (sandbox refused → twin scored, align, drift no-op, curve point published to `site/data/curve.json`). Cron not active until B2 secrets; Pages waits for the launch gate. Drift instrument (`src/drift.ts`, `drift/`) built; first real drift needs B1
 - [x] GitHub Action `action.yml` (composite; boots the twin, exports `PARITY_TWIN_URL`) + self-test workflow; `README.md` (quickstart, method, rate-limits quote, non-affiliation, supported surface). `npx paritybench` needs a compiled JS build + npm publish (launch checklist)
 - [x] Score page `site/` (curve per stratum with CI bands, ceiling line, train/held-out table, automation ratio, drift feed; phone width, light/dark); runs on sample data until the nightly writes `site/data/`
-- [ ] **HUMAN:** launch Show HN + X, Thu Oct 15 (Claude drafts)
+- [x] Launch drafts `docs/launch/` (Show HN, X thread, demo script, vendor invite), each gated "DO NOT POST before B5"
+- [ ] **HUMAN:** launch Show HN + X (target Thu Oct 15) — only after the launch gate
 
 ## W4 (Oct 20–26): time, sim-to-real, fidelity push
 - [ ] Test clocks + proration + subscription updates in twin; clock stratum scored
@@ -84,3 +87,4 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - 2026-09-25: W0 research workflow done (legal gate, verifications, demand). Harness Tasks 1–3 done and reviewed; Task 4 (oracle hygiene) inserted; Tasks 4–5 running.
 - 2026-09-25: Task 5: `paritybench` CLI (record/compare/bench/help, budget-gated sandbox runs, ledger `budget/reads.jsonl`). W0 runs: throughput passes on rate (~4,000 seq/h at c=8); claimable-key quota discovered (caps sustained volume → B1); noise floor 7.6% at L3 under v1.1 (v1.2 gaps listed); nightly no-go on read budget + quota. `reports/2026-09-25-w0-oracle.md`.
 - 2026-09-26: W1 closed on H1 (confirmed; 88-seq oracle, residual gated on B1). Twin scaffold (W2) complete: 6 tasks + cleanup batch, all reviewed. W3 part A done (integration, `score-twin`, score page, README, CI action). Claimable key refused continuously since 01:56 UTC → B1 is the critical path. W3 part B (align loop, nightly, launch drafts) starting on oracle v0 (88 seq).
+- 2026-09-26: W3 complete: align loop live (174 automatic patches; held-out L3 0→8.8%), assisted path built (not live: no LLM key), nightly degraded path verified, launch drafts. W4 started (surface-added proration/invoices/clocks, agree, MCP, verifiers, H4 harness).
