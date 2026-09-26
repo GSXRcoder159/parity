@@ -1,20 +1,135 @@
-// Invoices: retrieve, list, and create_preview. Invoices are created by subscriptions (billing.ts); update, delete,
-// pay, void and finalize are W4 and answer `not_implemented` (after the missing-invoice check).
-import { addInterval, applyBalance, invoiceItem, invoiceItemLine, itemLine, pendingItems, subInvoice } from "../billing.ts";
+// Invoices: retrieve, list, create_preview, and the lifecycle draft -> open -> paid | void (finalize, pay, void,
+// update). Invoices are created by subscriptions (billing.ts). `uncollectible` has no route (mark_uncollectible is not
+// in the pruned spec); pay and void accept it like `open`, per the docs.
+import { addInterval, applyBalance, attemptPayment, invoiceItem, invoiceItemLine, itemLine, paid, pendingItems, subInvoice } from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Handler, Route } from "../server.ts";
-import { isHash, live } from "../util.ts";
+import type { Emit } from "../store.ts";
+import { assign, diff, isHash, live } from "../util.ts";
 import { ITEM, change, itemPrice, newItem, only } from "./subscriptions.ts";
 
 type Obj = Record<string, unknown>;
 
 // The missing-invoice param is "invoice", except on POST /v1/invoices/{invoice}, where it is "id" (observed).
 const find = (ctx: Ctx, id: string | undefined, param = "invoice") => live(ctx, id, "invoice") ?? ctx.fail("resource_missing", { param });
-const w4 = (param?: string): Handler => (ctx, { pathParams }) => {
-  find(ctx, pathParams.invoice, param);
-  return ctx.fail("not_implemented");
-};
 const ID = /^\/v1\/invoices\/(?<invoice>[^/]+)$/;
+const action = (a: string) => new RegExp(`^/v1/invoices/(?<invoice>[^/]+)/${a}$`);
+
+/** The invoice's payment intent still awaiting payment: created at finalization, or left by a failed attempt. */
+const openIntent = (ctx: Ctx, inv: Obj) =>
+  ctx.all("payment_intent").findLast((pi) => (pi.payment_details as Obj).order_reference === inv.id && pi.status === "requires_payment_method");
+const canceled = (pi: Obj, reason: string, now: number): Emit => ({
+  type: "payment_intent.canceled",
+  object: { ...pi, canceled_at: now, cancellation_reason: reason, status: "canceled" },
+});
+
+/** `types` and an `invoice.updated` with what changed since `before`, all carrying the invoice's final state. */
+const invoiceEmits = (before: Obj, after: Obj, types: string[]): Emit[] => [
+  ...types.map((type) => ({ type, object: after })),
+  { type: "invoice.updated", object: after, previous_attributes: diff(before, after) },
+];
+
+/** Draft `inv` finalized now (`open`), with the customer's balance applied then (a customer.updated if it moves). */
+function finalize(ctx: Ctx, inv: Obj): { invoice: Obj; emits: Emit[] } {
+  const now = ctx.now();
+  const customer = ctx.get(inv.customer as string)!;
+  const transitions = { ...(inv.status_transitions as Obj), finalized_at: now };
+  const open = { ...inv, automatically_finalizes_at: null, effective_at: now, status: "open", status_transitions: transitions };
+  const invoice = applyBalance(open, customer.balance as number);
+  const moved = invoice.ending_balance !== customer.balance;
+  const emits: Emit[] = moved ? [{ type: "customer.updated", object: { ...customer, balance: invoice.ending_balance }, previous_attributes: { balance: customer.balance } }] : [];
+  return { invoice, emits };
+}
+
+const subscriptionOf = (ctx: Ctx, inv: Obj) => live(ctx, ((inv.parent as Obj | null)?.subscription_details as Obj | null)?.subscription, "subscription");
+
+/** Paying a subscription's latest invoice makes an incomplete or past_due subscription active (docs: subscription statuses). */
+function activate(ctx: Ctx, inv: Obj): Emit[] {
+  const sub = subscriptionOf(ctx, inv);
+  if (!sub || sub.latest_invoice !== inv.id || !["incomplete", "past_due"].includes(sub.status as string)) return [];
+  return [{ type: "customer.subscription.updated", object: { ...sub, status: "active" }, previous_attributes: { status: sub.status } }];
+}
+
+/**
+ * Finalizes a draft: `open`, the balance applied, and a payment intent for the amount due that nothing confirms yet
+ * (observed, #19); nothing due -> paid at once, as when a subscription update invoices nothing (billing.ts collect).
+ */
+const finalizeRoute: Handler = (ctx, { pathParams, params }) => {
+  const inv = find(ctx, pathParams.invoice);
+  if (inv.status !== "draft") ctx.fail("not_implemented"); // ponytail: re-finalizing (the real API's error is unobserved)
+  const { invoice, emits } = finalize(ctx, inv);
+  let after = typeof params.auto_advance === "boolean" ? { ...invoice, auto_advance: params.auto_advance } : invoice;
+  const types = ["invoice.finalized"];
+  if (after.amount_due === 0) {
+    after = { ...paid(after, ctx.now()), attempted: true };
+    types.push("invoice.paid", "invoice.payment_succeeded");
+  } else emits.push(...attemptPayment(ctx, after, undefined).emits);
+  return { body: after, emits: [...emits, ...invoiceEmits(inv, after, types)] };
+};
+
+/**
+ * Pays an open (or uncollectible) invoice; a draft is finalized first (observed: invoice.finalized). Out of band
+ * (`paid_out_of_band`), or with nothing due: paid, and the open payment intent canceled as a duplicate (observed, #19).
+ * Otherwise one charge of the invoice's, else the subscription's, else the customer's default payment method (docs),
+ * confirming the open payment intent: a decline answers the 402 card error and leaves the invoice open.
+ */
+const payRoute: Handler = (ctx, { pathParams, params }) => {
+  const inv = find(ctx, pathParams.invoice);
+  only(ctx, params, ["expand", "paid_out_of_band"]);
+  if (inv.status === "void") ctx.fail("invoice_pay_voided");
+  if (inv.status === "paid") ctx.fail("not_implemented"); // ponytail: paying twice (the real API's error is unobserved)
+  const now = ctx.now();
+  const emits: Emit[] = [];
+  const types: string[] = [];
+  let open = inv;
+  if (inv.status === "draft") {
+    const f = finalize(ctx, inv);
+    open = f.invoice;
+    emits.push(...f.emits);
+    types.push("invoice.finalized");
+  }
+  const intent = openIntent(ctx, open); // none for a draft just finalized here (observed: no payment_intent.* out of band)
+  if (params.paid_out_of_band === true || open.amount_due === 0) {
+    if (intent) emits.push(canceled(intent, "duplicate", now));
+  } else {
+    const sub = subscriptionOf(ctx, open);
+    const customer = ctx.get(open.customer as string)!;
+    const pmId = open.default_payment_method || sub?.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method;
+    // ponytail: no payment method -> the subscription create's error (for an invoice, unobserved).
+    const pm = live(ctx, pmId, "payment_method") ?? ctx.fail("customer_no_payment_method");
+    const attempt = attemptPayment(ctx, open, pm, intent);
+    emits.push(...attempt.emits);
+    open = { ...open, attempt_count: (open.attempt_count as number) + 1, attempted: true };
+    if (attempt.declined) return { ...attempt.declined, emits: [...emits, ...invoiceEmits(inv, open, [...types, "invoice.payment_failed"])] };
+  }
+  const after = paid(open, now);
+  types.push("invoice.paid", "invoice.payment_succeeded");
+  return { body: after, emits: [...emits, ...activate(ctx, after), ...invoiceEmits(inv, after, types)] };
+};
+
+/** Voids an open (or uncollectible) invoice and cancels its open payment intent (observed, #19). */
+const voidRoute: Handler = (ctx, { pathParams }) => {
+  const inv = find(ctx, pathParams.invoice);
+  if (inv.status === "paid") ctx.fail("invoice_void_paid");
+  if (inv.status === "draft") ctx.fail("invoice_not_open");
+  if (inv.status === "void") ctx.fail("not_implemented"); // ponytail: voiding twice (the real API's error is unobserved)
+  const now = ctx.now();
+  const after = { ...inv, auto_advance: false, status: "void", status_transitions: { ...(inv.status_transitions as Obj), voided_at: now } };
+  const intent = openIntent(ctx, inv);
+  return { body: after, emits: [...(intent ? [canceled(intent, "void_invoice", now)] : []), ...invoiceEmits(inv, after, ["invoice.voided"])] };
+};
+
+/** `metadata` and `description` of a draft or open invoice. */
+const updateRoute: Handler = (ctx, { pathParams, params }) => {
+  const inv = find(ctx, pathParams.invoice, "id");
+  only(ctx, params, ["description", "expand", "metadata"]);
+  // ponytail: other statuses are refused. The docs lock only monetary values and collection_method once finalized, so
+  // these edits likely succeed on paid and void invoices too; unobserved.
+  if (inv.status !== "draft" && inv.status !== "open") ctx.fail("not_implemented");
+  const after = assign(structuredClone(inv), params, ["description", "metadata"]);
+  const previous_attributes = diff(inv, after);
+  return { body: after, emits: Object.keys(previous_attributes).length > 0 ? [{ type: "invoice.updated", object: after, previous_attributes }] : [] };
+};
 
 /**
  * The next invoice of a subscription (`subscription`, optionally with `subscription_details` changes applied as an
@@ -95,7 +210,18 @@ export const routes: Route[] = [
   // Removed at basil (observed 404). The pruned spec has no such operation: params validate as the list's.
   ["GET", /^\/v1\/invoices\/upcoming$/, (ctx) => ctx.fail("invoice_upcoming_deprecated"), "get /v1/invoices"],
   ["GET", ID, (ctx, { pathParams }) => ({ body: find(ctx, pathParams.invoice) }), "get /v1/invoices/{invoice}"],
-  ["POST", ID, w4("id"), "post /v1/invoices/{invoice}"],
-  ["DELETE", ID, w4(), "delete /v1/invoices/{invoice}"],
-  ...["finalize", "pay", "void"].map((a): Route => ["POST", new RegExp(`^/v1/invoices/(?<invoice>[^/]+)/${a}$`), w4(), `post /v1/invoices/{invoice}/${a}`]),
+  ["POST", ID, updateRoute, "post /v1/invoices/{invoice}"],
+  // Docs: a subscription's invoice cannot be deleted, not even a draft (void it); the twin has no other invoices.
+  [
+    "DELETE",
+    ID,
+    (ctx, { pathParams }) => {
+      find(ctx, pathParams.invoice);
+      return ctx.fail("invoice_not_deletable");
+    },
+    "delete /v1/invoices/{invoice}",
+  ],
+  ["POST", action("finalize"), finalizeRoute, "post /v1/invoices/{invoice}/finalize"],
+  ["POST", action("pay"), payRoute, "post /v1/invoices/{invoice}/pay"],
+  ["POST", action("void"), voidRoute, "post /v1/invoices/{invoice}/void"],
 ];

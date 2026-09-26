@@ -79,7 +79,9 @@ function check(s: Schema, v: unknown, name: string): unknown {
       if (typeof v === "string" && /^-?(\d+\.?\d*|\.\d+)$/.test(v)) return Number(v);
       return fail("parameter_invalid", param);
     case "boolean":
-      if (v === "true" || v === "false") return v === "true";
+      // stripe-python sends Python's True/False (captured by H4); unvalidated on the sandbox until B1.
+      if (v === "true" || v === "True") return true;
+      if (v === "false" || v === "False") return false;
       return fail("parameter_invalid", param);
     case "string":
       if (typeof v !== "string") fail("parameter_invalid", param);

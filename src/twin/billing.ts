@@ -206,13 +206,13 @@ export interface Attempt {
 }
 
 /**
- * Creates a payment intent for the invoice's `amount_due` and, when `pm` is given, charges it once. Without
- * `pm` the intent stays `requires_payment_method` and nothing is charged.
+ * Creates a payment intent for the invoice's `amount_due` (or confirms `intent`, the invoice's open one) and, when
+ * `pm` is given, charges it once. Without `pm` the intent stays `requires_payment_method` and nothing is charged.
  */
-export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined): Attempt {
+export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined, intent?: Obj): Attempt {
   const now = ctx.now();
   const { amount_due: amount, currency, customer } = invoice as { amount_due: number; currency: unknown; customer: unknown };
-  const created = ctx.build("payment_intent", {
+  const created = intent ?? ctx.build("payment_intent", {
     id: ctx.id("pi"),
     amount,
     created: now,
@@ -221,7 +221,7 @@ export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined): Att
     payment_details: { customer_reference: null, order_reference: invoice.id }, // dahlia's link from the intent to its invoice
     status: "requires_payment_method",
   });
-  const emits: Emit[] = [{ type: "payment_intent.created", object: created }];
+  const emits: Emit[] = intent ? [] : [{ type: "payment_intent.created", object: created }];
   if (!pm) return { pi: created, ok: false, emits };
 
   // The card number decides the outcome, as with the real test cards: match the stored card to its token.
@@ -243,7 +243,7 @@ export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined): Att
     status: ok ? "succeeded" : "failed",
   });
   if (ok) {
-    const pi = { ...created, amount_received: amount, latest_charge: charge.id, payment_method: pm.id, status: "succeeded" };
+    const pi = { ...created, amount_received: amount, last_payment_error: null, latest_charge: charge.id, payment_method: pm.id, status: "succeeded" };
     return { pi, ok, emits: [...emits, { type: "charge.succeeded", object: charge }, { type: "payment_intent.succeeded", object: pi }] };
   }
   const declined = renderError(new TwinError("card_declined", {}, { charge: charge.id, decline_code: token?.decline_code, payment_method: pm }), ctx.requestId);

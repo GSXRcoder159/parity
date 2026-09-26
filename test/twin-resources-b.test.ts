@@ -271,7 +271,7 @@ test("Jan 31 monthly subscription: item period ends Feb 28, cancel_at follows it
   assert.deepEqual([atCreate.cancel_at, atCreate.canceled_at, atCreate.cancellation_details.reason, atCreate.metadata], [end, Number(at["Parity-Now"]), "cancellation_requested", { m: "1" }]);
 });
 
-test("send_invoice: open invoice with a due date, no payment, active subscription", async () => {
+test("send_invoice: draft invoice with a due date, no payment, active subscription", async () => {
   const t = createTwin();
   const { c, price } = await setup(t, { "Parity-Now": String(NOW) });
   const i = t.store.events.length;
@@ -281,8 +281,8 @@ test("send_invoice: open invoice with a due date, no payment, active subscriptio
   const sub = (await call(t, "POST", "/v1/subscriptions", params, { "Parity-Now": String(NOW) })).body;
   assert.deepEqual([sub.status, sub.collection_method, sub.days_until_due], ["active", "send_invoice", 14]);
   const inv = (await call(t, "GET", `/v1/invoices/${sub.latest_invoice}`)).body;
-  assert.deepEqual([inv.status, inv.amount_remaining, inv.due_date, inv.attempted], ["open", 1500, NOW + 14 * 86400, false]);
-  assert.deepEqual(since(t, i), ["customer.subscription.created", "customer.updated", "invoice.created", "invoice.finalized"]);
+  assert.deepEqual([inv.status, inv.amount_remaining, inv.due_date, inv.attempted], ["draft", 1500, NOW + 14 * 86400, false]);
+  assert.deepEqual(since(t, i), ["customer.subscription.created", "customer.updated", "invoice.created"]);
   assert.deepEqual((await call(t, "GET", "/v1/payment_intents", { customer: c.id })).body.data, []);
 });
 
@@ -376,9 +376,7 @@ test("price_data items, subscription and invoice list filters, W4 endpoints answ
     await call(t, "POST", `/v1/subscriptions/${b.id}`, { items: [{ price: price.id, quantity: 2 }] }),
     await call(t, "DELETE", `/v1/subscriptions/${b.id}`, { invoice_now: true }),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}`, { metadata: { k: "v" } }),
-    await call(t, "DELETE", `/v1/invoices/${b.latest_invoice}`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/pay`),
-    await call(t, "POST", `/v1/invoices/${b.latest_invoice}/void`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/finalize`),
   ];
   assert.deepEqual(w4.map((r) => `${r.status} ${r.body.error.message}`), w4.map(() => "400 parity: not_implemented"));

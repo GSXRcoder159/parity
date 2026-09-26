@@ -385,3 +385,44 @@ test("create_preview: an anchor timestamp is refused, not read as unchanged; a n
   assert.deepEqual(lineAmounts(fresh), [[2000, false]]);
   assert.equal(t.store.events.length, from);
 });
+
+test("a price on another billing period: only with billing_cycle_anchor=now (flexible mode never resets it by itself)", async () => {
+  const t = createTwin();
+  const { A, sub, si } = await subscribed(t);
+  const yearly = (await call(t, "POST", "/v1/prices", { currency: "usd", unit_amount: 12000, recurring: { interval: "year" }, product: A.product }, at(T0))).body;
+  const from = t.store.events.length;
+  // Without the reset, how the yearly period would align is undocumented: refused, in a preview too.
+  const refused = [
+    await update(t, sub, { items: [{ id: si, price: yearly.id }] }),
+    await update(t, sub, { items: [{ id: si, price: yearly.id }], billing_cycle_anchor: "unchanged" }),
+    await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: yearly.id }] } }, at(HALF)),
+  ];
+  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(3).fill("parity: not_implemented"));
+  assert.equal(t.store.events.length, from);
+
+  // With it: A's unused half month credited, the year billed in full now; the preview shows the same invoice.
+  const swap = { items: [{ id: si, price: yearly.id }], billing_cycle_anchor: "now" };
+  const p = (await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: swap }, at(HALF))).body;
+  const up = (await update(t, sub, swap)).body;
+  const yearEnd = addInterval(HALF, "year");
+  const [item] = up.items.data;
+  assert.deepEqual([up.billing_cycle_anchor, item.price.id, item.current_period_start, item.current_period_end], [HALF, yearly.id, HALF, yearEnd]);
+  const inv = (await call(t, "GET", `/v1/invoices/${up.latest_invoice}`)).body;
+  assert.deepEqual([lineAmounts(inv), lineAmounts(p)], [[[-500, true], [12000, false]], [[-500, true], [12000, false]]]);
+  assert.deepEqual([inv.lines.data[1].period, inv.billing_reason, inv.status, inv.amount_paid], [{ end: yearEnd, start: HALF }, "subscription_update", "paid", 11500]);
+});
+
+test("a period change by deleting the item and adding one (Python's items[0][deleted]=True); mixed periods refused", async () => {
+  const t = createTwin();
+  const { A, B, sub, si } = await subscribed(t);
+  const yearly = (await call(t, "POST", "/v1/prices", { currency: "usd", unit_amount: 12000, recurring: { interval: "year" }, product: A.product }, at(T0))).body;
+  // Two monthly items, one moved to yearly: the result mixes periods, refused.
+  const [, extra] = (await update(t, sub, { items: [{ price: B.id }], proration_behavior: "none" }, T0)).body.items.data;
+  const mixed = await update(t, sub, { items: [{ id: extra.id, price: yearly.id }], billing_cycle_anchor: "now" });
+  assert.equal(mixed.body.error?.message, "parity: not_implemented");
+  const items = [{ id: si, deleted: "True" }, { id: extra.id, deleted: "True" }, { price: yearly.id }];
+  const up = (await update(t, sub, { items, billing_cycle_anchor: "now", proration_behavior: "none" })).body;
+  assert.deepEqual([up.items.data.length, up.items.data[0].price.id, up.items.data[0].current_period_end, up.quantity], [1, yearly.id, addInterval(HALF, "year"), 1]);
+  const inv = (await call(t, "GET", `/v1/invoices/${up.latest_invoice}`)).body;
+  assert.deepEqual([lineAmounts(inv), inv.status], [[[12000, false]], "paid"]); // none: no credit, the year in full
+});

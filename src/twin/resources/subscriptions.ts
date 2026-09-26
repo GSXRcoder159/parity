@@ -1,4 +1,4 @@
-// Subscriptions: create (first invoice + synchronous payment), retrieve, list, update (items: price swaps,
+// Subscriptions: create (first invoice + synchronous payment; send_invoice: a draft), retrieve, list, update (items: price swaps,
 // quantities, additions, deletions; proration_behavior, proration_date, billing_cycle_anchor=now;
 // cancel_at_period_end, metadata, default_payment_method, description), cancel. `change` is shared with
 // POST /v1/invoices/create_preview.
@@ -101,7 +101,8 @@ const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.re
  * new item), `proration_behavior` (`none`: no prorations), `proration_date` (default now), `billing_cycle_anchor=now`.
  * Per changed item: a credit for the unused time of its last debit (flexible mode credits what was billed) and a
  * debit for the rest of its period at the new price and quantity, by the second over the item's current period,
- * each rounded to the nearest minor unit. `billing_cycle_anchor=now` restarts every item's period now. With item
+ * each rounded to the nearest minor unit. `billing_cycle_anchor=now` restarts every item's period now, on its own
+ * interval (a price on another billing period, e.g. monthly -> yearly, is accepted only with it). With item
  * changes, whatever `proration_behavior`, each item is credited (unless `none`) and the new period billed in full on
  * an immediate invoice (`reset`), so there are no debit prorations. Without item changes, flexible mode nets the credit
  * and debit (docs: billing-mode/compare): `none` creates nothing, the other behaviors are refused (below).
@@ -119,6 +120,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
   // ponytail: changing a canceled subscription is refused (the real API's error is unobserved).
   if ((raw.length > 0 || reset) && sub.status === "canceled") ctx.fail("not_implemented");
   const changed: [Obj | undefined, Obj | undefined][] = [];
+  let moved = false; // a price on another billing period
   raw.forEach((it, i) => {
     only(ctx, it, ["deleted", "id", ...ITEM]);
     const at = it.id ? items.findIndex((x) => x.id === it.id) : -1;
@@ -132,10 +134,14 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     }
     const price = old && !it.price && !isHash(it.price_data) ? (old.price as Obj) : itemPrice(ctx, it, i, puts);
     const like = (old ?? before[0]!).price as Obj;
-    // ponytail: a price in another currency or interval, or a new item on a price the subscription already has, is
-    // refused (the real API's answers are unobserved).
+    // ponytail: a price in another currency, or a new item on a price the subscription already has, is refused (the
+    // real API's answers are unobserved). So is a price on another billing period without billing_cycle_anchor=now:
+    // flexible mode never resets the anchor by itself (docs: billing-mode/compare), and how the new period then aligns
+    // is undocumented; unobserved until B1. With the reset, every item restarts now on its own period (below).
     const dup = !old && items.some((x) => (x.price as Obj).id === price.id);
-    if (price.currency !== like.currency || recurrence(price) !== recurrence(like) || dup) ctx.fail("not_implemented");
+    const other = recurrence(price) !== recurrence(like);
+    if (price.currency !== like.currency || dup || (other && !reset)) ctx.fail("not_implemented");
+    moved ||= other;
     const next = old
       ? assign({ ...old, price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
       : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
@@ -144,6 +150,9 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     else items.push(next);
   });
   if (items.length === 0) ctx.fail("not_implemented"); // ponytail: deleting every item (the real API's error is unobserved)
+  // ponytail: a period change that leaves items on different periods is refused (mixed intervals: the docs' alignment
+  // rules are unvalidated).
+  if (moved && new Set(items.map((x) => recurrence(x.price as Obj))).size > 1) ctx.fail("not_implemented");
   // ponytail: an anchor reset without item changes nets the credit for [now, old end] against the new period's debit
   // into one proration=true item for [old end, new end] (pending, or invoiced now with always_invoice). Its amount is
   // unobserved when the old and new periods differ in length (the docs' example has equal ones): refused until B1.
@@ -236,12 +245,17 @@ export const routes: Route[] = [
 
       let invoice = firstInvoice(ctx, sub, customer);
       sub.latest_invoice = invoice.id;
-      const invoiceEvents = ["invoice.created", "invoice.finalized"];
+      const invoiceEvents = collection === "send_invoice" ? ["invoice.created"] : ["invoice.created", "invoice.finalized"];
       const emits: Emit[] = [];
-      if (invoice.amount_due === 0) {
+      if (collection === "send_invoice") {
+        // The first invoice stays a draft, finalized automatically 72 h after creation (observed, #19); the customer's
+        // balance is consumed when it is finalized (invoices.ts). ponytail: a zero-amount one stays a draft too (unobserved).
+        const transitions = { ...(invoice.status_transitions as Obj), finalized_at: null };
+        invoice = { ...invoice, automatically_finalizes_at: now + 72 * 3600, effective_at: null, ending_balance: null, status: "draft", status_transitions: transitions };
+      } else if (invoice.amount_due === 0) {
         invoice = paid(invoice, now);
         invoiceEvents.push("invoice.paid", "invoice.payment_succeeded");
-      } else if (collection === "charge_automatically") {
+      } else {
         // ponytail: pending_if_incomplete is treated like allow_incomplete.
         const behavior = (params.payment_behavior as string) || "allow_incomplete";
         const pmId = params.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method;
@@ -263,9 +277,9 @@ export const routes: Route[] = [
       }
 
       emits.push({ type: "customer.subscription.created", object: sub });
-      // The first subscription fixes the customer's billing currency; the first invoice consumes the customer's balance.
-      // ponytail: one customer.updated for both (a balance at subscription create is unobserved).
-      const customerAfter = { ...customer, balance: invoice.ending_balance, currency: customer.currency || sub.currency };
+      // The first subscription fixes the customer's billing currency; the first invoice consumes the customer's balance
+      // (a draft: not yet). ponytail: one customer.updated for both (a balance at subscription create is unobserved).
+      const customerAfter = { ...customer, balance: invoice.ending_balance ?? customer.balance, currency: customer.currency || sub.currency };
       const customerPrev = diff(customer, customerAfter);
       if (Object.keys(customerPrev).length > 0) emits.push({ type: "customer.updated", object: customerAfter, previous_attributes: customerPrev });
       emits.push(...invoiceEvents.map((type) => ({ type, object: invoice })));
