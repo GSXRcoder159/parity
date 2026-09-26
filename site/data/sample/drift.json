@@ -1,0 +1,26 @@
+[
+  {
+    "sample": true,
+    "date": "2026-10-03",
+    "endpoint": "POST /v1/customers",
+    "template": "customer-crud",
+    "path": "$.invoice_settings.rendering_options",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "sample": true,
+    "date": "2026-10-06",
+    "endpoint": "POST /v1/subscriptions",
+    "template": "subscription-create",
+    "path": "$.billing_mode",
+    "cls": "MISSING_FIELD"
+  },
+  {
+    "sample": true,
+    "date": "2026-10-06",
+    "endpoint": "POST /v1/refunds",
+    "template": "refund-full",
+    "path": "$",
+    "cls": "EVENT_SET_MISMATCH"
+  }
+]

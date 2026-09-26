@@ -1,0 +1,300 @@
+// Score page (static, no build step). Reads data/curve.json, data/drift.json and data/scores/<date of the latest
+// curve point>.json; `?data=sample` reads the synthetic files in data/sample/ instead.
+//
+// Data contract. Public-safe only (decision 0001 C3): scores, counts, strata, templates, paths and classes; no values, no ids.
+//   Levels   {L1, L2, L3, L4}, each a 95% Wilson interval {p, lo, hi, n} (src/bench/score.ts).
+//   curve.json   [{date: "YYYY-MM-DD", normalization, overall: Levels, byStratum: {name: Levels}, heldOut: Levels,
+//                  train: Levels, events: ["surface-added: …"], noise?: {overall: Levels, byStratum: {name: Levels}},
+//                  patches?: {automatic, assisted}, sample?: true}]
+//                noise = agreement of two real sandbox recordings of the same sequences: ceiling = noise p, floor = 1 − p.
+//                patches = align-loop patches merged that night, by class (decision 0002 §3).
+//   scores/<date>.json  {date, normalization, overall: Split, byStratum: {name: Split}, sample?: true},
+//                Split = {train: Levels, heldOut: Levels, noise: Levels}
+//   drift.json   [{date, endpoint, template, path, cls, sample?: true}]
+// test/site.test.ts imports this module in Node, so everything above main() is DOM-free.
+
+/** Loads the page data through `get(url)`, which resolves to parsed JSON, or null when the file does not exist. */
+export async function load(get, base = "data/") {
+  const curve = [...((await get(`${base}curve.json`)) ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+  const drift = (await get(`${base}drift.json`)) ?? [];
+  const last = curve.at(-1);
+  const scores = last ? await get(`${base}scores/${last.date}.json`) : null;
+  const sample = [...curve, ...drift, scores].some((x) => x?.sample === true);
+  return { curve, drift, scores, sample };
+}
+
+/** Strata that appear on any night, sorted. */
+export const strata = (curve) => [...new Set(curve.flatMap((pt) => Object.keys(pt.byStratum ?? {})))].sort();
+
+/**
+ * One row per night that has `stratum` ("all" = every stratum): the L3/L4 intervals, their ceilings (null on a night
+ * without a noise floor), and the night's annotations, including a change of normalization version.
+ */
+export function series(curve, stratum) {
+  const rows = [];
+  curve.forEach((pt, i) => {
+    const levels = stratum === "all" ? pt.overall : pt.byStratum?.[stratum];
+    if (!levels) return;
+    const noise = stratum === "all" ? pt.noise?.overall : pt.noise?.byStratum?.[stratum];
+    const events = [...(pt.events ?? [])];
+    if (i > 0 && pt.normalization !== curve[i - 1].normalization) events.push(`normalization ${pt.normalization}`);
+    rows.push({ date: pt.date, events, L3: levels.L3, L4: levels.L4, ceiling: { L3: noise?.L3?.p ?? null, L4: noise?.L4?.p ?? null } });
+  });
+  return rows;
+}
+
+/** Cumulative automatic and assisted patches after each night that reports patches; share = automatic / both (null at 0). */
+export function automation(curve) {
+  let automatic = 0;
+  let assisted = 0;
+  return curve
+    .filter((pt) => pt.patches)
+    .map((pt) => {
+      automatic += pt.patches.automatic ?? 0;
+      assisted += pt.patches.assisted ?? 0;
+      return { date: pt.date, events: [], automatic, assisted, share: automatic + assisted ? automatic / (automatic + assisted) : null };
+    });
+}
+
+/** Pixel scales of a w×h chart for 0–1 values over `dates`; a single date sits in the middle, no date gives no NaN. */
+export function scales(dates, w, h, pad = { t: 24, r: 12, b: 28, l: 44 }) {
+  const ts = dates.map((d) => Date.parse(d));
+  const min = Math.min(...ts);
+  const max = Math.max(...ts);
+  const iw = w - pad.l - pad.r;
+  return {
+    pad,
+    x: (d) => pad.l + (max > min ? ((Date.parse(d) - min) / (max - min)) * iw : iw / 2),
+    y: (v) => pad.t + (1 - v) * (h - pad.t - pad.b),
+  };
+}
+
+/** SVG path data through [x, y] points, and a closed band between an upper and a lower edge. */
+export const line = (pts) => pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+export const band = (upper, lower) => (upper.length ? `${line(upper)}L${line([...lower].reverse()).slice(1)}Z` : "");
+
+const pct1 = (v) => (v * 100).toFixed(1);
+export const pct = (v) => `${pct1(v)}%`;
+/** "92.4% [89.4–94.6] (420)", or "—" for an empty interval. */
+export const cell = (w) => (!w || !w.n ? "—" : `${pct(w.p)} [${pct1(w.lo)}–${pct1(w.hi)}] (${w.n})`);
+
+// ---- DOM ----
+
+const SVG = "http://www.w3.org/2000/svg";
+const LEVEL_DEFS = [
+  { key: "L3", label: "L3 value", color: "var(--s1)" },
+  { key: "L4", label: "L4 sequence", color: "var(--s2)" },
+];
+
+/** An HTML element; string children become text nodes (data never goes through innerHTML). */
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  e.append(...kids);
+  return e;
+}
+
+function s(tag, attrs = {}, text) {
+  const e = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+const $ = (id) => document.getElementById(id);
+const val = (v) => (typeof v === "number" ? v : v.p);
+
+/**
+ * A 0–100% time chart into `box`: per def a 2px line with an end dot, plus an optional Wilson band and ceiling step line;
+ * annotations as hairlines; a crosshair tooltip on hover and on keyboard focus (arrow keys move it).
+ * def = {label, color, get(row) → interval | number, band?, ceiling?(row) → number | null, text?(row) → string}.
+ */
+function chart(box, rows, defs, label) {
+  if (!rows.length) return box.replaceChildren(h("p", { class: "muted" }, "No data."));
+  const w = box.clientWidth;
+  const hgt = 240;
+  const sc = scales(rows.map((r) => r.date), w, hgt);
+  const right = w - sc.pad.r;
+  const svg = s("svg", { width: w, height: hgt, role: "img", "aria-label": label, tabindex: 0 });
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    svg.append(s("line", { x1: sc.pad.l, x2: right, y1: sc.y(v), y2: sc.y(v), class: v ? "grid" : "axis" }));
+    svg.append(s("text", { x: sc.pad.l - 6, y: sc.y(v) + 4, class: "tick", "text-anchor": "end" }, `${v * 100}%`));
+  }
+  const first = rows[0].date;
+  const last = rows.at(-1).date;
+  const xLabels = first === last ? [[first, "middle"]] : [[first, "start"], [last, "end"]];
+  for (const [d, anchor] of xLabels) svg.append(s("text", { x: sc.x(d), y: hgt - 8, class: "tick", "text-anchor": anchor }, d));
+  let free = 0; // where the next annotation label may start: a label that would overlap the previous one is left to the tooltip
+  for (const r of rows.filter((r) => r.events.length)) {
+    const x = sc.x(r.date);
+    svg.append(s("line", { x1: x, x2: x, y1: 4, y2: hgt - sc.pad.b, class: "annot" }));
+    const text = r.events.map((e) => e.split(":")[0]).join(", ");
+    const lx = Math.min(x + 4, w - text.length * 6); // ~6px per 11px glyph; labels sit above the plot, clear of ceilings near 100%
+    if (lx < free) continue;
+    svg.append(s("text", { x: lx, y: 14, class: "tick" }, text));
+    free = lx + text.length * 6 + 8;
+  }
+  for (const d of defs) {
+    const at = (f) => rows.map((r) => [sc.x(r.date), sc.y(f(r))]);
+    if (d.band) svg.append(s("path", { d: band(at((r) => d.get(r).hi), at((r) => d.get(r).lo)), style: `fill:${d.color}`, class: "band" }));
+    if (d.ceiling) {
+      // Step line: each night's ceiling holds until the next night's; the first starts at the left edge, the last runs to the right.
+      const steps = rows.flatMap((r, i) => {
+        const c = d.ceiling(r);
+        if (c === null) return [];
+        const x0 = i ? sc.x(r.date) : sc.pad.l;
+        const x1 = i < rows.length - 1 ? sc.x(rows[i + 1].date) : right;
+        return [`M${x0.toFixed(1)},${sc.y(c).toFixed(1)}H${x1.toFixed(1)}`];
+      });
+      if (steps.length) svg.append(s("path", { d: steps.join(""), style: `stroke:${d.color}`, class: "ceiling" }));
+    }
+    const pts = at((r) => val(d.get(r)));
+    svg.append(s("path", { d: line(pts), style: `stroke:${d.color}`, class: "series" }));
+    const [x, y] = pts.at(-1);
+    svg.append(s("circle", { cx: x, cy: y, r: 4, style: `fill:${d.color}`, class: "dot" }));
+  }
+  const cross = s("line", { y1: sc.pad.t, y2: hgt - sc.pad.b, class: "cross", visibility: "hidden" });
+  svg.append(cross);
+  const tip = h("div", { class: "tip", role: "status" });
+  tip.hidden = true;
+  let cur = rows.length - 1;
+  const show = (i) => {
+    cur = i;
+    const r = rows[i];
+    const x = sc.x(r.date);
+    cross.setAttribute("x1", x);
+    cross.setAttribute("x2", x);
+    cross.setAttribute("visibility", "visible");
+    tip.replaceChildren(
+      h("div", { class: "muted" }, r.date),
+      ...defs.map((d) => {
+        const c = d.ceiling?.(r);
+        const v = d.text ? d.text(r) : cell(d.get(r));
+        return h("div", {}, h("span", { class: "key", style: `background:${d.color}` }), h("b", {}, v), ` ${d.label}`, c == null ? "" : `, ceiling ${pct(c)}`);
+      }),
+      ...r.events.map((e) => h("div", { class: "muted" }, e)),
+    );
+    tip.hidden = false;
+    tip.style.left = `${Math.max(0, Math.min(x + 12, w - tip.offsetWidth))}px`;
+  };
+  const hide = () => {
+    tip.hidden = true;
+    cross.setAttribute("visibility", "hidden");
+  };
+  const nearest = (px) => rows.reduce((b, r, i) => (Math.abs(sc.x(r.date) - px) < Math.abs(sc.x(rows[b].date) - px) ? i : b), 0);
+  svg.addEventListener("pointermove", (e) => show(nearest(e.clientX - svg.getBoundingClientRect().left)));
+  svg.addEventListener("pointerleave", hide);
+  svg.addEventListener("focus", () => show(cur));
+  svg.addEventListener("blur", hide);
+  svg.addEventListener("keydown", (e) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    show(Math.max(0, Math.min(rows.length - 1, cur + step)));
+  });
+  box.replaceChildren(svg, tip);
+}
+
+function table(head, rows) {
+  return h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ...head.map((c) => h("th", {}, c)))), h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c)))))));
+}
+
+function renderCurve(data) {
+  const rows = series(data.curve, $("stratum").value);
+  const defs = LEVEL_DEFS.map((l) => ({ ...l, get: (r) => r[l.key], band: true, ceiling: (r) => r.ceiling[l.key] }));
+  chart($("curve-chart"), rows, defs, `Nightly L3 and L4 agreement, ${$("stratum").selectedOptions[0].text}`);
+  const c = (v) => (v === null ? "none: invalid" : pct(v));
+  $("curve-table").replaceChildren(
+    table(
+      ["Night", "L3", "L4", "L3 ceiling", "L4 ceiling", "Annotations"],
+      rows.map((r) => [r.date, cell(r.L3), cell(r.L4), c(r.ceiling.L3), c(r.ceiling.L4), r.events.join("; ")]),
+    ),
+  );
+}
+
+function renderAutomation(data) {
+  const all = automation(data.curve);
+  const rows = all.filter((r) => r.share !== null);
+  const end = all.at(-1);
+  $("automation-summary").textContent = rows.length
+    ? `${end.automatic} automatic and ${end.assisted} assisted patches since the scaffold freeze: ${pct(end.share)} automatic.`
+    : "No align-loop patches have been recorded yet.";
+  $("automation-chart").hidden = !rows.length;
+  if (rows.length) {
+    const def = { label: "automatic (cumulative)", color: "var(--s1)", get: (r) => r.share, text: (r) => `${pct(r.share)} (${r.automatic} of ${r.automatic + r.assisted})` };
+    chart($("automation-chart"), rows, [def], "Cumulative share of automatic patches");
+  }
+}
+
+function renderScores(data) {
+  const { scores } = data;
+  const date = data.curve.at(-1).date;
+  if (!scores) {
+    $("scores").replaceChildren(h("p", { class: "muted" }, `No per-stratum file (scores/${date}.json) for the latest night.`));
+    return;
+  }
+  const rows = [];
+  const add = (name, split) => {
+    rows.push([name, "train", ...["L1", "L2", "L3", "L4"].map((l) => cell(split.train?.[l]))]);
+    rows.push(["", "held-out", ...["L1", "L2", "L3", "L4"].map((l) => cell(split.heldOut?.[l]))]);
+    rows.push(["", "ceiling", ...["L1", "L2", "L3", "L4"].map((l) => (split.noise ? cell(split.noise[l]) : "none: invalid"))]);
+  };
+  add("all strata", scores.overall ?? {});
+  for (const k of Object.keys(scores.byStratum ?? {}).sort()) add(k, scores.byStratum[k]);
+  $("scores").replaceChildren(h("p", { class: "muted" }, `Night of ${scores.date}.`), table(["Stratum", "Split", "L1", "L2", "L3", "L4"], rows));
+}
+
+function renderDrift(data) {
+  const byDate = Map.groupBy(data.drift, (d) => d.date);
+  const dates = [...byDate.keys()].sort().reverse().slice(0, 14);
+  $("drift-feed").replaceChildren(
+    ...(dates.length
+      ? dates.map((d) =>
+          h(
+            "div",
+            { class: "drift-day" },
+            h("h3", {}, d),
+            h("ul", {}, ...byDate.get(d).map((x) => h("li", {}, h("code", {}, x.path), ` ${x.cls} · ${x.endpoint} · ${x.template}`))),
+          ),
+        )
+      : [h("p", { class: "muted" }, "No drift reported yet.")]),
+  );
+}
+
+async function main() {
+  const base = new URLSearchParams(location.search).get("data") === "sample" ? "data/sample/" : "data/";
+  const get = async (url) => {
+    const r = await fetch(url, { cache: "no-cache" });
+    return r.ok ? r.json() : null;
+  };
+  let data;
+  try {
+    data = await load(get, base);
+  } catch (e) {
+    $("empty").hidden = false;
+    $("empty").replaceChildren(h("p", {}, `Could not read the score data: ${e.message}`));
+    return;
+  }
+  $("sample-banner").hidden = !data.sample;
+  renderDrift(data);
+  const last = data.curve.at(-1);
+  if (!last) {
+    $("empty").hidden = false;
+    return;
+  }
+  for (const id of ["meta", "curve", "table", "automation"]) $(id).hidden = false;
+  $("latest").textContent = last.date;
+  $("norm").textContent = last.normalization;
+  $("invalid").hidden = Boolean(last.noise);
+  $("stratum").replaceChildren(h("option", { value: "all" }, "All strata"), ...strata(data.curve).map((k) => h("option", { value: k }, k)));
+  $("stratum").addEventListener("change", () => renderCurve(data));
+  renderScores(data);
+  const charts = () => {
+    renderCurve(data);
+    renderAutomation(data);
+  };
+  charts();
+  addEventListener("resize", charts);
+}
+
+if (typeof document !== "undefined") main();

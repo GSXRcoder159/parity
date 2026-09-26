@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parity score</title>
+    <meta name="description" content="The nightly ParityBench score of the Parity twin: per-stratum agreement with Wilson intervals, the noise floor and ceiling, the automation ratio and the drift feed." />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Parity score</h1>
+      <p>
+        ParityBench replays a corpus of API sequences against the Parity twin, an open-source Stripe-compatible Billing server, and compares every
+        response with a recording of the same sequence on the real Stripe sandbox (the oracle).
+      </p>
+      <p class="rule"><strong>Any score without the noise floor and ceiling is invalid.</strong></p>
+      <p>The twin is scored nightly against an oracle that is at most 7 days old; drift on any sequence is detected within 7 days.</p>
+      <p id="sample-banner" class="banner" hidden><strong>Sample data.</strong> These numbers are synthetic, for developing this page. They are not measurements.</p>
+      <p id="meta" hidden>
+        Latest night <b id="latest"></b> · normalization <b id="norm"></b> (<a href="https://github.com/GSXRcoder159/parity/blob/main/src/bench/normalize.ts">rules</a>)
+        <span id="invalid" class="banner" hidden><strong>Invalid:</strong> this night has no noise floor and ceiling.</span>
+      </p>
+    </header>
+
+    <main>
+      <section id="empty" hidden>
+        <p>No nightly scores are published yet. The first point appears after the first nightly run.</p>
+        <p><a href="?data=sample">Preview this page with sample data</a>.</p>
+      </section>
+
+      <section id="curve" hidden>
+        <h2>Nightly curve</h2>
+        <p class="muted">
+          Share of agreeing steps (L3) and sequences (L4), with 95% Wilson intervals. The ceiling is the agreement of two real sandbox recordings of the
+          same sequences: no server can be measured above it. A “surface-added” mark means the twin's scope grew that night, so a jump there is not
+          alignment.
+        </p>
+        <div class="controls">
+          <label>Stratum <select id="stratum"></select></label>
+        </div>
+        <ul class="legend">
+          <li><span class="key" style="background: var(--s1)"></span>L3 value (per step)</li>
+          <li><span class="key" style="background: var(--s2)"></span>L4 sequence</li>
+          <li><span class="swatch"></span>95% Wilson interval</li>
+          <li><span class="key dashed"></span>ceiling (noise agreement)</li>
+        </ul>
+        <div id="curve-chart" class="chart"></div>
+        <details>
+          <summary>Table view</summary>
+          <div id="curve-table"></div>
+        </details>
+      </section>
+
+      <section id="table" hidden>
+        <h2>Per stratum: train vs held-out</h2>
+        <p class="muted">
+          Held-out templates are never shown to the align loop; they only gate its patches. L1 status, L2 shape, L3 value per step; L4 per sequence.
+          Ceiling = noise agreement; floor = 100% − ceiling.
+        </p>
+        <div id="scores"></div>
+      </section>
+
+      <section id="automation" hidden>
+        <h2>Automation ratio</h2>
+        <p class="muted">
+          Automatic: an align-loop patch that edits only the twin's data files, for a value the oracle shows deterministically, applied when the held-out
+          gate passes. Assisted: a code change proposed by the loop and merged after review. Surface-added changes are scaffold work and count as neither.
+        </p>
+        <p id="automation-summary"></p>
+        <div id="automation-chart" class="chart"></div>
+      </section>
+
+      <section id="drift">
+        <h2>Drift feed</h2>
+        <p class="muted">Sandbox behavior that changed between two recordings of the same sequence, outside the noise set. Paths and classes only.</p>
+        <div id="drift-feed"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Parity is not affiliated with, endorsed by, or sponsored by Stripe, Inc. Stripe is a trademark of Stripe, Inc.</p>
+      <p>Method, reproduction and license: <a href="https://github.com/GSXRcoder159/parity#readme">README</a> · Apache-2.0</p>
+    </footer>
+  </body>
+</html>

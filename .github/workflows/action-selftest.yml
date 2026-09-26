@@ -1,0 +1,19 @@
+name: action-selftest
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+      - name: Create and retrieve a customer
+        run: |
+          id=$(curl -fsS -u sk_test_parity: "$PARITY_TWIN_URL/v1/customers" -d email=selftest@example.com -d name=Selftest | jq -r .id)
+          [[ "$id" == cus_* ]] || { echo "::error::create returned id '$id'"; exit 1; }
+          got=$(curl -fsS -u sk_test_parity: "$PARITY_TWIN_URL/v1/customers/$id")
+          jq -e --arg id "$id" '.id == $id and .object == "customer" and .email == "selftest@example.com" and .name == "Selftest"' <<< "$got"
