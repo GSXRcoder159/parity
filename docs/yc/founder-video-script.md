@@ -14,8 +14,8 @@ Before recording:
 | Time | Beat | Say |
 |---|---|---|
 | 0:00–0:09 | Who | "I'm Adam, solo founder of Parity. {{TBD: one or two lines of Adam's background (Adam)}}." |
-| 0:09–0:26 | The insight | "Teams test AI agents that move money against Stripe mocks, and nobody measures how wrong they are. Mocks are getting cheap. A number for how far to trust one, kept current against the real API, is worth more than another mock." |
-| 0:26–0:57 | What I built in the first week | "I built that number first. ParityBench runs the same API calls on the real Stripe sandbox and on any mock, and scores the match. Both open mocks matched zero whole sequences; the official one is stateless by design. Then I built an open-source Billing mock and a loop that patches it from each difference. After 174 automatic patches, it gets 8.8 percent of held-out steps fully right, up from zero; whole held-out sequences, still zero." |
+| 0:09–0:26 | The insight | "Teams test AI agents that move money against Stripe API mocks, and nobody measures how wrong they are. Mocks are getting cheap. A number for how far to trust one, kept current against the real API, is worth more than another mock." |
+| 0:26–0:57 | What I built in the first week | "I built that number first. ParityBench runs the same calls on the real Stripe sandbox and on any mock, and scores the match. Both open mocks matched zero whole sequences; the official one is stateless by design. Then I built an open-source Billing mock and a loop that patches it from each difference. After 174 automatic patches, it gets 8.8 percent of held-out steps fully right, up from zero; whole held-out sequences, still zero." |
 | 0:57–1:00 | Close | "It's early, and it's measured. That's Parity." |
 
 **Sources for what is said:** zero whole sequences for stripe-mock and localstripe, `reports/2026-09-26-baseline.md`; 174 automatic patches, held-out steps with every value right (L3) 0.0% → 8.8% and held-out whole sequences (L4) 0.0% → 0.0%, `reports/2026-09-26-align-first-run.md`. Both results come from the first two days of work, 2026-09-25 and 2026-09-26 (`docs/plan/STATUS.md`, log).
