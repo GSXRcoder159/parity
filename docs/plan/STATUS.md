@@ -43,11 +43,11 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - Raw recordings stay out of git (C3); public artifacts are scores, normalized divergence classes, and hashes.
 
 ## W1 (Sep 29–Oct 5): ParityBench + H1
-- [ ] Harness: runner, refs, dual execution, recordings, normalization v1, four-level score with Wilson CIs, JSON + Markdown report
-- [ ] Templates 16–30; corpus ≥500 sequences
-- [ ] Baselines: stripe-mock, localstripe (surfaces each claims); Arga only if ToS permits
-- [ ] `reports/2026-10-05-baseline.md` with noise floor + ceiling
-- [ ] H1 decided
+- [x] Harness: runner, refs, dual execution, recordings, normalization v1.2, four-level score with Wilson CIs, JSON + Markdown report, oracle store (`oracle build`), slices, chunk pacing, circuit breaker
+- [~] Templates 16–30; corpus ≥500 sequences: #16–#26 done and validated live; #27–#30 (clocks) blocked on B1. Corpus defined = 26 × 20 = 520 sequences, but the **oracle holds 88** (all 26 templates, seeds 1–4/1–2). The claimable-key quota refused both W1 recording attempts on 2026-09-26 (01:56, 02:00 UTC; breaker aborted, 0 clean sequences), so the rest waits for the quota or B1
+- [x] Baselines (2026-09-26, `docs/plan/impl/baselines.md`): **stripe-mock** (digest `ff3264…`, v0.205.0, dahlia) on 88 seqs: L1 80.9%, L3 1.3%, **L4 0.0% [0.0–4.2]**; **localstripe 1.15.10** on its served surface (6 of 26 templates, 20 seqs; no Prices route): L1 58.1%, L3 3.4%, **L4 0.0% [0.0–16.1]**. Arga not scored (C5)
+- [~] `reports/2026-09-26-baseline.md` (+ `.json`, values stripped) with noise floor + ceiling: floor 0.0% at L1–L4 (L3 [0.0–0.9], L4 [0.0–6.0]) over 60 pairs (#1–#15, W0 A vs D, in-sample for v1.2); proration/boundaries noise (#16–#26 pair) pending the quota
+- [x] H1 decided: **confirmed** — best existing twin 0% sequence-level agreement (<80%); every upper bound ≤16.1%
 
 ## W2 (Oct 6–12): twin scaffold + first curve points
 - [x] Event store, form parser, spec validation, error envelope, idempotency, `/v1/events`, webhooks, `/_parity/reset` (<50 ms; ~2 ms over HTTP with 1,000 objects), `/_parity/seed` (`test/twin-core`, `test/twin-webhooks`, `test/twin-main`)
