@@ -51,9 +51,9 @@ Stripe Billing mock, scored against the real API
 Teams test code and AI agents that write to Stripe Billing against mocks of the Stripe API. Nobody measures how far those mocks are from the real API. Parity measures it, and ships a mock that is measured.
 
 - **ParityBench** runs the same sequences of API calls against the real Stripe sandbox and against any Stripe-compatible server. It scores agreement at four levels: HTTP status, response shape, values after normalization, and whole sequences. Each score comes with a 95% interval and with the noise floor of the sandbox itself, measured by running the same sequences on the sandbox twice.
-- **The Parity twin** is an open-source, stateful mock of the Stripe Billing API. It covers the calls support and billing agents make: look up a customer and subscription, preview a plan change, apply it, cancel, refund (plan §2.1). It boots in about 0.1 s, and a reset takes about 2 ms with 1,000 objects in it (`docs/plan/STATUS.md`, W2).
+- **The Parity twin** is an open-source, stateful mock of the Stripe Billing API. Its scope is the calls support and billing agents make: look up a customer and subscription, preview a plan change, apply it, cancel, refund (plan §2.1). Today it serves customers, products, prices, payment methods, subscription create and cancel, invoices, refunds, events and webhooks; proration, plan changes and test clocks are being added in W4 (`docs/plan/STATUS.md`, W2 and W4). It boots in about 0.1 s, and a reset takes about 2 ms with 1,000 objects in it (`docs/plan/STATUS.md`, W2).
 - **The align loop** turns each divergence between the twin and the sandbox into a patch. Each patch is logged as automatic (data files only, applied if a held-out gate passes) or assisted (an LLM proposes a code change and I review it), in a hash-chained log (decision 0002 §3).
-- **Paid:** private alignment to a customer's own account settings and call shapes, plus `paritybench agree`, which runs the customer's own test or eval suite on the twin and on their sandbox and reports how often pass/fail matches.
+- **Paid:** private alignment to a customer's own account settings and call shapes, plus `paritybench agree` (being built in W4), which runs the customer's own test or eval suite on the twin and on their sandbox and reports how often pass/fail matches.
 
 The claim we are testing (plan §0): "A public, reproducible fidelity number, kept true nightly against the real Stripe sandbox, is worth more to agent teams than another twin."
 
@@ -122,13 +122,13 @@ No. The paid SKU is private alignment plus `paritybench agree` in the customer's
 
 ### 17. Why did you pick this idea to work on? Do you have domain expertise in this area? How do you know people need what you're making?
 
-**Why this idea.** Mocks of SaaS APIs ("twins") are getting cheap to build. Arga says it will generate them "in minutes", and WonderTwin says its open-source twins are "frozen" while its paid ones "stay current" (`parity-research.md`, Key Findings 1). What is not cheap is evidence that a twin behaves like the real API off the happy path, and keeping that evidence current as the API changes. Nobody publishes that number for SaaS APIs. The closest precedent is a Microsoft Research study of cloud emulators, which found 94 of 255 APIs discrepant (`docs/research/2026-09-25-evidence.md` §2).
+**Why this idea.** Mocks of SaaS APIs ("twins") are getting cheap to build. Arga says it will generate them "in minutes", and WonderTwin says its open-source twins are "frozen" while its paid ones "stay current" (`parity-research.md`, Key Findings 1). What is not cheap is evidence that a twin behaves like the real API off the happy path, and keeping that evidence current as the API changes. We found no one who publishes that number for SaaS APIs. The closest precedent is a Microsoft Research study of cloud emulators, which found 94 of 255 APIs discrepant (`docs/research/2026-09-25-evidence.md` §2).
 
 **Why Stripe Billing first.** Money moves, so a wrong refund or proration costs real dollars. The logic is stateful and depends on time (proration, invoices, test clocks), which is where stateless mocks are furthest off. And the oracle is cheap: the sandbox allows 25 requests per second (`docs/research/2026-09-25-evidence.md` §1), and we ran about 4,000 sequences an hour on it (`reports/2026-09-25-w0-oracle.md`).
 
-**Why now.** Agents now write to Stripe: support agents issue refunds and change plans (`docs/research/2026-09-25-evidence.md` §4). And YC's "Self-Maintaining APIs" RFS asks for this sensor: "When Stripe ships a breaking change or a new feature, an agent should scan customer codebases, identify affected usages, and open a PR with the fix... or as a neutral third-party service tracking changes across vendors, like Dependabot but for APIs." ([ycombinator.com/rfs](https://www.ycombinator.com/rfs), excerpt in `docs/research/2026-09-25-evidence.md` §3). Re-recording a fixed corpus against the real API detects changes in behavior, including undocumented ones, and the twin is the first consumer of that signal.
+**Why now.** Agents now write to Stripe: support agents issue refunds and change plans (`docs/research/2026-09-25-evidence.md` §4). And YC's "Self-Maintaining APIs" RFS asks for the product this kind of sensor feeds: "When Stripe ships a breaking change or a new feature, an agent should scan customer codebases, identify affected usages, and open a PR with the fix... or as a neutral third-party service tracking changes across vendors, like Dependabot but for APIs." ([ycombinator.com/rfs](https://www.ycombinator.com/rfs), excerpt in `docs/research/2026-09-25-evidence.md` §3). Re-recording a fixed corpus against the real API detects changes in behavior, including undocumented ones, and the twin is the first consumer of that signal.
 
-**Domain expertise.** The engine is differential testing plus a repair loop. The thesis lists my earlier work on both: differential testing in Slim, and the τ²-bench retail work on refund and order policies (`parity-research.md` §5, §8). {{TBD: one or two lines of Adam's background (Adam)}}. Advisors: {{TBD: confirm that Ang Chen (Vera/CloudEmu) and Gabriel Poesia agree to be named (Adam)}}.
+**Domain expertise.** The engine is differential testing plus a repair loop. The thesis names the earlier work behind it: my differential testing in Slim, and my τ²-bench retail work on refund and order policies (`parity-research.md` §5, §8). {{TBD: one or two lines of Adam's background (Adam)}}. Advisors: {{TBD: confirm that Ang Chen (Vera/CloudEmu) and Gabriel Poesia agree to be named (Adam)}}.
 
 **How we know people need it.**
 - The official mock says it will not model behavior: "stripe-mock is stateless. Data you send on a POST request will be validated, but it will be completely ignored beyond that." and "We are currently not planning to add statefulness or more sophisticated testing features to stripe-mock." ([github.com/stripe/stripe-mock](https://github.com/stripe/stripe-mock), in `docs/research/2026-09-25-evidence.md` §1).
@@ -147,7 +147,7 @@ No. The paid SKU is private alignment plus `paritybench agree` in the customer's
 - Also: hand-written mocks, and the shared sandbox itself (25 requests per second, no reset).
 
 **What we understand that they don't.**
-1. The twin is not the asset; the measured score and its history are. Twins get cheaper to generate every month. Proof that a twin matches the real API does not, and it goes stale as the API changes.
+1. The twin is not the asset; the measured score and its history are. Twins are getting cheaper to generate. Proof that a twin matches the real API does not, and it goes stale as the API changes.
 2. The incumbents cannot publish an open score cheaply. WonderTwin charges for alignment, and a self-graded "100%" is a liability once a public referee exists. We give alignment and the score away, and charge for aligning to a customer's own account.
 3. The real API is not a fixed target. The sandbox disagrees with itself until the comparison is normalized, so a score without a measured noise floor means nothing. We measure it and publish the rules.
 4. History cannot be backfilled. The oracle is rate-limited (at most 10,000 sandbox reads per 30 days until Stripe says otherwise, decision 0001 C2), so a divergence record built night after night is hard to reproduce later. It matters more on the next APIs (Slack, GitHub, HubSpot, Salesforce), where sandboxes are scarcer (`parity-research.md` §7, §9).
@@ -187,7 +187,7 @@ Proposed pricing; nothing is for sale yet:
 
 ### 24. What convinced you to apply to Y Combinator? Did someone encourage you to apply? Have you been to any YC events?
 
-Suggested start: YC's "Self-Maintaining APIs" RFS describes the product that a nightly fidelity score is the sensor for, and many of the teams that need a faithful Stripe Billing mock are YC companies. {{TBD: who encouraged Adam and which YC events (Adam)}}
+Suggested start: YC's "Self-Maintaining APIs" RFS describes the product that a nightly fidelity score is the sensor for, and several of the agent teams we are contacting are YC companies (Parahelp, Fini, Dimely: `docs/research/2026-09-25-evidence.md` §4). {{TBD: who encouraged Adam and which YC events (Adam)}}
 
 ### 25. How did you hear about Y Combinator?
 
