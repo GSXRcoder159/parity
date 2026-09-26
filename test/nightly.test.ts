@@ -293,15 +293,20 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
 
     // A second run on the same date replaces that date's point and keeps its annotations (deduplicated), adding the new ones.
     appendLog(logPath(data), "manual", [{ kind: "patch", data: { class: "surface-added", status: "applied", note: "invoices", oracle: ORACLE } }]);
+    // The replaced point as an m1 run of that date would have left it: the rerun under m2 annotates the switch.
+    writeFileSync(
+      curveFile,
+      JSON.stringify(JSON.parse(readFileSync(curveFile, "utf8")).map(({ method, ...p }: { date: string; method: string; events: string[] }) => (p.date === "2026-10-05" ? { ...p, events: p.events.filter((e) => !e.startsWith("method")) } : { method, ...p })), null, 2) + "\n",
+    );
     const r3 = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T09:00:00Z") });
     assert.deepEqual(
       site("curve.json").map((p: { date: string; events: string[] }) => [p.date, p.events]),
       [
         ["2026-10-04", ["surface-added: test clocks"]],
-        ["2026-10-05", ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order", "surface-added: invoices"]],
+        ["2026-10-05", ["surface-added: proration", "oracle expanded: 6→9", "surface-added: invoices", "method change: causal event order"]],
       ],
     );
-    assert.deepEqual(r3.events, ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order", "surface-added: invoices"]);
+    assert.deepEqual(r3.events, ["surface-added: proration", "oracle expanded: 6→9", "surface-added: invoices", "method change: causal event order"]);
     assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").at(-1)!.data.events, r3.events);
     assert.deepEqual(clean(), ["", ""]);
   } finally {

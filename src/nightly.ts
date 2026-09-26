@@ -507,8 +507,10 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; method?: string; events?: string[] }[]) : [];
   const curve = points.filter((p) => p.date !== date);
   const last = curve.at(-1)?.oracleSeqs; // points before W4 do not carry it: no comparison
-  // A compare method change moves every score: annotated like a surface change (points without `method` are m1).
-  const methodChanged = curve.length > 0 && (curve.at(-1)!.method ?? "m1") !== METHOD.version;
+  // A compare method change moves every score: annotated like a surface change (points without `method` are m1). The
+  // point compared is the one this point follows or replaces (a same-date rerun under a new method switches it too).
+  const prior = points.findLast((p) => p.date <= date);
+  const methodChanged = prior !== undefined && (prior.method ?? "m1") !== METHOD.version;
   const fresh = [
     ...surfaceAdded(log),
     ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : []),
