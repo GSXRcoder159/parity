@@ -342,3 +342,17 @@ As asked on a call or in F3:
 > "When a Stripe test last cost you time, what was it: 429s, shared-state flakiness, a wrong refund in prod, or 'how do you test this?'"
 
 Log the answer word for word in the `trigger answer` column of `funnel.md`.
+
+## Follow-up with numbers (gated)
+
+> **DRAFT — not for publication before the launch gate (docs/plan/STATUS.md). GATED: do not send before B5, counsel review (decision 0001 C7), clears sharing these numbers.**
+
+A second touch for a target who has not replied. Once B5 clears, it takes F2's place in the cadence above: day 7, same thread and channel, same stop rules. Until then F2 stays unsent, even though a number now exists.
+
+> Hi {name}, one number since my first note. I ran 88 Billing sequences from 26 templates (proration, cancellation, refunds, error paths, idempotency, among others) against the real Stripe sandbox and the two open mocks. Sequence-level agreement was 0% for both: stripe-mock 0.205.0 on all 88, localstripe 1.15.10 on the 20 inside its surface. That is as documented: stripe-mock's README says it is stateless. The sandbox agreed with itself on 60 of 60 repeated sequences. Method and rerun steps: {{TBD: public report URL, after the launch gate}}. The offer stands: send your tests or 5 scenarios, run on a sandbox key of your own, and within a week you get every divergence on your calls. Adam
+
+Source: `reports/2026-09-26-baseline.md` (H1 verdict: stripe-mock 0.0% [0.0–4.2] over 88 sequences, localstripe 0.0% [0.0–16.1] over 20; sandbox against itself 100.0% [94.0–100.0] over 60 pairs).
+
+Before sending:
+- The numbers come from oracle v0 (88 of 520 planned sequences). If a later report replaces it, take the numbers from that report.
+- Fill the URL from the public report. If there is none, do not send (the F2 rule: no placeholders).
