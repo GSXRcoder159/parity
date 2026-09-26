@@ -90,6 +90,7 @@ export async function main(): Promise<number> {
       const v = params.protocolVersion as string;
       return result({ protocolVersion: VERSIONS.includes(v) ? v : VERSIONS[0], capabilities: { tools: {} }, serverInfo: { name: "parity-twin", version } });
     }
+    if (method === "ping") return result({}); // base protocol: a receiver answers ping with an empty result
     if (method === "tools/list") return result({ tools: [...tools.values()].map((t) => t.def) });
     if (method !== "tools/call") return error(-32601, `Method not found: ${method}`);
     const tool = tools.get(params.name as string);

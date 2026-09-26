@@ -78,6 +78,7 @@ test("mcp: initialize, list, call create/retrieve/reset over stdio JSON-RPC", as
   // Protocol errors: unknown tool, unknown method.
   assert.equal((await rpc("tools/call", { name: "nope", arguments: {} })).error.code, -32602);
   assert.equal((await rpc("server/discover")).error.code, -32601);
+  assert.deepEqual((await rpc("ping")).result, {}, "ping answers an empty result (MCP base protocol)");
 
   child.stdin.end(); // closing stdin shuts the server down
   const [code] = await once(child, "exit");
