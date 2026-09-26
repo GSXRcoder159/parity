@@ -1,6 +1,22 @@
-// Subscriptions: create (first invoice + synchronous payment), retrieve, list, update (cancel_at_period_end,
-// metadata, default_payment_method, description), cancel. Item/price/quantity changes and proration are W4.
-import { addInterval, attemptPayment, firstInvoice, paid } from "../billing.ts";
+// Subscriptions: create (first invoice + synchronous payment), retrieve, list, update (items: price swaps,
+// quantities, additions, deletions; proration_behavior, proration_date, billing_cycle_anchor=now;
+// cancel_at_period_end, metadata, default_payment_method, description), cancel. `change` is shared with
+// POST /v1/invoices/create_preview.
+import {
+  type Proration,
+  addInterval,
+  applyBalance,
+  attemptPayment,
+  collect,
+  firstInvoice,
+  invoiceItem,
+  invoiceItemLine,
+  itemLine,
+  lastDebit,
+  paid,
+  pendingItems,
+  subInvoice,
+} from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
@@ -10,11 +26,12 @@ type Obj = Record<string, unknown>;
 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "subscription") ?? ctx.fail("resource_missing", { param: "id" });
 const cancellation = (reason: string | null): Obj => ({ comment: null, feedback: null, feedback_option: null, reason });
-const UPDATABLE = ["cancel_at_period_end", "default_payment_method", "description", "metadata"];
+const UPDATABLE = ["billing_cycle_anchor", "cancel_at_period_end", "default_payment_method", "description", "items", "metadata", "proration_behavior", "proration_date"];
 const CREATABLE = ["cancel_at_period_end", "collection_method", "customer", "days_until_due", "default_payment_method", "description", "items", "metadata", "payment_behavior"];
+export const ITEM = ["metadata", "price", "price_data", "quantity"];
 
-/** A spec-valid param the handler does not implement (trials, anchors, discounts, ...: W4) fails instead of being dropped. */
-function only(ctx: Ctx, o: Obj, keys: string[]): void {
+/** A spec-valid param the handler does not implement (trials, anchors, discounts, ...) fails instead of being dropped. */
+export function only(ctx: Ctx, o: Obj, keys: string[]): void {
   if (Object.entries(o).some(([k, v]) => v !== "" && !keys.includes(k))) ctx.fail("not_implemented");
 }
 
@@ -26,10 +43,9 @@ function periodEndCancel(sub: Obj, on: boolean, now: number): Obj {
 }
 
 /** The recurring price of `items[i]`: an existing price, or a new inactive one from `price_data` (pushed to `puts`). */
-function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
+export function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
   const param = `items[${i}][price]`;
   let price: Obj;
-  only(ctx, item, ["metadata", "price", "price_data", "quantity"]);
   if (item.price) price = live(ctx, item.price, "price") ?? ctx.fail("resource_missing_400", { param });
   else if (isHash(item.price_data)) {
     const pd = item.price_data;
@@ -58,6 +74,106 @@ function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
   return price;
 }
 
+/** A new item of subscription `sub` at `price` from `items[i]`; its period is `period`, else one interval from now. */
+export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { start: unknown; end: unknown }): Obj {
+  const now = ctx.now();
+  const r = price.recurring as Obj;
+  const item = ctx.build("subscription_item", {
+    id: ctx.id("si"),
+    created: now,
+    current_period_end: period?.end ?? addInterval(now, r.interval as string, r.interval_count as number),
+    current_period_start: period?.start ?? now,
+    price,
+    quantity: it.quantity ?? 1,
+    subscription: sub,
+  });
+  return assign(item, it, ["metadata"]);
+}
+
+/** The legacy `subscription.quantity`: the single item's quantity, null with several items. */
+const legacyQuantity = (items: Obj[]) => (items.length === 1 ? items[0]!.quantity : null);
+
+const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.recurring as Obj).interval_count].join();
+
+/**
+ * `sub` after the changes in `p` at `now`, and the flexible-mode prorations they create. `p` holds an update's params
+ * or a preview's `subscription_details`: `items` (`id` + `price`/`price_data`/`quantity`/`metadata`, `deleted`, or a
+ * new item), `proration_behavior` (`none`: no prorations), `proration_date` (default now), `billing_cycle_anchor=now`.
+ * Per changed item: a credit for the unused time of its last debit (flexible mode credits what was billed) and a
+ * debit for the rest of its period at the new price and quantity, by the second over the item's current period,
+ * each rounded to the nearest minor unit. `billing_cycle_anchor=now` restarts every item's period now: each item is
+ * credited, and the new period is billed in full, so there are no debit prorations.
+ */
+export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; prorations: Proration[]; reset: boolean; date: number } {
+  const now = ctx.now();
+  const before = (sub.items as Obj).data as Obj[];
+  const items = structuredClone(before);
+  const raw = Array.isArray(p.items) ? (p.items as Obj[]) : [];
+  const reset = p.billing_cycle_anchor === "now";
+  // ponytail: changing a canceled subscription is refused (the real API's error is unobserved).
+  if ((raw.length > 0 || reset) && sub.status === "canceled") ctx.fail("not_implemented");
+  const changed: [Obj | undefined, Obj | undefined][] = [];
+  raw.forEach((it, i) => {
+    only(ctx, it, ["deleted", "id", ...ITEM]);
+    const at = it.id ? items.findIndex((x) => x.id === it.id) : -1;
+    if (it.id && at < 0) ctx.fail("resource_missing_400", { param: `items[${i}][id]` });
+    const old = items[at];
+    if (it.deleted === true) {
+      if (!old) ctx.fail("parameter_missing", { param: `items[${i}][id]` });
+      changed.push([old, undefined]);
+      items.splice(at, 1);
+      return;
+    }
+    const price = old && !it.price && !isHash(it.price_data) ? (old.price as Obj) : itemPrice(ctx, it, i, puts);
+    const like = (old ?? before[0]!).price as Obj;
+    // ponytail: a price in another currency or interval, or a new item on a price the subscription already has, is
+    // refused (the real API's answers are unobserved).
+    const dup = !old && items.some((x) => (x.price as Obj).id === price.id);
+    if (price.currency !== like.currency || recurrence(price) !== recurrence(like) || dup) ctx.fail("not_implemented");
+    const next = old
+      ? assign({ ...old, price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
+      : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
+    if (!old || (old.price as Obj).id !== price.id || old.quantity !== next.quantity) changed.push([old, next]);
+    if (old) items[at] = next;
+    else items.push(next);
+  });
+  if (items.length === 0) ctx.fail("not_implemented"); // ponytail: deleting every item (the real API's error is unobserved)
+
+  const date = typeof p.proration_date === "number" ? p.proration_date : now;
+  const prorations: Proration[] = [];
+  const part = (item: Obj, price: Obj, quantity: number) => {
+    const [start, end] = [item.current_period_start as number, item.current_period_end as number];
+    // ponytail: a proration_date outside the item's current period is refused (the real API's error is unobserved).
+    if (date < start || date > end) ctx.fail("not_implemented");
+    return { amount: Math.round((((price.unit_amount as number | null) ?? 0) * quantity * (end - date)) / (end - start)), period: { end, start: date } };
+  };
+  const credit = (old: Obj) => {
+    const d = lastDebit(ctx, sub.id, old.id) ?? { price: old.price as Obj, quantity: old.quantity as number, credited: null };
+    const { amount, period } = part(old, d.price, d.quantity);
+    prorations.push({ item: old.id as string, price: d.price, quantity: d.quantity, amount: -amount, period, credited: d.credited });
+  };
+  const debit = (next: Obj) => {
+    const [price, quantity] = [next.price as Obj, next.quantity as number];
+    prorations.push({ item: next.id as string, price, quantity, ...part(next, price, quantity), credited: null });
+  };
+  if (p.proration_behavior !== "none") {
+    if (reset) before.forEach(credit);
+    else
+      for (const [old, next] of changed) {
+        if (old) credit(old);
+        if (next) debit(next);
+      }
+  }
+  if (reset)
+    for (const item of items) {
+      const r = (item.price as Obj).recurring as Obj;
+      Object.assign(item, { current_period_end: addInterval(now, r.interval as string, r.interval_count as number), current_period_start: now });
+    }
+  const after: Obj = { ...structuredClone(sub), items: { ...(sub.items as Obj), data: items }, quantity: legacyQuantity(items) };
+  if (reset) after.billing_cycle_anchor = now;
+  return { after, prorations, reset, date };
+}
+
 const ID = /^\/v1\/subscriptions\/(?<id>[^/]+)$/;
 
 export const routes: Route[] = [
@@ -78,18 +194,8 @@ export const routes: Route[] = [
       const id = ctx.id("sub");
       const puts: Obj[] = [];
       const items = rawItems.map((it, i) => {
-        const price = itemPrice(ctx, it, i, puts);
-        const r = price.recurring as Obj;
-        const item = ctx.build("subscription_item", {
-          id: ctx.id("si"),
-          created: now,
-          current_period_end: addInterval(now, r.interval as string, r.interval_count as number),
-          current_period_start: now,
-          price,
-          quantity: it.quantity ?? 1,
-          subscription: id,
-        });
-        return assign(item, it, ["metadata"]);
+        only(ctx, it, ITEM);
+        return newItem(ctx, it, itemPrice(ctx, it, i, puts), id);
       });
       let sub = assign(
         ctx.build("subscription", {
@@ -104,6 +210,7 @@ export const routes: Route[] = [
           days_until_due: collection === "send_invoice" ? params.days_until_due : null,
           default_payment_method: params.default_payment_method || null,
           items: { data: items, has_more: false, object: "list", url: `/v1/subscription_items?subscription=${id}` },
+          quantity: legacyQuantity(items),
           start_date: now,
           status: "active",
         }),
@@ -141,8 +248,11 @@ export const routes: Route[] = [
       }
 
       emits.push({ type: "customer.subscription.created", object: sub });
-      // The first subscription fixes the customer's billing currency.
-      if (!customer.currency) emits.push({ type: "customer.updated", object: { ...customer, currency: sub.currency }, previous_attributes: { currency: null } });
+      // The first subscription fixes the customer's billing currency; the first invoice consumes the customer's balance.
+      // ponytail: one customer.updated for both (a balance at subscription create is unobserved).
+      const customerAfter = { ...customer, balance: invoice.ending_balance, currency: customer.currency || sub.currency };
+      const customerPrev = diff(customer, customerAfter);
+      if (Object.keys(customerPrev).length > 0) emits.push({ type: "customer.updated", object: customerAfter, previous_attributes: customerPrev });
       emits.push(...invoiceEvents.map((type) => ({ type, object: invoice })));
       return { body: sub, emits, puts };
     },
@@ -171,12 +281,40 @@ export const routes: Route[] = [
       const before = find(ctx, pathParams.id);
       only(ctx, params, ["expand", ...UPDATABLE]);
       checkAttached(ctx, params.default_payment_method, before.customer);
-      let after = assign(structuredClone(before), params, ["default_payment_method", "description", "metadata"]);
+      const now = ctx.now();
+      const puts: Obj[] = [];
+      const { after: changed, prorations, reset } = change(ctx, before, params, puts);
+      let after = assign(changed, params, ["default_payment_method", "description", "metadata"]);
       const cape = params.cancel_at_period_end;
-      if (typeof cape === "boolean" && cape !== before.cancel_at_period_end) after = { ...after, ...periodEndCancel(after, cape, ctx.now()) };
+      if (typeof cape === "boolean" && cape !== before.cancel_at_period_end) after = { ...after, ...periodEndCancel(after, cape, now) };
+
+      // create_prorations leaves the prorations pending for the next invoice; always_invoice (with prorations) and an
+      // anchor reset invoice now, sweeping in the subscription's pending items, and collect that invoice.
+      const invoiceNow = reset || (params.proration_behavior === "always_invoice" && prorations.length > 0);
+      const inId = invoiceNow ? ctx.id("in") : null;
+      const iis = prorations.map((p) => invoiceItem(ctx, after, p, inId));
+      const tail: Emit[] = [];
+      if (inId) {
+        const customer = ctx.get(after.customer as string)!;
+        const swept = pendingItems(ctx, after.id).map((ii) => ({ ...ii, invoice: inId }));
+        puts.push(...swept); // ponytail: no invoiceitem.updated for swept items (unobserved)
+        const lines = [...swept, ...iis].map((ii) => invoiceItemLine(ctx, inId, ii));
+        if (reset) for (const item of (after.items as Obj).data as Obj[]) lines.push(itemLine(ctx, inId, after, item, { end: item.current_period_end as number, start: now }));
+        const latest = ctx.get(before.latest_invoice as string);
+        const fields = { billing_reason: "subscription_update", period_start: latest?.period_end ?? now };
+        const inv = applyBalance(subInvoice(ctx, after, customer, inId, lines, fields), customer.balance as number);
+        const collected = collect(ctx, after, customer, inv);
+        after.latest_invoice = inId;
+        if (collected.failed) after.status = "past_due"; // payment_behavior allow_incomplete (the update default)
+        if (inv.ending_balance !== customer.balance) {
+          tail.push({ type: "customer.updated", object: { ...customer, balance: inv.ending_balance }, previous_attributes: { balance: customer.balance } });
+        }
+        tail.push(...collected.emits);
+      }
       const previous_attributes = diff(before, after);
-      const changed = Object.keys(previous_attributes).length > 0;
-      return { body: after, emits: changed ? [{ type: "customer.subscription.updated", object: after, previous_attributes }] : [] };
+      const emits: Emit[] = Object.keys(previous_attributes).length > 0 ? [{ type: "customer.subscription.updated", object: after, previous_attributes }] : [];
+      emits.push(...iis.map((object) => ({ type: "invoiceitem.created", object })), ...tail);
+      return { body: after, emits, puts };
     },
     "post /v1/subscriptions/{subscription_exposed_id}",
   ],

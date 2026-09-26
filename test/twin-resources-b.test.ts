@@ -374,14 +374,12 @@ test("price_data items, subscription and invoice list filters, W4 endpoints answ
 
   const w4 = [
     await call(t, "POST", `/v1/subscriptions/${b.id}`, { items: [{ price: price.id, quantity: 2 }] }),
-    await call(t, "POST", `/v1/subscriptions/${b.id}`, { proration_behavior: "none" }),
     await call(t, "DELETE", `/v1/subscriptions/${b.id}`, { invoice_now: true }),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}`, { metadata: { k: "v" } }),
     await call(t, "DELETE", `/v1/invoices/${b.latest_invoice}`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/pay`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/void`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/finalize`),
-    await call(t, "POST", "/v1/invoices/create_preview", { customer: c.id }),
   ];
   assert.deepEqual(w4.map((r) => `${r.status} ${r.body.error.message}`), w4.map(() => "400 parity: not_implemented"));
   assert.equal((await call(t, "POST", "/v1/invoices/in_Missing1234567890/pay")).status, 404);

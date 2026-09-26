@@ -1,9 +1,11 @@
-// Shared billing semantics: calendar-correct periods, a subscription's first invoice, and one synchronous
-// payment attempt (payment intent + charge) against a card whose behavior comes from cards.json.
+// Shared billing semantics: calendar-correct periods, subscription invoices and their lines, proration invoice
+// items, the customer balance, and one synchronous payment attempt (payment intent + charge) against a card whose
+// behavior comes from cards.json.
 import { readFileSync } from "node:fs";
 import { TwinError, renderError } from "./errors.ts";
 import type { Ctx } from "./server.ts";
 import type { Emit } from "./store.ts";
+import { live } from "./util.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -25,31 +27,115 @@ export function addInterval(t: number, interval: string, count = 1): number {
   return Date.UTC(y, m, Math.min(d.getUTCDate(), last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()) / 1000;
 }
 
-/** A subscription's first invoice, finalized (`open`), one line per item. */
-export function firstInvoice(ctx: Ctx, sub: Obj, customer: Obj): Obj {
-  const now = ctx.now();
-  const id = ctx.id("in");
-  const lines = ((sub.items as Obj).data as Obj[]).map((item) => {
-    const price = item.price as Obj;
-    const quantity = item.quantity as number;
-    const amount = ((price.unit_amount as number | null) ?? 0) * quantity;
-    return ctx.build("line_item", {
-      id: ctx.id("il"),
-      amount,
-      currency: price.currency,
-      invoice: id,
-      parent: {
-        invoice_item_details: null,
-        subscription_item_details: { invoice_item: null, proration: false, proration_details: { credited_items: null }, subscription: sub.id, subscription_item: item.id },
-        type: "subscription_item_details",
-      },
-      period: { end: item.current_period_end, start: item.current_period_start },
-      pricing: { price_details: { price: price.id, product: price.product }, type: "price_details", unit_amount_decimal: price.unit_amount_decimal },
-      quantity,
-      quantity_decimal: String(quantity),
-      subtotal: amount,
-    });
+/** A subscription item's line for `period` at its price (not a proration: discountable, unlike prorations per the docs). */
+export function itemLine(ctx: Ctx, invoice: string, sub: Obj, item: Obj, period: { start: number; end: number }, prefix = "il"): Obj {
+  const price = item.price as Obj;
+  const quantity = item.quantity as number;
+  const amount = ((price.unit_amount as number | null) ?? 0) * quantity;
+  return ctx.build("line_item", {
+    id: ctx.id(prefix),
+    amount,
+    currency: price.currency,
+    discountable: true,
+    invoice,
+    parent: {
+      invoice_item_details: null,
+      subscription_item_details: { invoice_item: null, proration: false, proration_details: { credited_items: null }, subscription: sub.id, subscription_item: item.id },
+      type: "subscription_item_details",
+    },
+    period,
+    pricing: { price_details: { price: price.id, product: price.product }, type: "price_details", unit_amount_decimal: price.unit_amount_decimal },
+    quantity,
+    quantity_decimal: String(quantity),
+    subtotal: amount,
   });
+}
+
+/** A proration: `amount` (negative: a credit) for `period` of `price` x `quantity` on subscription item `item`. */
+export interface Proration {
+  item: string;
+  price: Obj;
+  quantity: number;
+  amount: number;
+  period: { start: number; end: number };
+  /** The debit a credit credits (the invoice item's `proration_details.credited_items`); null for debits. */
+  credited: Obj | null;
+}
+
+/** The pending (not yet invoiced) invoice items of subscription `sub`, oldest first. */
+export const pendingItems = (ctx: Ctx, sub: unknown): Obj[] =>
+  ctx.all("invoiceitem").filter((ii) => ii.invoice === null && ((ii.parent as Obj).subscription_details as Obj).subscription === sub);
+
+/**
+ * The last debit of subscription item `item`, which a flexible-mode credit is based on (docs: "the last price billed
+ * for the subscription item"): a pending proration invoice item, else the newest invoice line.
+ */
+export function lastDebit(ctx: Ctx, sub: unknown, item: unknown): { price: Obj; quantity: number; credited: Obj } | undefined {
+  const debit = (o: Obj, parent: unknown) => (o.amount as number) >= 0 && (parent as Obj | null | undefined)?.subscription_item === item;
+  const ii = pendingItems(ctx, sub).findLast((i) => debit(i, (i.parent as Obj).subscription_details));
+  const price = (o: Obj) => ctx.get(((o.pricing as Obj).price_details as Obj).price as string)!;
+  if (ii) return { price: price(ii), quantity: ii.quantity as number, credited: { invoice_item: ii.id, type: "invoice_item" } };
+  for (const inv of ctx.all("invoice").reverse()) {
+    const line = ((inv.lines as Obj).data as Obj[]).findLast((l) => debit(l, (l.parent as Obj | null)?.subscription_item_details));
+    if (line) {
+      const credited = { invoice_line_item_details: { invoice: inv.id, invoice_line_items: [line.id] }, type: "invoice_line_items" };
+      return { price: price(line), quantity: line.quantity as number, credited };
+    }
+  }
+  return undefined;
+}
+
+// ponytail: invoice items carry computed fields only: the pruned spec has no invoiceitem schema, so there is no
+// template (shapes/). Add `get /v1/invoiceitems/{invoiceitem}` to scripts/prune-spec.ts and regenerate when the
+// invoice items API lands; events are scored by type only, so the body is not measured today.
+/** The invoice item of a proration, pending (`invoice` null) or on `invoice`. */
+export function invoiceItem(ctx: Ctx, sub: Obj, p: Proration, invoice: string | null): Obj {
+  return {
+    id: ctx.id("ii"),
+    object: "invoiceitem",
+    amount: p.amount,
+    currency: p.price.currency,
+    customer: sub.customer,
+    date: ctx.now(),
+    invoice,
+    livemode: false,
+    parent: { subscription_details: { subscription: sub.id, subscription_item: p.item }, type: "subscription_details" },
+    period: p.period,
+    pricing: { price_details: { price: p.price.id, product: p.price.product }, type: "price_details", unit_amount_decimal: null },
+    proration: true,
+    proration_details: { credited_items: p.credited },
+    quantity: p.quantity,
+    quantity_decimal: String(p.quantity),
+  };
+}
+
+/** The invoice line of invoice item `ii` on `invoice`. A line can only credit invoice lines (not a pending item). */
+export function invoiceItemLine(ctx: Ctx, invoice: string, ii: Obj, prefix = "il"): Obj {
+  const { subscription, subscription_item } = (ii.parent as Obj).subscription_details as Obj;
+  const credited = ((ii.proration_details as Obj).credited_items as Obj | null)?.invoice_line_item_details ?? null;
+  return ctx.build("line_item", {
+    id: ctx.id(prefix),
+    amount: ii.amount,
+    currency: ii.currency,
+    invoice,
+    parent: {
+      invoice_item_details: null,
+      subscription_item_details: { invoice_item: ii.id, proration: true, proration_details: { credited_items: credited }, subscription, subscription_item },
+      type: "subscription_item_details",
+    },
+    period: ii.period,
+    pricing: ii.pricing,
+    quantity: ii.quantity,
+    quantity_decimal: ii.quantity_decimal,
+    subtotal: ii.amount,
+  });
+}
+
+/**
+ * An invoice of `sub` over `lines`, finalized (`open`) at `at`; `fields` override (a preview is a draft). The
+ * invoice's own period defaults to the instant `at`; lines carry the item periods.
+ */
+export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines: Obj[], fields: Obj = {}, at = ctx.now()): Obj {
   const total = lines.reduce((s, l) => s + (l.amount as number), 0);
   const c = (k: string) => [`customer_${k}`, customer[k] ?? null];
   return ctx.build("invoice", {
@@ -58,24 +144,45 @@ export function firstInvoice(ctx: Ctx, sub: Obj, customer: Obj): Obj {
     amount_due: total,
     amount_remaining: total,
     auto_advance: true,
-    billing_reason: "subscription_create",
     collection_method: sub.collection_method,
-    created: now,
+    created: at,
     currency: sub.currency,
     customer: customer.id,
-    due_date: sub.collection_method === "send_invoice" ? now + (sub.days_until_due as number) * DAY : null,
-    effective_at: now,
-    lines: { data: lines, has_more: false, object: "list", url: `/v1/invoices/${id}/lines` },
+    due_date: sub.collection_method === "send_invoice" ? at + (sub.days_until_due as number) * DAY : null,
+    effective_at: at,
+    lines: { data: lines, has_more: false, object: "list", total_count: lines.length, url: `/v1/invoices/${id}/lines` },
     parent: { quote_details: null, subscription_details: { metadata: sub.metadata, subscription: sub.id }, type: "subscription_details" },
-    period_end: now, // the first invoice's own period is the instant it was created; lines carry the item period
-    period_start: now,
+    period_end: at,
+    period_start: at,
     status: "open",
-    status_transitions: { finalized_at: now, marked_uncollectible_at: null, paid_at: null, voided_at: null },
+    status_transitions: { finalized_at: at, marked_uncollectible_at: null, paid_at: null, voided_at: null },
     subtotal: total,
     subtotal_excluding_tax: total,
     total,
     total_excluding_tax: total,
+    ...fields,
   });
+}
+
+/**
+ * A subscription's first invoice, finalized (`open`), one line per item for its current period, with the customer's
+ * balance applied (its `ending_balance` is the customer's new balance).
+ */
+export function firstInvoice(ctx: Ctx, sub: Obj, customer: Obj): Obj {
+  const id = ctx.id("in");
+  const lines = ((sub.items as Obj).data as Obj[]).map((item) =>
+    itemLine(ctx, id, sub, item, { end: item.current_period_end as number, start: item.current_period_start as number }),
+  );
+  return applyBalance(subInvoice(ctx, sub, customer, id, lines, { billing_reason: "subscription_create" }), customer.balance as number);
+}
+
+/**
+ * `inv` with the customer's `balance` applied: a credit (negative) lowers `amount_due`, not below 0, and what is left
+ * of it is `ending_balance` (the customer's new balance); an amount owed (positive) is added to `amount_due`.
+ */
+export function applyBalance(inv: Obj, balance: number): Obj {
+  const net = (inv.total as number) + balance;
+  return { ...inv, amount_due: Math.max(net, 0), amount_remaining: Math.max(net, 0), ending_balance: Math.min(net, 0), starting_balance: balance };
 }
 
 /** The invoice after a successful (or zero-amount) payment. */
@@ -142,4 +249,32 @@ export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined): Att
   const { request_log_url: _, ...last_payment_error } = declined.body.error;
   const pi = { ...created, last_payment_error, latest_charge: charge.id };
   return { pi, ok, declined, emits: [...emits, { type: "charge.failed", object: charge }, { type: "payment_intent.payment_failed", object: pi }] };
+}
+
+/**
+ * Collects a finalized mid-cycle invoice (always_invoice, an anchor reset) the way a subscription update does
+ * (payment_behavior allow_incomplete): nothing due -> paid; charge_automatically -> one attempt with the
+ * subscription's, else the customer's, default payment method (`failed` when it does not succeed); send_invoice
+ * stays open. `emits` are the payment and invoice events.
+ */
+export function collect(ctx: Ctx, sub: Obj, customer: Obj, inv: Obj): { invoice: Obj; emits: Emit[]; failed: boolean } {
+  const now = ctx.now();
+  const types = ["invoice.created", "invoice.finalized"];
+  const emits: Emit[] = [];
+  let failed = false;
+  if (inv.amount_due === 0) {
+    inv = { ...paid(inv, now), attempted: true }; // attempt_count stays 0 (observed, #17 always_invoice downgrade)
+    types.push("invoice.paid", "invoice.payment_succeeded");
+  } else if (sub.collection_method === "charge_automatically") {
+    const pm = live(ctx, sub.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method, "payment_method");
+    const attempt = attemptPayment(ctx, inv, pm);
+    emits.push(...attempt.emits);
+    if (pm) inv = { ...inv, attempt_count: 1, attempted: true };
+    if (attempt.ok) {
+      inv = paid(inv, now);
+      types.push("invoice.paid", "invoice.payment_succeeded");
+    } else failed = true;
+    if (attempt.declined) types.push("invoice.payment_failed");
+  }
+  return { invoice: inv, emits: [...emits, ...types.map((type) => ({ type, object: inv }))], failed };
 }
