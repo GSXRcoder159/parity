@@ -13,8 +13,8 @@ Before recording:
 
 | Time | Beat | Say |
 |---|---|---|
-| 0:00–0:10 | Who | "Hi, I'm Adam, the solo founder of Parity. {{TBD: one or two lines of Adam's background (Adam)}}." |
-| 0:10–0:30 | The insight | "Teams test AI agents that move money against Stripe API mocks, and nobody measures how wrong they are. Mocks are getting cheap. A number that says how far to trust one, kept current against the real API, is worth more." |
+| 0:00–0:10 | Who | "I'm Adam, solo founder of Parity. {{TBD: one or two lines of Adam's background (Adam)}}." |
+| 0:10–0:30 | The insight | "Teams test AI agents that move money against Stripe API mocks, and nobody measures how wrong they are. Mocks are getting cheap. A number that says how far to trust one, kept current against the real API, is worth more than another mock." |
 | 0:30–0:55 | What I built in the first week | "I built that number first. ParityBench runs the same API calls on the real Stripe sandbox and on any mock, and scores the match. The two open mocks matched zero whole sequences; the official one is stateless by design. Then I built an open-source Billing mock and a loop that patches it from each difference. The first run landed 174 patches automatically, and the held-out score went from zero to 8.8 percent." |
 | 0:55–1:00 | Close | "It's early, and it's measured. That's Parity." |
 

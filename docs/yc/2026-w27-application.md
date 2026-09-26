@@ -233,4 +233,4 @@ Re-check the question wording and any follow-up questions against the live form 
 | `{{TBD: who encouraged Adam and which YC events (Adam)}}` | Adam |
 | `{{TBD: how Adam heard about YC (Adam)}}` | Adam |
 
-If the oracle has grown past 88 sequences by Nov 1, also re-run the baselines and update the H1 numbers in question 10 (`docs/plan/impl/baselines.md`).
+If the oracle has grown past 88 sequences by Nov 1, also re-run the baselines and update the H1 numbers in question 10 (`docs/plan/impl/baselines.md`). Once W4 lands, also rewrite three statements that will then be wrong, not just old: in question 7, the list of what the twin serves today and "`paritybench agree` (being built in W4)"; in question 12, "(planned)" for the `verifiers` wrapper.
