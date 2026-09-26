@@ -42,7 +42,7 @@ https://docs.stripe.com/sandboxes/dashboard/manage
 - **CLI `stripe sandbox create` / `stripe sandbox claim`.** This is the one we used. It expires after 7 days and issues a `rkcs_test_` key.
   > "Sandbox environments expire after 7 days. Claim your sandbox before it expires by running `stripe sandbox claim` to keep your account and data."
 
-  The docs' own example response shows `"secret_key": "rkcs_test_abc123"` (https://docs.stripe.com/cli/sandbox). Our sandbox `acct_1UJKSxBXgzwfQJL7` has an `rkcs_test_` key and expires 2026-10-02, 7 days after it was created. It matches this mechanism.
+  The docs' own example response shows `"secret_key": "rkcs_test_abc123"` (https://docs.stripe.com/cli/sandbox). Our sandbox (account id kept in the private data repo) has an `rkcs_test_` key and expires 2026-10-02, 7 days after it was created. It matches this mechanism.
 - **Claimable Sandboxes v2 API (`/v2/core/claimable_sandboxes`)**, built for platforms and Stripe Apps.
   > "A claimable sandbox expires after 60 days."
 
@@ -65,7 +65,7 @@ Terms note (`inference`): SSA §1.2(a)(ii) forbids circumventing "any technical 
 
 **Answer: `POST /v1/invoices/create_preview` only.** It needs `subscription`, `schedule` or `subscription_details.items`; `customer` alone is not enough. `verified-live` + `verified-primary`
 
-- **Live, 2026-09-25, API version `2026-08-26.dahlia`** (sandbox `acct_1UJKSxBXgzwfQJL7`; recorded in `docs/plan/STATUS.md`). `GET /v1/invoices/upcoming` returns an error saying the method is deprecated and pointing to Create Preview Invoice. `POST /v1/invoices/create_preview` requires one of `subscription`, `schedule` or `subscription_details.items`. The exact error bodies were not saved, so they are described here, not quoted.
+- **Live, 2026-09-25, API version `2026-08-26.dahlia`** (our sandbox; its account id is kept in the private data repo). `GET /v1/invoices/upcoming` returns an error saying the method is deprecated and pointing to Create Preview Invoice. `POST /v1/invoices/create_preview` requires one of `subscription`, `schedule` or `subscription_details.items`. The exact error bodies were not saved, so they are described here, not quoted.
 - **Removed at basil (2025-03-31), not at dahlia.** Major releases carry their changes forward, so it stays removed on dahlia.
   > "We’re removing the `GET /v1/invoices/upcoming` API in favor of the Create Preview Invoice API. Additionally, you can no longer preview the next invoice for a customer across all their subscriptions on the Create Preview Invoice API."
 
@@ -296,7 +296,7 @@ More detail:
 
 ## 9. Claimable-sandbox observations (live, 2026-09-25)
 
-Account `acct_1UJKSxBXgzwfQJL7`, created with `stripe sandbox create --from-git`. Key prefix `rkcs_test_`. Reported API version `2026-08-26.dahlia`. `verified-live`
+Account id kept in the private data repo (`budget/reads.jsonl`), created with `stripe sandbox create --from-git`. Key prefix `rkcs_test_`. Reported API version `2026-08-26.dahlia`. `verified-live`
 
 | Works | Refused |
 |---|---|

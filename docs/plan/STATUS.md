@@ -7,7 +7,7 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 
 - npm/CLI name: **`paritybench`** (`npx paritybench twin`, `npx paritybench bench <url>`). npm `parity` is an Ethereum lib and the GitHub `parity` org is taken. Brand stays "Parity".
 - Repo: private `GSXRcoder159/parity` now; public at launch (ask Adam first).
-- Stripe: claimable sandbox `acct_1UJKSxBXgzwfQJL7` provisioned via `stripe sandbox create --from-git` (email gsprog159@gmail.com). Key in `.env` (gitignored). **Expires 2026-10-02 unless claimed.**
+- Stripe: claimable sandbox provisioned via `stripe sandbox create --from-git` (its account id and email are kept out of this repo: the read ledger in `../parity-data/budget/` names the account). Key in `.env` (gitignored). **Expires 2026-10-02 unless claimed.**
 - Outreach: Claude drafts, Adam sends.
 
 ## Blockers and HUMAN actions

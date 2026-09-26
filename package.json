@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "engines": { "node": ">=22.18.0" },
   "bin": { "paritybench": "src/cli.ts" },
+  "files": ["src", "templates", "README.md", "LICENSE"],
   "scripts": {
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
