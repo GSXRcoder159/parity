@@ -50,9 +50,9 @@ Legend: `[x]` done and verified by running · `[~]` in progress · `[ ]` not sta
 - [ ] H1 decided
 
 ## W2 (Oct 6–12): twin scaffold + first curve points
-- [ ] Event store, form parser, spec validation, error envelope, idempotency, `/v1/events`, webhooks, `/_parity/reset` (<50 ms), `/_parity/seed`
-- [ ] Behavior modules: customers, products, prices, payment methods, subscriptions (create/cancel), invoices (retrieve/list), refunds
-- [ ] Twin boots <1 s; L1 ≥80% on non-clock steps
+- [x] Event store, form parser, spec validation, error envelope, idempotency, `/v1/events`, webhooks, `/_parity/reset` (<50 ms; ~2 ms over HTTP with 1,000 objects), `/_parity/seed` (`test/twin-core`, `test/twin-webhooks`, `test/twin-main`)
+- [x] Behavior modules: customers, products, prices, payment methods, subscriptions (create/cancel), invoices (retrieve/list), refunds (`test/twin-resources-a`, `test/twin-resources-b`)
+- [~] Twin boots <1 s: **done**, spawn to first 200 in ~0.1 s (`node src/twin/main.ts`, `test/twin-main`); image `docker build -t parity-twin .` (node:22-alpine, 166 MB) serves on 12111 and exits 0 on `docker stop` in 0.2 s. L1 ≥80% on non-clock steps: **100% (420/420) on #1–#15 × seeds 1–4** against the W0 sandbox recording (in-process twin, sequential `runSequence`; event-type sets equal in 60/60); #16–#26 not yet scored
 - [ ] Nightly ParityBench run; per-stratum curve with "surface added" annotations
 
 ## W3 (Oct 13–19): align loop + launch
