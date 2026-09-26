@@ -38,10 +38,14 @@ def call(base_url: str, method: str, path: str, params: dict | None = None) -> t
 
 
 def ok(base_url: str, method: str, path: str, params: dict | None = None) -> dict:
-    """`call` for setup: anything but a 200 is a bug in the task, so it raises."""
-    status, body = call(base_url, method, path, params)
+    """`call` for setup. An unreachable twin or any status but 200 raises `vf.InfraError`, which verifiers records in
+    that rollout's `state["error"]` (and retries under `max_retries`); any other exception would abort the whole run."""
+    try:
+        status, body = call(base_url, method, path, params)
+    except OSError as e:  # URLError, connection reset: the twin is unreachable
+        raise vf.InfraError(f"setup {method} {path}: {e}") from e
     if status != 200:
-        raise RuntimeError(f"setup {method} {path} -> {status}: {body}")
+        raise vf.InfraError(f"setup {method} {path} -> {status}: {body}")
     return body
 
 
@@ -100,12 +104,12 @@ TASKS: dict[str, Task] = {
     "cancel_at_period_end": Task(
         "Customer {email} wants to stop their subscription but keep access until the end of the period they paid for.",
         one(),
-        lambda o, i: o(i["sub"])["status"] == "active" and o(i["sub"])["cancel_at_period_end"] is True,
+        lambda o, i: o(i["sub"])["status"] == "active" and o(i["sub"])["cancel_at_period_end"] is True and refunded(o(i["charge"])) == 0,
     ),
     "keep_subscription": Task(
         "Customer {email} scheduled their subscription to cancel, changed their mind, and wants to keep it.",
         one(cancel_at_period_end=True),
-        lambda o, i: active(o(i["sub"])),
+        lambda o, i: active(o(i["sub"])) and refunded(o(i["charge"])) == 0,
     ),
     "refund_full": Task(
         "Customer {email} wants their subscription payment refunded in full, and wants to keep the subscription.",
@@ -126,7 +130,9 @@ TASKS: dict[str, Task] = {
     "cancel_with_feedback": Task(
         "Customer {email} wants to cancel right away because it is too expensive. Record that reason on the cancellation.",
         one(),
-        lambda o, i: o(i["sub"])["status"] == "canceled" and o(i["sub"])["cancellation_details"]["feedback"] == "too_expensive",
+        lambda o, i: o(i["sub"])["status"] == "canceled"
+        and o(i["sub"])["cancellation_details"]["feedback"] == "too_expensive"
+        and refunded(o(i["charge"])) == 0,
     ),
     "addon_refund": Task(
         "Customer {email} added the $9/month Analytics add-on by accident. Cancel only the add-on, now, and refund "
@@ -140,7 +146,7 @@ TASKS: dict[str, Task] = {
     "po_number": Task(
         "Customer {email} needs purchase order number PO-2291 recorded on their subscription, under the metadata key po_number.",
         one(),
-        lambda o, i: o(i["sub"])["metadata"].get("po_number") == "PO-2291" and active(o(i["sub"])),
+        lambda o, i: o(i["sub"])["metadata"].get("po_number") == "PO-2291" and active(o(i["sub"])) and refunded(o(i["charge"])) == 0,
     ),
     "no_double_charge": Task(
         "Customer {email} says they were charged twice this month and wants the duplicate refunded. "
@@ -274,7 +280,8 @@ def load_environment(base_url: str = "http://127.0.0.1:12111", tasks: list[str] 
         return out(api("POST", "/v1/refunds", {"payment_intent": payment_intent, "amount": amount, "reason": reason}))
 
     def solved(answer: str, state: vf.State) -> float:
-        return score(base_url, answer, state["parity"])
+        # no ids means setup failed; its InfraError is in state["error"]
+        return score(base_url, answer, state["parity"]) if "parity" in state else 0.0
 
     names = [t for t in TASKS if tasks is None or t in tasks]
     kwargs.setdefault("system_prompt", SYSTEM)

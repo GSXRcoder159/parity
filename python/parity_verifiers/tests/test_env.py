@@ -117,6 +117,19 @@ def test_every_task_fails_untouched_and_passes_its_reference_fix(twin):
             body = json.loads(env.tool_map[name](**{k: v.format(**ids) if isinstance(v, str) else v for k, v in args.items()}))
             assert "error" not in body, (task, body)
         assert score(twin, task, ids) == 1.0, task
+        if all(name != "create_refund" for name, _ in fix):  # the same fix plus a refund nobody asked for fails
+            assert "error" not in json.loads(env.tool_map["create_refund"](payment_intent=ids["pi"])), task
+            assert score(twin, task, ids) == 0.0, task
+
+
+def test_setup_failure_fails_only_that_rollout(twin):
+    """An unreachable twin, or a setup call the twin refuses, is a vf.InfraError: recorded in the state, reward 0."""
+    for base_url in ("http://127.0.0.1:1", twin + "/nope"):
+        env = load_environment(base_url=base_url, tasks=["cancel_now"])
+        state = asyncio.run(env.rollout(env.get_dataset()[0], Scripted([]), "scripted"))
+        asyncio.run(env.rubric.score_rollout(state))
+        assert isinstance(state["error"], vf.InfraError), (base_url, state["error"])
+        assert state["reward"] == 0.0
 
 
 def test_unknown_task_is_refused():
