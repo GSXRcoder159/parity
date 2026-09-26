@@ -22,9 +22,10 @@ import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts"
 import { FRAUD_OR_RISK, locusKey } from "./patch.ts";
 import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
 
-/** Runs a command in `cwd` and returns its trimmed stdout (injectable: tests fake `gh`). */
+/** Runs a command in `cwd` and returns its trimmed stdout (injectable: tests fake `gh`, `docker` and failing pushes). */
 export type Run = (cmd: string, args: string[], cwd: string) => string;
-export const sh: Run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+// maxBuffer: `git show` of the sealed log (reland) outgrows the 1 MB default.
+export const sh: Run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 }).trim();
 
 interface Cluster {
   locus: Locus;

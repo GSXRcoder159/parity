@@ -311,3 +311,128 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     }
   }
 });
+
+test("nightly lands an align commit with its sealed-log entries: a failed parity push drops both; a failed data push leaves them on a pending branch that the next night relands", { timeout: 240_000 }, async () => {
+  // A sandbox recording where every customer's tax_exempt is "reverse": align --apply seeds it (one automatic patch).
+  const CLOCK = "2026-09-27T07:00:00.000Z";
+  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "20260927T070000-aaaa", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const reverse = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(reverse) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, (v as { object?: string }).object === "customer" && k === "tax_exempt" ? "reverse" : reverse(x)])) : v;
+  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: reverse(s.body) })) }));
+
+  const tmp = mkdtempSync(join(tmpdir(), "pb-land-"));
+  const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+  const repoWithOrigin = (dir: string, origin: string) => {
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    git(dir, "init", "-q", "-b", "main");
+    git(dir, "config", "user.email", "test@example.com");
+    git(dir, "config", "user.name", "test");
+    git(dir, "remote", "add", "origin", origin);
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "init");
+    git(dir, "push", "-q", "-u", "origin", "main");
+  };
+  const data = join(tmp, "parity-data");
+  const dataOrigin = join(tmp, "data-origin.git");
+  writeJsonl(join(data, "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl"), oracle);
+  repoWithOrigin(data, dataOrigin);
+  const repo = join(tmp, "parity");
+  const parityOrigin = join(tmp, "parity-origin.git");
+  for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
+  repoWithOrigin(repo, parityOrigin);
+  const head0 = git(repo, "rev-parse", "HEAD");
+
+  const bare = (dir: string, ...args: string[]) => git(tmp, "--git-dir", dir, ...args);
+  const originLog = (ref = "main") => {
+    try {
+      return bare(dataOrigin, "show", `${ref}:align/log.jsonl`).split("\n").map((l) => JSON.parse(l) as LogEntry);
+    } catch {
+      return []; // no log on that ref yet
+    }
+  };
+  const pendingRefs = () => bare(dataOrigin, "for-each-ref", "--format=%(refname:short)", "refs/heads/nightly/");
+  // The invariant, checked on the two origins: every align commit on parity's main has its patch entries in the log on
+  // the data repo's main, and every commit the log's nightly entries cite is on parity's main.
+  const invariant = () => {
+    const log = originLog();
+    for (const c of bare(parityOrigin, "log", "--format=%H", "--grep=^align: ", "main").split("\n").filter(Boolean)) {
+      assert.ok(log.some((e) => e.kind === "patch" && e.data.class === "automatic" && e.data.commit === c), `align commit ${c} has its patch entries on the data repo's main`);
+    }
+    for (const e of log.filter((x) => typeof x.data.commit === "string")) execFileSync("git", ["--git-dir", parityOrigin, "merge-base", "--is-ancestor", String(e.data.commit), "main"]);
+    assert.ok(verifyLog(logPath(data)).ok);
+  };
+  /** Real git and an empty `gh`, except that `fail` picks commands to fail. */
+  const failing = (fail: (args: string[], cwd: string) => boolean): Run => (cmd, args, cwd) => {
+    if (cmd === "gh") return "[]";
+    if (cmd === "git" && fail(args, cwd)) throw new Error(`injected failure: git ${args.join(" ")}`);
+    return sh(cmd, args, cwd);
+  };
+  const parityPush = (args: string[], cwd: string) => cwd === repo && args[0] === "push" && args.includes("HEAD:main");
+
+  const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
+  process.env.STRIPE_API_KEY = "sk_test_never_sent";
+  process.env.PARITY_READ_BUDGET = "0"; // the sandbox refuses at the budget gate: the night scores the existing oracle
+  try {
+    // (1) The align commit's push fails: neither the commit nor its entries land anywhere, and none is left here.
+    await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: failing(parityPush), now: () => new Date("2026-10-05T07:00:00Z") }), /the align commit was not pushed \(injected failure: git push -q origin HEAD:main\); the align commit [0-9a-f]{40} and its sealed-log entries were dropped/);
+    assert.deepEqual([git(repo, "rev-parse", "HEAD"), bare(parityOrigin, "rev-parse", "main"), git(repo, "status", "--porcelain")], [head0, head0, ""]);
+    assert.equal(pendingRefs(), "", "the pending branch is deleted");
+    assert.ok(!readJsonl<LogEntry>(logPath(data)).some((e) => e.kind === "patch" || e.kind === "gate"), "no patch or gate entry here either");
+    invariant();
+
+    // A leftover pending branch whose align commit never reached origin (its deletion failed too): deleted, never relanded.
+    const ghost = join(tmp, "ghost");
+    execFileSync("git", ["clone", "-q", dataOrigin, ghost]);
+    appendLog(logPath(ghost), "ghost", [{ kind: "gate", data: { commit: "f".repeat(40), oracle: ORACLE } }]);
+    git(ghost, "add", "align");
+    git(ghost, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "ghost");
+    git(ghost, "push", "-q", "origin", "HEAD:refs/heads/nightly/pending-ghost");
+
+    // (2) The align commit lands, the data repo's main push fails: the entries wait on the pending branch.
+    let parityPushed = false;
+    const dataPushFails: Run = failing((args, cwd) => {
+      if (parityPush(args, cwd)) parityPushed = true;
+      return parityPushed && cwd === data && args.join(" ") === "push -q";
+    });
+    await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: dataPushFails, now: () => new Date("2026-10-06T07:00:00Z") }), /is on origin, but its sealed-log entries did not reach the data repo's main \(injected failure: git push -q\); they wait on nightly\/pending-\S+, and the next nightly lands them first/);
+    const aligned = bare(parityOrigin, "rev-parse", "main");
+    assert.match(bare(parityOrigin, "log", "-1", "--format=%s", "main"), /^align: 1 automatic patches/);
+    const [pending, ...more] = pendingRefs().split("\n");
+    assert.match(pending!, /^nightly\/pending-\d{8}T\d{6}-\w+$/);
+    assert.deepEqual(more, [], "the ghost branch was deleted unread");
+    assert.ok(!originLog().some((e) => e.runId === "ghost"));
+    assert.ok(!originLog().some((e) => e.data.commit === aligned), "not on the log's main yet");
+    const waiting = originLog(pending).filter((e) => e.data.commit === aligned).map((e) => [e.kind, e.data.class]);
+    assert.deepEqual(waiting, [["patch", "automatic"], ["gate", undefined]], "the pending branch holds them");
+    const held = originLog(pending).filter((e) => `nightly/pending-${e.runId}` === pending).map((e) => e.hash);
+
+    // (3) The next night runs on a fresh checkout (the runner that failed is gone): it relands them first.
+    git(data, "fetch", "-q", "origin");
+    git(data, "reset", "-q", "--hard", "origin/main");
+    git(data, "clean", "-qfd");
+    const r = await nightly({ repo, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-07T07:00:00Z") });
+    assert.equal(pendingRefs(), "", "the pending branch is deleted once landed");
+    // Run (2)'s entries, all of them (its refusal note and score entry too), relanded with the branch and original hash.
+    const relanded = originLog().filter((e) => e.data.relanded);
+    assert.deepEqual(relanded.map((e) => [e.kind, e.data.commit === aligned, (e.data.relanded as { branch: string }).branch]), [["note", false, pending], ["score", false, pending], ["patch", true, pending], ["gate", true, pending]]);
+    assert.deepEqual(relanded.map((e) => (e.data.relanded as { hash: string }).hash), held);
+    assert.equal(r.patches.automatic, 1, "counted once");
+    assert.deepEqual(site(repo, "changelog.json").map((c: { class: string; pointers: string[]; commit: string }) => [c.class, c.pointers, c.commit]), [["automatic", ["/tax_exempt"], aligned]]);
+    assert.equal(bare(parityOrigin, "rev-parse", "main"), git(repo, "rev-parse", "HEAD"));
+    invariant();
+  } finally {
+    for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+const site = (repo: string, f: string) => JSON.parse(readFileSync(join(repo, "site/data", f), "utf8"));

@@ -71,9 +71,12 @@ const USAGE = `usage:
   nightly: record today's slice (--slice <UTC day of week>/7 of templates x seeds 1-20) on the sandbox at <=10 req/s, and on
     Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a
     sealed-log score entry) with the noise ceiling from the latest noise-a/noise-b pair; align --apply; align --assist;
-    log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json; drift
-    (drift/<date>.md + site/data/drift.json, or a note); commit both repos and push them: this one first (the align
-    commit as soon as it lands), the data repo last. Tonight's run files and read-ledger entries (and the LLM ledger,
+    log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json and
+    site/data/changelog.json; drift (drift/<date>.md + site/data/drift.json, or a note); commit both repos and push them:
+    this one first, the data repo last. An align commit lands with its sealed-log entries at once: the entries go to the
+    data repo's branch nightly/pending-<runId>, then the commit to this repo, then the entries to the data repo's main (a
+    failed first or second push drops both; after a failed third, the next nightly relands them from the pending branch
+    before anything else). Tonight's run files and read-ledger entries (and the LLM ledger,
     after the assisted pass) are pushed to the data repo as soon as they are written. A refused or
     aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
     oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface

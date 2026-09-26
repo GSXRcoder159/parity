@@ -1,8 +1,9 @@
 // paritybench nightly (plan §3.3–§3.5; decision 0002 §1 rolling oracle, §3 what counts, §5 data locations): record
 // tonight's sandbox slice (and weekly the noise pair), rebuild the oracle, score the twin on the whole oracle with the
 // noise ceiling, align (mechanical, then assisted), log merged assisted PRs, publish the public-safe curve point and
-// scores file and the changelog, run drift, commit and push both repos (this one first). A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2) is a
-// sealed-log note, not a failure: the night goes on with the existing oracle and the curve point says oracleRefreshed: false.
+// scores file and the changelog, run drift, commit and push both repos (this one first; an align commit lands with its
+// sealed-log entries at once, land()). A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2)
+// is a sealed-log note, not a failure: the night goes on with the existing oracle and the curve point says oracleRefreshed: false.
 // Any other error (a missing key, a bug) fails the night.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -185,6 +186,102 @@ export function removedTotals(rows: Change[]): Patches {
   return { automatic: sum("automatic"), assisted: sum("assisted") };
 }
 
+const PENDING = "nightly/pending-";
+
+/**
+ * Lands an align commit and its sealed-log entries on both origins. Invariant (after any failure at any step): the
+ * parity-data log's main never cites a parity commit absent from this repo's origin, and an align commit on this repo's
+ * origin has its patch entries on the log's main, or, from the moment it is pushed until the next nightly relands them
+ * (reland()), on the data repo's branch nightly/pending-<runId>. So:
+ *   1. commit the log (and tonight's other data files) and push it to nightly/pending-<runId>, never to main;
+ *   2. push the align commit. If 1 or 2 fails, nothing landed: the entries and the commit are dropped here too (so no
+ *      later push carries them) and the pending branch is deleted (reland() deletes a leftover whose commit is not on origin);
+ *   3. push the log to main, then delete the pending branch. If 3 fails, the entries wait on the pending branch, which
+ *      outlives this checkout (the nightly's runner is discarded), and the next nightly lands them before anything else.
+ */
+function land(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run; commit: string; log: string; logBefore: string }): void {
+  const { data, run } = o;
+  const pending = `${PENDING}${o.runId}`;
+  const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
+  const quiet = (f: () => unknown) => {
+    try {
+      f();
+    } catch {}
+  };
+  let committed = false;
+  const drop = (why: string, e: unknown): never => {
+    if (committed) git(data, "reset", "-q", "HEAD~1");
+    writeFileSync(o.log, o.logBefore);
+    git(o.repo, "reset", "-q", "--keep", `${o.commit}~1`);
+    quiet(() => git(data, "push", "-q", "origin", "--delete", pending));
+    throw new Error(`nightly: ${why} (${(e as Error).message}); the align commit ${o.commit} and its sealed-log entries were dropped: nothing is published tonight`);
+  };
+  try {
+    git(data, "pull", "-q", "--rebase", "--autostash");
+    git(data, "add", "-A", "--", ...["runs", "oracle.jsonl", "align", "budget"].filter((p) => existsSync(join(data, p))));
+    git(data, "commit", "-q", "-m", `nightly ${o.date} run ${o.runId}: align --apply ${o.commit} and its sealed-log entries`);
+    committed = true;
+    git(data, "push", "-q", "origin", `HEAD:refs/heads/${pending}`);
+  } catch (e) {
+    drop("the sealed-log entries could not be pushed to the data repo's pending branch", e);
+  }
+  try {
+    git(o.repo, "push", "-q", "origin", `HEAD:${o.branch}`);
+  } catch (e) {
+    drop("the align commit was not pushed", e);
+  }
+  try {
+    git(data, "pull", "-q", "--rebase");
+    git(data, "push", "-q");
+  } catch (e) {
+    quiet(() => git(data, "rebase", "--abort"));
+    throw new Error(`nightly: the align commit ${o.commit} is on origin, but its sealed-log entries did not reach the data repo's main (${(e as Error).message}); they wait on ${pending}, and the next nightly lands them first`);
+  }
+  quiet(() => git(data, "push", "-q", "origin", "--delete", pending)); // a leftover is deleted by the next reland()
+}
+
+/**
+ * The first step of a night: for each nightly/pending-<runId> branch on the data repo's origin (land()), re-append its
+ * run's entries when they are missing from the log and its align commit is on this repo's origin (same data and ts, a
+ * new place in the chain, `relanded` naming the branch and the original hash), commit and push; then delete the branch.
+ * A branch whose align commit never reached origin is deleted unread: its entries never landed.
+ */
+export function reland(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run }): string[] {
+  const { data, run } = o;
+  const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
+  const refs = git(data, "ls-remote", "--heads", "origin", `${PENDING}*`).split("\n").map((l) => l.split("refs/heads/")[1]).filter((r): r is string => Boolean(r));
+  if (!refs.length) return [];
+  git(data, "pull", "-q", "--rebase", "--autostash");
+  git(o.repo, "fetch", "-q", "origin", o.branch);
+  const log = logPath(data);
+  const relanded: string[] = [];
+  for (const ref of refs) {
+    const r = ref.slice(PENDING.length);
+    const logged = existsSync(log) && readJsonl<LogEntry>(log).some((e) => e.runId === r);
+    git(data, "fetch", "-q", "origin", ref);
+    const theirs = git(data, "show", "FETCH_HEAD:align/log.jsonl").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as LogEntry).filter((e) => e.runId === r);
+    const commit = theirs.find((e) => e.kind === "gate")?.data.commit;
+    let onOrigin = false;
+    try {
+      git(o.repo, "merge-base", "--is-ancestor", String(commit), `origin/${o.branch}`);
+      onOrigin = true;
+    } catch {}
+    if (!logged && onOrigin && theirs.length) {
+      // One append per original timestamp: appendLog stamps a batch with one ts.
+      for (const ts of [...new Set(theirs.map((e) => e.ts))]) {
+        appendLog(log, r, theirs.filter((e) => e.ts === ts).map((e) => ({ kind: e.kind, data: { ...e.data, relanded: { branch: ref, hash: e.hash } } })), ts);
+      }
+      git(data, "add", "--", "align");
+      git(data, "commit", "-q", "-m", `nightly ${o.date} run ${o.runId}: reland run ${r}'s sealed-log entries from ${ref} (align commit ${commit})`);
+      git(data, "pull", "-q", "--rebase");
+      git(data, "push", "-q");
+      relanded.push(r);
+    }
+    git(data, "push", "-q", "origin", "--delete", ref);
+  }
+  return relanded;
+}
+
 /**
  * The night's public-safe files (the page's contract, site/app.js): a curve point and site/data/scores/<date>.json.
  * Scores only, no values or ids (decision 0001 C3). Without a noise pair `noise` is absent (the page marks the night
@@ -321,10 +418,12 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
       run("git", ["add", "-A", "--", ...paths], data);
       run("git", ["commit", "-q", "-m", `nightly ${date} run ${runId}: ${what}`, "--", ...paths], data);
     }
-    // The sealed log's own entries are committed only at step 8, so this rebase never rewrites a hash they cite.
+    // Only unpushed commits are rebased: the parity commit cites a data commit only at step 8, after this.
     run("git", ["pull", "-q", "--rebase", "--autostash"], data);
     run("git", ["push", "-q"], data);
   };
+  const branch = o.dryRun ? "" : run("git", ["rev-parse", "--abbrev-ref", "HEAD"], o.repo);
+  if (!o.dryRun) reland({ data, repo: o.repo, branch, date, runId, run });
   let failed: { e: unknown } | undefined;
   try {
     if (!o.dryRun) {
@@ -374,19 +473,20 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const logged = noise && { overall: noise.overall, byStratum: noise.byStratum, pair: noise.pair, seqs: noise.seqs, inSample: noise.inSample };
   appendLog(log, runId, [{ kind: "score", data: { label: "nightly", date, commit, normalization: NORMALIZATION_VERSION, method: METHOD.version, score: json.score, ...(logged && { noise: logged }), oracleRefreshed, oracle } }]);
 
-  // 4. align --apply (mechanical); plan only on a dry run. Its commit is pushed at once and as is (the sealed log cites
-  // its hash, so it is never rebased): up to date with origin first, and a rejected push stops the night before the data
-  // repo's log (with the entries citing it) is pushed.
-  const branch = o.dryRun ? "" : run("git", ["rev-parse", "--abbrev-ref", "HEAD"], o.repo);
+  // 4. align --apply (mechanical); plan only on a dry run. Its commit and its sealed-log entries land at once (land()).
+  // The commit is never rebased (the log cites its hash), so this repo is brought up to date with origin first.
   if (!o.dryRun) run("git", ["pull", "-q", "--ff-only", "origin", branch], o.repo);
-  const plan = align({ repo: o.repo, dataDir: data, runId, apply: !o.dryRun });
-  if (plan.applied?.commit) {
-    try {
-      run("git", ["push", "-q", "origin", `HEAD:${branch}`], o.repo);
-    } catch (e) {
-      throw new Error(`nightly: the align commit ${plan.applied.commit} was not pushed (${(e as Error).message}); its sealed-log entries are not pushed either: nothing is published tonight`);
-    }
+  const logBefore = existsSync(log) ? readFileSync(log, "utf8") : "";
+  const head = o.dryRun ? "" : run("git", ["rev-parse", "HEAD"], o.repo);
+  let plan: ReturnType<typeof align>;
+  try {
+    plan = align({ repo: o.repo, dataDir: data, runId, apply: !o.dryRun });
+  } catch (e) {
+    // A commit whose log append failed must not stay here for a later push to carry without its entries.
+    if (!o.dryRun && run("git", ["rev-parse", "HEAD"], o.repo) !== head) run("git", ["reset", "-q", "--keep", head], o.repo);
+    throw e;
   }
+  if (plan.applied?.commit) land({ data, repo: o.repo, branch, date, runId, run, commit: plan.applied.commit, log, logBefore });
 
   // 5. align --assist on HEAD (a fresh plan when --apply just committed: the old baseline is stale), then merged PRs.
   let assisted = "assist: not run (dry run)";

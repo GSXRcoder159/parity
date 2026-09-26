@@ -48,8 +48,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PARITY_TOKEN: ${{ github.token }}
           PARITY_DATA_TOKEN: ${{ secrets.PARITY_DATA_TOKEN }}
-        # Commits both repos and pushes them itself, this one first (the align commit as soon as it lands), the data repo
-        # last. Git reads each repo's credential from URL-scoped config in the environment (GIT_CONFIG_*), never from disk;
+        # Commits both repos and pushes them itself, this one first, the data repo last; an align commit lands with its
+        # sealed-log entries at once, through the data repo's branch nightly/pending-<runId> (src/nightly.ts land()). Git reads each repo's credential from URL-scoped config in the environment (GIT_CONFIG_*), never from disk;
         # the gate's child process gets none of these variables (src/align/gate.ts).
         run: |
           auth() { printf 'AUTHORIZATION: basic %s' "$(printf 'x-access-token:%s' "$1" | base64 -w0)"; }
