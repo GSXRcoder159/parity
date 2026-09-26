@@ -26,7 +26,7 @@ const USAGE = `usage:
   paritybench oracle build [--max-age-days N]
   paritybench twin [--port 12111] [--host 127.0.0.1]
   paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
-  paritybench align [--apply] [--max-batches N]
+  paritybench align [--apply | --assist] [--max-batches N]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
@@ -47,6 +47,10 @@ const USAGE = `usage:
     (src/twin/shapes/*.json, src/twin/errors.json) from train sequences only, and gate them in a temp copy of the repo
     (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, commits
     them, then appends them to the sealed log <dataDir>/align/log.jsonl. --max-batches: gate only the first N per-file batches.
+    --assist (after the plan, on HEAD; run align --apply first): the LLM proposes one twin code file per non-mechanical
+    locus (top 3); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
+    merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
+    call's tokens and cost_usd go to budget/llm.jsonl; daily cap $15 (UTC), PARITY_LLM_CAP_USD may only lower it.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
@@ -58,12 +62,12 @@ const FLAGS: Record<string, string[]> = {
   oracle: ["max-age-days"],
   twin: ["port", "host"],
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
-  align: ["apply", "max-batches"],
+  align: ["apply", "assist", "max-batches"],
 };
 
 class UsageError extends Error {}
 
-/** `--flag value` pairs (`--raw`, `--apply` take none) and positionals; unknown flags and missing values are usage errors. */
+/** `--flag value` pairs (`--raw`, `--apply`, `--assist` take none) and positionals; unknown flags and missing values are usage errors. */
 function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -75,7 +79,7 @@ function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>
     }
     const name = a.slice(2);
     if (!FLAGS[cmd]!.includes(name)) throw new UsageError(`unknown flag ${a} for ${cmd}`);
-    if (name === "raw" || name === "apply") {
+    if (name === "raw" || name === "apply" || name === "assist") {
       flags[name] = "1";
       continue;
     }
@@ -357,8 +361,15 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (cmd === "align") {
+      // The assisted pass gates against HEAD and branches from it: after an --apply commit that baseline is stale.
+      if (flags.apply && flags.assist) throw new UsageError("--apply and --assist are separate runs: align --apply, then align --assist");
       const { align, planText } = await import("./align/index.ts");
-      console.log(planText(align({ repo: REPO_ROOT, dataDir: dataDir(), runId: newRunId(), apply: flags.apply === "1", maxBatches: num(flags, "max-batches", { integer: true }) })));
+      const r = align({ repo: REPO_ROOT, dataDir: dataDir(), runId: newRunId(), apply: flags.apply === "1", maxBatches: num(flags, "max-batches", { integer: true }) });
+      console.log(planText(r));
+      if (flags.assist) {
+        const { assist, assistText } = await import("./align/assist.ts");
+        console.log(assistText(await assist(r, { repo: REPO_ROOT, dataDir: dataDir(), runId: r.runId })));
+      }
       return 0;
     }
 

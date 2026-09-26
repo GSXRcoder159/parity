@@ -140,6 +140,9 @@ function messageTemplate(message: string, vars: Record<string, string>): string 
   return ok ? out : undefined;
 }
 
+/** One group per locus; event loci group by template (their per-step detail differs by sequence). */
+export const locusKey = (l: Locus): string => JSON.stringify(l.kind === "events" ? { kind: "events", template: l.template } : l);
+
 /**
  * Candidates from the train divergences of `divergences`, checked against the train sequences of `oracle` (normalized)
  * and `twin` (raw, for its error keys and rendered vars). Held-out sequences are dropped here, before anything is read.
@@ -158,10 +161,7 @@ export function propose(
   const objects = typedObjects(trainOracle);
 
   const groups = new Map<string, Triaged[]>();
-  for (const d of train) {
-    const k = JSON.stringify(d.locus.kind === "events" ? { kind: "events", template: d.template } : d.locus);
-    groups.set(k, [...(groups.get(k) ?? []), d]);
-  }
+  for (const d of train) groups.set(locusKey(d.locus), [...(groups.get(locusKey(d.locus)) ?? []), d]);
   const candidates: Candidate[] = [];
   const notMechanical: NotMechanical[] = [];
   for (const g of groups.values()) {

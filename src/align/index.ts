@@ -10,7 +10,7 @@ import { contaminated } from "../bench/oracle.ts";
 import type { LevelScores } from "../bench/score.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
-import { applyEdits, evalOf, gate, scoreTwinIn, type GateResult, type Judged, type Scores } from "./gate.ts";
+import { applyEdits, evalOf, gate, scoreTwinIn, type Eval, type GateResult, type Judged, type Scores } from "./gate.ts";
 import { appendLog, logPath, provenance, verifyLog, type Kind, type LogData, type Provenance } from "./log.ts";
 import { CATALOG_FILE, SHAPES_DIR, propose, type Candidate, type NotMechanical } from "./patch.ts";
 import { triage, type Locus, type Triaged } from "./triage.ts";
@@ -45,6 +45,9 @@ export interface AlignResult {
   candidates: Candidate[];
   notMechanical: NotMechanical[];
   gate: GateResult;
+  /** The baseline score (with divergence ids) and the twin's raw recordings: the assisted pass's input. */
+  baseline: Eval;
+  twin: Recording[];
   applied?: { files: string[]; log: string; entries: number; commit?: string };
 }
 
@@ -67,8 +70,9 @@ export function align(o: { repo: string; dataDir: string; runId: string; apply?:
   const catalog = JSON.parse(readFileSync(join(o.repo, CATALOG_FILE), "utf8"));
   const shape = (t: string) => /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(join(o.repo, SHAPES_DIR, `${t}.json`));
   const { candidates, notMechanical } = propose(divergences, recs.map(normalizeRecording), base.twin!, noise.keys, { shape, catalog });
-  const g = gate(candidates, (edits) => evalOf(scoreTwinIn(o.repo, oraclePath, edits).json), { maxBatches: o.maxBatches, before: evalOf(base.json) });
-  const r: AlignResult = { runId: o.runId, oracle, noise: { keys: noise.keys.size, pairs: noise.pairs }, divergences, earliest, candidates, notMechanical, gate: g };
+  const baseline = evalOf(base.json);
+  const g = gate(candidates, (edits) => evalOf(scoreTwinIn(o.repo, oraclePath, edits).json), { maxBatches: o.maxBatches, before: baseline });
+  const r: AlignResult = { runId: o.runId, oracle, noise: { keys: noise.keys.size, pairs: noise.pairs }, divergences, earliest, candidates, notMechanical, gate: g, baseline, twin: base.twin! };
   if (o.apply) r.applied = applyAndLog(o.repo, o.dataDir, r);
   return r;
 }
@@ -136,8 +140,8 @@ function applyAndLog(repo: string, dataDir: string, r: AlignResult): NonNullable
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 const levels = (s: LevelScores): string => (["L1", "L2", "L3", "L4"] as const).map((l) => `${l} ${pct(s[l].p)}`).join(" ");
-const split = (s: Scores): string => `train ${levels(s.train)} (${s.trainDivergences} divergences) · held-out ${levels(s.heldOut)}`;
-const where = (l: Locus): string =>
+export const split = (s: Scores): string => `train ${levels(s.train)} (${s.trainDivergences} divergences) · held-out ${levels(s.heldOut)}`;
+export const where = (l: Locus): string =>
   l.kind === "field" ? `${l.objectType} ${l.fieldPath}` : l.kind === "error" ? `error ${l.errorKey} ${l.field}` : l.kind === "route" ? l.route : `events ${l.template}`;
 const line = (c: Candidate): string =>
   `  ${c.file} ${c.pointer} ${c.op}${c.op === "set" ? ` ${JSON.stringify(c.value)}` : ""} · ${c.ids.length} divergences, value seen at ${c.evidence.occurrences} occurrences in ${c.evidence.seqs.length} sequences`;
