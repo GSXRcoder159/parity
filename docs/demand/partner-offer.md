@@ -9,6 +9,7 @@ Before sending:
 - [ ] `paritybench agree` has landed (W4, Task 5 in `docs/plan/impl/2026-09-26-w4-surface-agree-wrappers.md`). Until it has, cut the 48 h promise.
 - [ ] Re-read each number in its cited report. The twin numbers move with every align run.
 - [ ] For partner runs, set `PARITY_DATA_DIR` to a directory outside any git repository. The default is `../parity-data`, a git repo (README, Reproduce).
+- [ ] Check `docs/plan/STATUS.md` (W4) and the README's "Not yet" list. Move what has landed out of the "Not in the twin yet" bullet.
 - [ ] Remove these sender notes, and the "Gated on B5" line, before sending.
 
 ---
@@ -33,11 +34,10 @@ For the sandbox half: a Stripe sandbox in your own account (see "What we never d
 - **Publish your data.** Not your name, tests, scenarios, call shapes, recordings or results, unless you agree in writing. Recordings stay in a private store, never in a repository, and are deleted when you ask.
 - **Patch the public twin from your calls.** With your OK, your call shapes join a private held-out set that the twin is scored on and never repaired against (plan §3.1). The twin's data files are public (decision 0002 §5), so a patch derived from your calls would publish them.
 
-## The twin's v0 surface (plan §2.1)
+## The twin's v0 surface
 
-Test clocks, proration and subscription updates are being added now (W4, `docs/plan/STATUS.md`). Check STATUS.md before sending.
-
-- **Covered:** Customers, PaymentMethods (`pm_card_*` test tokens), Products and Prices, Subscriptions, Invoices (preview, pay, void), Refunds, Charges and PaymentIntents (retrieve only), Events and webhook endpoints, and test clocks. Also idempotency keys and the error envelope.
+- **In scope (plan §2.1):** Customers, PaymentMethods (`pm_card_*` test tokens), Products and Prices, Subscriptions, Invoices (preview, pay, void), Refunds, Charges and PaymentIntents (retrieve only), Events and webhook endpoints, and test clocks. Also idempotency keys and the error envelope.
+- **Not in the twin yet, being added now:** proration (subscription price and quantity changes), invoice preview, the invoice lifecycle (finalize, pay, void) and test clocks. Until they land, calls to them count as out of scope.
 - **Not covered:** Quotes, Subscription Schedules, Coupons and Promotion codes, Tax, Checkout, Connect, Billing Portal, Meters, Disputes.
 
 ## Measured so far
