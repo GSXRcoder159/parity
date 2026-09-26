@@ -122,6 +122,7 @@ function chart(box, rows, defs, label) {
   }
   const first = rows[0].date;
   const last = rows.at(-1).date;
+  // ponytail: first and last dates only; add intermediate ticks when a long curve needs them.
   const xLabels = first === last ? [[first, "middle"]] : [[first, "start"], [last, "end"]];
   for (const [d, anchor] of xLabels) svg.append(s("text", { x: sc.x(d), y: hgt - 8, class: "tick", "text-anchor": anchor }, d));
   let free = 0; // where the next annotation label may start: a label that would overlap the previous one is left to the tooltip
@@ -129,7 +130,9 @@ function chart(box, rows, defs, label) {
     const x = sc.x(r.date);
     svg.append(s("line", { x1: x, x2: x, y1: 4, y2: hgt - sc.pad.b, class: "annot" }));
     const text = r.events.map((e) => e.split(":")[0]).join(", ");
-    const lx = Math.min(x + 4, w - text.length * 6); // ~6px per 11px glyph; labels sit above the plot, clear of ceilings near 100%
+    // Labels sit above the plot, clear of ceilings near 100%.
+    // ponytail: width estimated at ~6px per 11px glyph; measure with getComputedTextLength() if labels clip or collide.
+    const lx = Math.min(x + 4, w - text.length * 6);
     if (lx < free) continue;
     svg.append(s("text", { x: lx, y: 14, class: "tick" }, text));
     free = lx + text.length * 6 + 8;
