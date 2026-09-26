@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle,
-// serve the twin, score the twin against an oracle.
+// serve the twin (over HTTP or MCP), score the twin against an oracle.
 import { randomInt } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -25,6 +25,7 @@ const USAGE = `usage:
   paritybench bench <baseURL> --oracle A.jsonl [--noise C.jsonl] [--out recordings/<date>/bench-<name>-<runId>]
   paritybench oracle build [--max-age-days N]
   paritybench twin [--port 12111] [--host 127.0.0.1]
+  paritybench mcp
   paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
   paritybench align [--apply | --assist] [--max-batches N]
   paritybench align surface --note "<text>" [--commit <sha>]
@@ -44,6 +45,10 @@ const USAGE = `usage:
   oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
   --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
   twin: serves the twin until SIGINT/SIGTERM (port also from env PORT).
+  mcp: an MCP server on stdio (initialize handshake, protocol 2025-11-25) over an in-process twin until stdin closes: one
+    tool per twin route named from its spec operation (post_v1_customers, get_v1_customers_customer, ...) taking path,
+    query and body params as JSON, plus parity_reset and parity_state. Results are {status, body} as text; API errors
+    are results with isError: true.
   score-twin: the oracle's sequences (optionally only --templates) against a fresh in-process twin on an ephemeral port,
     with Parity-Now per sequence as in bench, step waits skipped and events read from the twin's store; the Markdown
     report goes to stdout, --json writes the results and score, --recordings the twin's recordings.
@@ -88,6 +93,7 @@ const FLAGS: Record<string, string[]> = {
   bench: ["oracle", "noise", "out"],
   oracle: ["max-age-days"],
   twin: ["port", "host"],
+  mcp: [],
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
   align: ["apply", "assist", "max-batches", "note", "commit"],
   nightly: ["dry-run"],
@@ -410,6 +416,7 @@ export async function main(argv: string[]): Promise<number> {
     if (positional.length !== (cmd === "bench" ? 1 : 0)) throw new UsageError(`unexpected arguments: ${positional.join(" ") || "(missing <baseURL>)"}`);
 
     if (cmd === "twin") return (await import("./twin/main.ts")).main(rest);
+    if (cmd === "mcp") return (await import("./mcp.ts")).main();
     if (cmd === "score-twin") {
       await scoreTwin(need(flags, "oracle"), pickTemplates(flags.templates), flags.noise, flags.json, flags.recordings);
       return 0;

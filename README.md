@@ -32,6 +32,19 @@ curl -u sk_test_parity: http://127.0.0.1:12111/v1/customers -d email=jenny@examp
 
 With stripe-node, pass `new Stripe("sk_test_parity", { host: "127.0.0.1", port: 12111, protocol: "http" })`. Between tests, `POST /_parity/reset` clears all state.
 
+### Use the twin from an agent (MCP)
+
+`node src/cli.ts mcp` serves an in-process twin over MCP on stdio (protocol `2025-11-25`, with the `initialize` handshake). Add it to an MCP client config:
+
+```json
+{ "mcpServers": { "parity-twin": { "command": "node", "args": ["/path/to/parity/src/cli.ts", "mcp"] } } }
+```
+
+- Each twin route is one tool, named from its API operation: `post_v1_customers`, `get_v1_customers_customer`, `post_v1_subscriptions`, and so on.
+- A tool takes the route's path, query and body parameters as JSON. Its input schema comes from the vendored OpenAPI spec.
+- A tool returns the response's `{status, body}` as JSON text. API errors come back as tool results with `isError: true`.
+- `parity_reset` clears all state, and `parity_state` shows the store. State lives in memory and ends with the server process.
+
 ### In GitHub Actions
 
 The action starts the twin from its own checkout and exports `PARITY_TWIN_URL`:
