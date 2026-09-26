@@ -379,6 +379,22 @@ test("runCorpus: headersFor(seq) goes on every step of that sequence, is recorde
   assert.equal(seen.filter((x) => x.headers["parity-now"] === "5").length, 2);
 });
 
+test("runCorpus: maxGets halts the run when the read budget is spent; the halted GET is never sent, the rest is recorded as not sent", async () => {
+  seen.length = 0;
+  const steps: Step[] = [
+    { method: "GET", path: `/v1/customers/${CUS}` },
+    { method: "POST", path: "/v1/customers" },
+    { method: "GET", path: `/v1/subscriptions/${SUB}` },
+  ];
+  const { recordings, summary } = await runCorpus([seq(steps, "a#1"), seq(steps, "a#2")], local, { concurrency: 1, runId: "r", maxGets: 3 });
+  const reason = "run halted: the read budget allowed 3 more sandbox GETs and they are spent (decision 0001 C2/R7)";
+  assert.equal(summary.aborted, reason);
+  assert.equal(summary.gets, 3);
+  assert.equal(seen.filter((r) => r.method === "GET").length, 3, "no fourth GET reached the server");
+  assert.deepEqual(recordings.map((r) => r.steps.map((s) => s.status)), [[200, 200, 200], [200, 200, 0]]);
+  assert.ok(recordings.every((r) => r.eventsError === `not collected: ${reason}`), "no event sweep past the budget");
+});
+
 test("runCorpus: circuit breaker aborts after 10 consecutive steps ending 429; rest recorded as not sent, no sweep", { timeout: 30_000 }, async () => {
   seen.length = 0;
   limited = true;

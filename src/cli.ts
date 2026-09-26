@@ -246,6 +246,8 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
       concurrency: o.concurrency,
       runId: o.runId,
       headersFor: o.headersFor,
+      // The run halts when the rolling GETs reach the budget (decision 0001 R7), not only when the projection says so.
+      maxGets: sandbox ? Math.max(0, budget - rollingGets(readLedger(ledger), new Date().toISOString())) : undefined,
       onRecord: () => {
         stepsEnd = performance.now();
         if (++done % 10 === 0) console.log(`  ${done}/${part.length} sequences`);

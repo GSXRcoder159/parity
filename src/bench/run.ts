@@ -62,14 +62,18 @@ export function resolveRefs(value: unknown, bound: Record<string, unknown>, runN
   return value;
 }
 
-/** Token bucket (capacity = rps); one instance is shared by all concurrent sequences of a target. */
+/**
+ * Evenly spaced requests at `rps` (a token bucket of capacity 1); one instance is shared by all concurrent sequences of a
+ * target. No burst: a bucket of capacity rps allowed nearly 2 x rps in the first second after an idle spell, and
+ * decision 0001 C2's 20 req/s is a hard cap.
+ */
 export function createLimiter(rps: number): () => Promise<void> {
-  let tokens = rps;
+  let tokens = 1;
   let last = performance.now();
   return async () => {
     for (;;) {
       const now = performance.now();
-      tokens = Math.min(rps, tokens + ((now - last) * rps) / 1000);
+      tokens = Math.min(1, tokens + ((now - last) * rps) / 1000);
       last = now;
       if (tokens >= 1) {
         tokens--;
@@ -102,11 +106,15 @@ export interface RunSummary {
 const newSummary = (): RunSummary => ({ requests: 0, gets: 0, posts: 0, deletes: 0, eventSweepGets: 0, retries429: 0, eventOverlaps: 0 });
 const COUNTER = { GET: "gets", POST: "posts", DELETE: "deletes" } as const;
 
-/** Shared by reference across a corpus's workers. `streak429` = consecutive answered steps that ended 429. */
+/**
+ * Shared by reference across a corpus's workers. `streak429` = consecutive answered steps that ended 429. `maxGets`: the
+ * GETs this run may still send (the rolling read budget left); reaching it halts the run like the circuit breaker.
+ */
 interface Io {
   take: () => Promise<void>;
   stats: RunSummary;
   streak429: number;
+  maxGets?: number;
 }
 
 /** One HTTP call through the limiter; 429s retried up to 3 times (1 s, 2 s, 4 s). `ms` = final attempt. */
@@ -116,6 +124,12 @@ async function send(io: Io, target: Target, method: Method, path: string, form: 
   for (const [k, v] of Object.entries(stepHeaders)) headers.set(k, String(v));
   const url = target.baseUrl + path + (method !== "POST" && form ? `?${form}` : "");
   for (let retries = 0; ; retries++) {
+    // Decision 0001 R7: the run halts when the read budget is reached, whatever the projection said (429 retries and
+    // event pages can exceed it). The halted request is never sent.
+    if (method === "GET" && io.maxGets !== undefined && io.stats.gets >= io.maxGets) {
+      io.stats.aborted ??= `run halted: the read budget allowed ${io.maxGets} more sandbox GETs and they are spent (decision 0001 C2/R7)`;
+      throw new Error(`not sent: ${io.stats.aborted}`);
+    }
     await io.take();
     // Counted per attempt, before fetch: a transport failure still counts (conservative for the read budget).
     io.stats.requests++;
@@ -287,9 +301,9 @@ async function sweepEvents(io: Io, target: Target, sinceSec: number, capMs: numb
 export async function runCorpus(
   seqs: Sequence[],
   target: Target,
-  opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void; headersFor?: (seq: Sequence) => Record<string, string> },
+  opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void; headersFor?: (seq: Sequence) => Record<string, string>; maxGets?: number },
 ): Promise<{ recordings: Recording[]; summary: RunSummary }> {
-  const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary(), streak429: 0 };
+  const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary(), streak429: 0, maxGets: opts.maxGets };
   // A target answering as of Parity-Now (the twin) stamps events with it: the sweep starts at the earliest one, not wall clock.
   const nows = seqs.map((s) => Number(opts.headersFor?.(s)["Parity-Now"])).filter(Number.isFinite);
   const startSec = nows.length ? Math.min(...nows) : Math.floor(Date.now() / 1000);
