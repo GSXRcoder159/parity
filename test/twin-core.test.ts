@@ -361,6 +361,10 @@ test("expand: single path, list data. path, nested, too deep, invalid", () => {
   const withHash = { ...cus, invoice_settings: { default_payment_method: pm.id }, latest_invoice: "in_1A2b3C4d5E6f7G8h9I0j1K2l" };
   for (const p of ["id", "latest_invoice", "invoice_settings", "data"]) assert.equal(errorOf(() => expand(withHash, [p], get)).key, "expand_invalid", p);
   assert.deepEqual((expand(withHash, ["invoice_settings.default_payment_method"], get) as Obj).invoice_settings.default_payment_method, pm);
+  // A list of ids (`discounts`) expands each element; `[]` stays `[]`; one unknown id fails the path.
+  assert.deepEqual((expand({ ...cus, discounts: [] }, ["discounts"], get) as Obj).discounts, []);
+  assert.deepEqual((expand({ ...cus, discounts: [pm.id, cus.id] }, ["discounts"], get) as Obj).discounts, [pm, cus]);
+  assert.equal(errorOf(() => expand({ ...cus, discounts: [pm.id, "di_1A2b3C4d5E6f7G8h"] }, ["discounts"], get)).key, "expand_invalid");
   // A path given twice, or a prefix of another path in either order, expands once.
   assert.deepEqual(expand(cus, ["default_payment_method", "default_payment_method"], get), one);
   assert.deepEqual(expand(page, ["data.customer.default_payment_method", "data.customer"], get), out);

@@ -24,11 +24,10 @@ function walk(node: unknown, [seg, ...rest]: string[], get: (id: string) => Obj 
   if (Array.isArray(node)) return node.forEach((x) => walk(x, [seg!, ...rest], get));
   const o = node as Obj;
   if (seg === "id" || !Object.hasOwn(o, seg!)) fail("expand_invalid");
+  const resolve = (id: string) => structuredClone(get(id) ?? fail("expand_invalid"));
   let v = o[seg!];
-  if (typeof v === "string") {
-    const found = get(v);
-    if (!found) fail("expand_invalid");
-    v = o[seg!] = structuredClone(found);
-  } else if (v !== null && (typeof v !== "object" || rest.length === 0)) fail("expand_invalid"); // a scalar, or a hash/list as the expanded field
+  if (typeof v === "string") v = o[seg!] = resolve(v);
+  else if (Array.isArray(v) && v.every((x) => typeof x === "string")) v = o[seg!] = v.map(resolve); // a list of ids (e.g. `discounts`); `[]` stays `[]`
+  else if (v !== null && (typeof v !== "object" || rest.length === 0)) fail("expand_invalid"); // a scalar, or a hash/list of hashes as the expanded field
   if (rest.length > 0 && v !== null) walk(v, rest, get);
 }
