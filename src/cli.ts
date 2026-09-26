@@ -45,8 +45,8 @@ const USAGE = `usage:
     report goes to stdout, --json writes the results and score, --recordings the twin's recordings.
   align: score-twin on <dataDir>/oracle.jsonl, triage every divergence to a locus, propose mechanical data-file edits
     (src/twin/shapes/*.json, src/twin/errors.json) from train sequences only, and gate them in a temp copy of the repo
-    (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, appends
-    them to the sealed log <dataDir>/align/log.jsonl and commits them. --max-batches: gate only the first N per-file batches.
+    (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, commits
+    them, then appends them to the sealed log <dataDir>/align/log.jsonl. --max-batches: gate only the first N per-file batches.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
