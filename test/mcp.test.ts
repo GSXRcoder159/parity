@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const CLI = join(import.meta.dirname, "../src/cli.ts");
+const VERSION = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8")).version;
 
 test("mcp: initialize, list, call create/retrieve/reset over stdio JSON-RPC", async (t) => {
   // A fresh cwd: no .env is loaded.
@@ -35,7 +36,7 @@ test("mcp: initialize, list, call create/retrieve/reset over stdio JSON-RPC", as
   };
 
   const init = await rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "0" } });
-  assert.deepEqual(init.result, { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "parity-twin", version: "0.0.1" } });
+  assert.deepEqual(init.result, { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "parity-twin", version: VERSION } });
   assert.equal((await rpc("initialize", { protocolVersion: "2099-01-01" })).result.protocolVersion, "2025-11-25");
   send({ method: "notifications/initialized" }); // no reply: the next line answers the next request
 
