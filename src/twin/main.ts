@@ -30,9 +30,9 @@ export async function main(argv: string[]): Promise<number> {
     console.error(`parity twin: ${(e as Error).message}`); // e.g. listen EADDRINUSE: address already in use 127.0.0.1:12111
     return 1;
   }
-  console.log(`parity twin listening on http://${host}:${(server.address() as AddressInfo).port} (API ${API_VERSION})`);
-
-  await new Promise<void>((resolve) => {
+  // The handlers go in before the "listening" line: a supervisor that signals as soon as it reads the line must reach
+  // the drain, not Node's default (die by the signal).
+  const stopped = new Promise<void>((resolve) => {
     const stop = () => {
       process.off("SIGINT", stop).off("SIGTERM", stop);
       // Stops accepting and closes idle keep-alive sockets; requests in flight finish (and close their socket).
@@ -41,6 +41,8 @@ export async function main(argv: string[]): Promise<number> {
     };
     process.on("SIGINT", stop).on("SIGTERM", stop);
   });
+  console.log(`parity twin listening on http://${host}:${(server.address() as AddressInfo).port} (API ${API_VERSION})`);
+  await stopped;
   return 0;
 }
 
