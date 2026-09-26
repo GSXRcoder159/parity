@@ -181,7 +181,7 @@ test("llm agent: a 529 is retried twice; a third errors that task only; the run 
   }
 });
 
-test("sandbox half: setup, tools and checks all go through the metered proxy (fake upstream); both halves agree", async () => {
+test("sandbox half: setup, tools and checks all go through the metered proxy (fake upstream); twin, control and sandbox agree", async () => {
   const upstream = await createTwin().listen(0);
   const dir = tmp();
   mkdirSync(join(dir, "budget"));
@@ -190,13 +190,15 @@ test("sandbox half: setup, tools and checks all go through the metered proxy (fa
   try {
     const sandbox = { name: "sandbox", baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, apiKey: "unused", rps: 1000 };
     const three = ["refund-full", "cancel-now", "upgrade-bill-now"].map(task);
-    const r = await runH4({ tasks: three, runs: ["twin", "sandbox"], agent: "scripted", sandbox, log: quiet });
-    assert.deepEqual(r.tasks.map((t) => t.outcomes), three.map(() => ({ twin: "pass", sandbox: "pass" })));
-    assert.deepEqual([r.agreement!.k, r.agreement!.n, r.verdict], [3, 3, "confirm (>=95%)"]);
+    const r = await runH4({ tasks: three, runs: ["twin", "control", "sandbox"], agent: "scripted", sandbox, log: quiet });
+    assert.deepEqual(r.tasks.map((t) => t.outcomes), three.map(() => ({ twin: "pass", control: "pass", sandbox: "pass" })));
+    assert.deepEqual([r.agreement!.k, r.agreement!.n, r.control!.k, r.control!.n, r.verdict], [3, 3, 3, 3, "confirm (>=95%)"]);
+    assert.match(h4Text(r), /Control \(twin vs a second twin run.*\): 100\.0% \(3\/3;.*noise floor 0\.0%/);
     const [preflight, row] = readLedger(join(dir, "budget/reads.jsonl"));
     assert.deepEqual([preflight!.gets, preflight!.posts, preflight!.deletes], [1, 0, 0]);
     // GETs: each task's setup lists its payment intents, then 2 check reads. POSTs: setups 4 + 4 + 5, the refund and
-    // the update. DELETE: the cancel. Nothing reached the upstream except through the proxy's counter.
+    // the update. DELETE: the cancel. Nothing reached the upstream except through the proxy's counter; the control run
+    // is a twin run and adds nothing here.
     assert.deepEqual([row!.gets, row!.posts, row!.deletes], [3 * 3, 13 + 2, 1]);
   } finally {
     restore();
@@ -269,30 +271,43 @@ test("sandbox half: a key the sandbox refuses (401, the state until B1) stops th
   }
 });
 
-test("agreement: same outcome on both targets; >=95% confirms, <90% stops; the report holds ids and outcomes only", () => {
-  assert.equal(verdict(null), "n/a: H4 needs both the twin and the sandbox runs");
-  assert.equal(verdict(wilson(19, 20)), "confirm (>=95%)");
-  assert.equal(verdict(wilson(18, 20)), "inconclusive (90-95%)");
-  assert.equal(verdict(wilson(17, 20)), "stop (<90%): fix before any pricing conversation");
-  assert.match(verdict(wilson(19, 19), 1), /^none: 1 task\(s\) errored/); // H4 is over the whole suite
+test("agreement: same outcome on twin and sandbox, beside the twin-vs-control floor; >=95% confirms, <90% stops; the report holds ids and outcomes only", () => {
+  const floor = wilson(20, 20);
+  assert.equal(verdict(null, null), "n/a: H4 needs both the twin and the sandbox runs");
+  assert.equal(verdict(wilson(19, 20), floor), "confirm (>=95%)");
+  assert.equal(verdict(wilson(18, 20), floor), "inconclusive (90-95%)");
+  assert.equal(verdict(wilson(17, 20), floor), "stop (<90%): fix before any pricing conversation");
+  assert.match(verdict(wilson(19, 19), floor, 1), /^none: 1 task\(s\) errored/); // H4 is over the whole suite
+  assert.match(verdict(wilson(20, 20), null), /^none: no control run \(a second twin run\), so the agreement has no noise floor/);
 
   const res = (outcome: TaskResult["outcome"]): TaskResult => ({ outcome, why: "check 0: expected 2000, got 1500" });
   const tasks = TASKS.slice(0, 3);
+  const [t0, t1, t2] = tasks.map((t) => t.id) as [string, string, string];
   const results = new Map([
-    ["twin", new Map([[tasks[0]!.id, res("pass")], [tasks[1]!.id, res("fail")], [tasks[2]!.id, res("fail")]])],
-    ["sandbox", new Map([[tasks[0]!.id, res("pass")], [tasks[1]!.id, res("fail")], [tasks[2]!.id, res("error")]])],
+    ["twin", new Map([[t0, res("pass")], [t1, res("fail")], [t2, res("fail")]])],
+    ["control", new Map([[t0, res("pass")], [t1, res("pass")], [t2, res("fail")]])],
+    ["sandbox", new Map([[t0, res("pass")], [t1, res("fail")], [t2, res("error")]])],
   ]);
-  const r = report({ tasks, runs: ["twin", "sandbox"], results, agent: "scripted", costUsd: 0 });
-  // An error is not an outcome: the errored task leaves k/n, and there is no verdict until it is measured.
-  assert.deepEqual([r.agreement!.k, r.agreement!.n], [2, 2]);
+  const runs = ["twin", "control", "sandbox"] as const;
+  const r = report({ tasks, runs: [...runs], results, agent: "scripted", costUsd: 0 });
+  // An error is not an outcome: the errored task leaves the twin-vs-sandbox k/n (not the control's, where it was
+  // measured), and there is no verdict until it is measured.
+  assert.deepEqual([r.agreement!.k, r.agreement!.n, r.control!.k, r.control!.n], [2, 2, 2, 3]);
   assert.match(r.verdict, /^none: 1 task\(s\) errored/);
   const text = h4Text(r);
   assert.match(text, /\*\*Agreement: 100\.0%\*\* \(2\/2 measured tasks.*→ none: 1 task/);
-  assert.match(text, /## Disagreeing tasks \(0\)\n\nnone/);
-  assert.match(text, new RegExp(`## Not measured: an error on some target \\(1\\)\\n\\n- ${tasks[2]!.id}: twin fail, sandbox error`));
+  assert.match(text, /Control .*: 66\.7% \(2\/3;.*noise floor 33\.3%/);
+  assert.match(text, /## Disagreeing tasks: twin vs sandbox \(0\)\n\nnone/);
+  assert.match(text, new RegExp(`## Agent variance: twin vs control \\(1\\)\\n\\n- ${t1}: twin fail, control pass, sandbox fail\\n`));
+  assert.match(text, new RegExp(`## Not measured: an error on some target \\(1\\)\\n\\n- ${t2}: twin fail, control fail, sandbox error`));
+  // Measured everywhere: the verdict reads the twin-vs-sandbox agreement, and only with the control run beside it.
+  results.get("sandbox")!.set(t2, res("fail"));
+  assert.equal(report({ tasks, runs: [...runs], results, agent: "scripted", costUsd: 0 }).verdict, "confirm (>=95%)");
+  assert.match(report({ tasks, runs: ["twin", "sandbox"], results, agent: "scripted", costUsd: 0 }).verdict, /^none: no control run/);
   // Errors on every task: nothing measured, no agreement.
   const allErr = new Map([...results].map(([run, m]) => [run, new Map([...m].map(([id]) => [id, res("error")]))]));
-  assert.equal(report({ tasks, runs: ["twin", "sandbox"], results: allErr, agent: "scripted", costUsd: 0 }).agreement, null);
+  const none = report({ tasks, runs: [...runs], results: allErr, agent: "scripted", costUsd: 0 });
+  assert.deepEqual([none.agreement, none.control], [null, null]);
   assert.doesNotMatch(JSON.stringify(r) + text, /expected 2000/);
 });
 
@@ -302,7 +317,7 @@ test("CLI: bad flags exit 2; --agent llm without a key exits 1 and says there ar
   const run = (args: string[]) => spawnSync(process.execPath, [RUN, ...args], { cwd, encoding: "utf8", env });
   const bad = run(["--runs", "twin,mock"]);
   assert.equal(bad.status, 2);
-  assert.match(bad.stderr, /--runs must be twin, sandbox or both/);
+  assert.match(bad.stderr, /--runs must be some of twin, control, sandbox/);
   const noKey = run(["--runs", "twin"]);
   assert.equal(noKey.status, 1);
   assert.match(noKey.stderr, /h4: ANTHROPIC_API_KEY is not set: no live LLM runs/);

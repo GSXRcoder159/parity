@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // H4 sim-to-real (plan §6.4, the fallback when no partner suite exists): the 20 refund/cancel/proration tasks in
-// tasks.json, each run once on the twin and once on the sandbox by an agent that uses the pinned Python agent toolkit
-// (toolkit.py) against that target. Reports per-task pass/fail on each, their agreement (the H4 number), the model and
-// the LLM cost. The report holds task ids and outcomes only, never a response body (decision 0001 C3).
+// tasks.json, each run once on the twin, once more on a fresh twin (the control) and once on the sandbox by an agent that
+// uses the pinned Python agent toolkit (toolkit.py) against that target. Reports per-task pass/fail on each, the
+// twin-vs-sandbox agreement (the H4 number) with the twin-vs-control agreement as its noise floor, the model and the LLM
+// cost. The report holds task ids and outcomes only, never a response body (decision 0001 C3).
 // ponytail: an agent run, not a gym framework: tasks run one after another, one attempt each, no retries or best-of-3.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -48,6 +49,8 @@ export interface Task {
 }
 /** error = not measured: the setup failed, or the harness or an LLM call threw (the agent's verdict is unknown). */
 export type Outcome = "pass" | "fail" | "error";
+/** control = a second, independent twin run with the same agent: twin vs control is the agent's own agreement. */
+export type Run = "twin" | "control" | "sandbox";
 export interface TaskResult {
   outcome: Outcome;
   /** Model calls the LLM agent made (absent for the scripted agent). */
@@ -59,12 +62,15 @@ export interface H4Report {
   date: string;
   agent: "scripted" | "llm";
   model: string | null;
-  runs: string[];
+  runs: Run[];
   tasks: { id: string; stratum: Stratum; outcomes: Record<string, Outcome>; turns?: Record<string, number> }[];
-  /** Tasks with the same outcome on every target, among the tasks with no error on any target; null with a single
-   * target or when no task was measured. */
+  /** Twin vs sandbox (the H4 number): tasks with the same outcome on both, among the tasks with no error on either;
+   * null without both runs or when no task was measured. */
   agreement: Wilson | null;
-  /** None while any task errored on some target: H4 is defined over the whole suite. */
+  /** Twin vs control, likewise: the agent's own run-to-run agreement, H4's noise ceiling (floor = 1 - it). */
+  control: Wilson | null;
+  /** None while any task errored on some run (H4 is defined over the whole suite) or without the control run (no
+   * score without its floor). */
   verdict: string;
   costUsd: number;
   /** Why the run stopped before every task ran (an LLM cap, a dead bridge); the rest are `error` ("not run"). */
@@ -200,25 +206,30 @@ async function runTask(task: Task, t: Target, act: (instruction: string, r: (v: 
   return { outcome: "pass", turns };
 }
 
-export function verdict(a: Wilson | null, errored = 0): string {
+export function verdict(a: Wilson | null, control: Wilson | null, errored = 0): string {
   if (errored) return `none: ${errored} task(s) errored on some target, so they were not measured; fix and re-run for the H4 number`;
   if (!a) return "n/a: H4 needs both the twin and the sandbox runs";
+  if (!control) return "none: no control run (a second twin run), so the agreement has no noise floor; add control to --runs";
   if (a.p >= 0.95) return "confirm (>=95%)";
   if (a.p < 0.9) return "stop (<90%): fix before any pricing conversation";
   return "inconclusive (90-95%)";
 }
 
-/** Outcomes of every task on every run -> the report (agreement = the same outcome on every target, over the tasks
- * with no error on any target). */
-export function report(o: { tasks: Task[]; runs: string[]; results: Map<string, Map<string, TaskResult>>; agent: "scripted" | "llm"; costUsd: number; stopped?: string }): H4Report {
+/** Outcomes of every task on every run -> the report (an agreement = the same outcome on both runs of a pair, over the
+ * tasks with no error on either). */
+export function report(o: { tasks: Task[]; runs: Run[]; results: Map<string, Map<string, TaskResult>>; agent: "scripted" | "llm"; costUsd: number; stopped?: string }): H4Report {
   const tasks = o.tasks.map((t) => {
     const rs = o.runs.map((run): [string, TaskResult] => [run, o.results.get(run)!.get(t.id)!]);
     const turns = rs.filter(([, x]) => x.turns !== undefined).map(([run, x]) => [run, x.turns!]);
     return { id: t.id, stratum: t.stratum, outcomes: Object.fromEntries(rs.map(([run, x]) => [run, x.outcome])), ...(turns.length ? { turns: Object.fromEntries(turns) } : {}) };
   });
-  const measured = tasks.filter((t) => !Object.values(t.outcomes).includes("error"));
-  const agreeing = measured.filter((t) => new Set(Object.values(t.outcomes)).size === 1).length;
-  const agreement = o.runs.length > 1 && measured.length ? wilson(agreeing, measured.length) : null;
+  const pair = (x: Run, y: Run): Wilson | null => {
+    const m = o.runs.includes(x) && o.runs.includes(y) ? tasks.filter((t) => t.outcomes[x] !== "error" && t.outcomes[y] !== "error") : [];
+    return m.length ? wilson(m.filter((t) => t.outcomes[x] === t.outcomes[y]).length, m.length) : null;
+  };
+  const agreement = pair("twin", "sandbox");
+  const control = pair("twin", "control");
+  const errored = tasks.filter((t) => Object.values(t.outcomes).includes("error")).length;
   return {
     date: new Date().toISOString().slice(0, 10),
     agent: o.agent,
@@ -226,21 +237,22 @@ export function report(o: { tasks: Task[]; runs: string[]; results: Map<string, 
     runs: o.runs,
     tasks,
     agreement,
-    verdict: o.runs.length > 1 ? verdict(agreement, tasks.length - measured.length) : verdict(null),
+    control,
+    verdict: o.runs.includes("twin") && o.runs.includes("sandbox") ? verdict(agreement, control, errored) : verdict(null, null),
     costUsd: o.costUsd,
     ...(o.stopped ? { stopped: o.stopped } : {}),
   };
 }
 
 /**
- * Runs `tasks` on each of `runs` in order: twin = an in-process twin on an ephemeral port; sandbox = STRIPE_API_KEY
- * through agree's metered proxy (refused at the read budget; halted at the budget or after 10 consecutive 429s, and a
- * halted run throws Refused: no report). Setup, tools and checks of the sandbox run all go through the proxy, after one
+ * Runs `tasks` on each of `runs` in order: twin and control = each a fresh in-process twin on an ephemeral port;
+ * sandbox = STRIPE_API_KEY through agree's metered proxy (refused at the read budget; halted at the budget or after 10
+ * consecutive 429s, and a halted run throws Refused: no report). Setup, tools and checks of the sandbox run all go through the proxy, after one
  * preflight GET (also through a proxy) that refuses the run before anything else when the sandbox does not answer 200.
  * A task that throws is recorded as `error` and the run goes on; an LLM cap refusal or a dead bridge stops the run and
  * the rest are `error` ("not run"): either way the report covers what ran. `sandbox` replaces the sandbox upstream (tests only).
  */
-export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; agent: "scripted" | "llm"; capUsd?: number; ledger?: string; sandbox?: Target; log?: (line: string) => void }): Promise<H4Report> {
+export async function runH4(o: { tasks: Task[]; runs: Run[]; agent: "scripted" | "llm"; capUsd?: number; ledger?: string; sandbox?: Target; log?: (line: string) => void }): Promise<H4Report> {
   const log = o.log ?? ((l: string) => console.error(l));
   if (o.agent === "llm" && !process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set: no live LLM runs (--agent scripted validates the harness without one)");
   const key = process.env.STRIPE_API_KEY;
@@ -334,11 +346,13 @@ export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; ag
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 
 export function h4Text(r: H4Report): string {
-  const a = r.agreement;
+  const [a, c] = [r.agreement, r.control];
   const count = (run: string, x: Outcome) => r.tasks.filter((t) => t.outcomes[run] === x).length;
   const errored = r.tasks.filter((t) => Object.values(t.outcomes).includes("error"));
-  const disagreeing = r.tasks.filter((t) => !errored.includes(t) && new Set(Object.values(t.outcomes)).size > 1);
+  // Measured like the pair's agreement: an error on either run of the pair leaves the task out.
+  const differ = (x: Run, y: Run) => r.tasks.filter((t) => t.outcomes[x] !== t.outcomes[y] && t.outcomes[x] !== "error" && t.outcomes[y] !== "error");
   const row = (t: H4Report["tasks"][number]) => `- ${t.id}: ${r.runs.map((run) => `${run} ${t.outcomes[run]}`).join(", ")}`;
+  const section = (title: string, ts: H4Report["tasks"]) => ["", `## ${title} (${ts.length})`, "", ...(ts.length ? ts.map(row) : ["none"])];
   return [
     `# H4 sim-to-real: ${r.runs.join(" vs ")}`,
     "",
@@ -348,7 +362,9 @@ export function h4Text(r: H4Report): string {
     ...(r.stopped ? ["", `**Stopped early:** ${r.stopped}`] : []),
     "",
     a ? `**Agreement: ${pct(a.p)}** (${a.k}/${a.n} measured tasks; 95% Wilson CI ${pct(a.lo)}–${pct(a.hi)}) → ${r.verdict}` : `Agreement: ${r.verdict}`,
-    ...(a ? ["", `## Disagreeing tasks (${disagreeing.length})`, "", ...(disagreeing.length ? disagreeing.map(row) : ["none"])] : []),
+    ...(c ? ["", `Control (twin vs a second twin run: the agent's own agreement, H4's noise ceiling): ${pct(c.p)} (${c.k}/${c.n}; 95% Wilson CI ${pct(c.lo)}–${pct(c.hi)}); noise floor ${pct(1 - c.p)}`] : []),
+    ...(a ? section("Disagreeing tasks: twin vs sandbox", differ("twin", "sandbox")) : []),
+    ...(c ? section("Agent variance: twin vs control", differ("twin", "control")) : []),
     ...(errored.length ? ["", `## Not measured: an error on some target (${errored.length})`, "", ...errored.map(row)] : []),
     "",
     "## Tasks",
@@ -359,19 +375,19 @@ export function h4Text(r: H4Report): string {
   ].join("\n");
 }
 
-const USAGE = "usage: node evals/h4/run.ts [--runs twin,sandbox] [--agent llm|scripted] [--cap-usd 10] [--out reports/<name>]";
+const USAGE = "usage: node evals/h4/run.ts [--runs twin,control,sandbox] [--agent llm|scripted] [--cap-usd 10] [--out reports/<name>]";
 
 async function main(argv: string[]): Promise<number> {
   if (existsSync(".env")) process.loadEnvFile(".env");
-  let runs: ("twin" | "sandbox")[];
+  let runs: Run[];
   let agent: "scripted" | "llm";
   let cap: number;
   let out: string | undefined;
   try {
     const { values } = parseArgs({ args: argv, options: { runs: { type: "string" }, agent: { type: "string" }, "cap-usd": { type: "string" }, out: { type: "string" } } });
-    const r = (values.runs ?? "twin,sandbox").split(",");
-    if (r.some((x) => x !== "twin" && x !== "sandbox") || new Set(r).size !== r.length) throw new Error(`--runs must be twin, sandbox or both, got "${values.runs}"`);
-    runs = r as ("twin" | "sandbox")[];
+    const r = (values.runs ?? "twin,control,sandbox").split(",");
+    if (r.some((x) => !["twin", "control", "sandbox"].includes(x)) || new Set(r).size !== r.length) throw new Error(`--runs must be some of twin, control, sandbox, got "${values.runs}"`);
+    runs = r as Run[];
     const ag = values.agent ?? "llm";
     if (ag !== "llm" && ag !== "scripted") throw new Error(`--agent must be llm or scripted, got "${ag}"`);
     agent = ag;
