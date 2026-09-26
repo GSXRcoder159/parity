@@ -1,5 +1,5 @@
 // Minimal Anthropic Messages API client over fetch (the idea of Slim's src/generate/llm.ts), with a cost ledger:
-// every call's tokens and cost_usd go to budget/llm.jsonl, and a call is refused before it is sent when today's (UTC)
+// every call's tokens and cost_usd go to <dataDir>/budget/llm.jsonl, and a call is refused before it is sent when today's (UTC)
 // spend plus its worst-case estimate would pass the daily cap (plan §9: $15/day; PARITY_LLM_CAP_USD may only lower it).
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";

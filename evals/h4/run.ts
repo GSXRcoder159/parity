@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { meteredProxy } from "../../src/agree.ts";
@@ -22,10 +22,10 @@ import { budgetRefusal, newRunId, readsLedger, Refused } from "../../src/cli.ts"
 import type { Sequence, Step, Stratum } from "../../src/types.ts";
 
 const HERE = import.meta.dirname;
-const REPO_ROOT = resolve(HERE, "../..");
 const TASKS = join(HERE, "tasks.json");
 const TOOLKIT = join(HERE, "toolkit.py");
-const LLM_LEDGER = join(REPO_ROOT, "budget/llm.jsonl");
+/** The LLM ledger the assisted pass also writes (<dataDir>/budget/llm.jsonl): the daily cap counts both. */
+const llmLedger = (): string => join(dataDir(), "budget/llm.jsonl");
 export const MAX_TURNS = 12;
 /** Plan W4 budget for all of H4's LLM spend, over every ledger entry with purpose "h4". */
 const H4_CAP_USD = 50;
@@ -103,7 +103,8 @@ interface Bridge {
 
 /** toolkit.py under `uv run --locked --script` (toolkit.py.lock) with STRIPE_API_BASE = the target: one JSON line per call. */
 async function startBridge(t: Target): Promise<Bridge> {
-  const { ANTHROPIC_API_KEY: _, ...env } = process.env; // the tools never need the model's key
+  // The third-party toolkit gets what uv needs and the target, nothing else: no model key, GitHub or data-repo token.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE"].includes(k) || /^(UV|XDG)_/.test(k)));
   const child = spawn("uv", ["run", "--quiet", "--locked", "--script", TOOLKIT], {
     stdio: ["pipe", "pipe", "inherit"],
     env: { ...env, STRIPE_API_BASE: t.baseUrl, STRIPE_API_KEY: t.apiKey },
@@ -272,7 +273,7 @@ export async function runH4(o: { tasks: Task[]; runs: Run[]; agent: "scripted" |
     const m = await proxy.close();
     if (probe.status !== 200) throw new Refused(`sandbox preflight GET /v1/customers -> ${probe.error ?? probe.status}${m.aborted ? ` (${m.aborted})` : ""}: nothing ran (a refused key waits for B1)`);
   }
-  const llm: LlmOpts = { ledger: o.ledger ?? LLM_LEDGER, runId, capUsd: o.capUsd ?? 10, spent: { usd: 0 } };
+  const llm: LlmOpts = { ledger: o.ledger ?? llmLedger(), runId, capUsd: o.capUsd ?? 10, spent: { usd: 0 } };
   const results = new Map<string, Map<string, TaskResult>>();
   let stopped: string | undefined;
   for (const run of o.runs) {

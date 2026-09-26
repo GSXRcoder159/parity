@@ -175,7 +175,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     .replace("      return { body: c, emits: [{ type: \"customer.created\", object: c }] };", "      c.description = c.name;\n      return { body: c, emits: [{ type: \"customer.created\", object: c }] };")
     .replace("const after = assign(structuredClone(before), params, FIELDS);", "const after = assign(structuredClone(before), params, FIELDS);\n      after.description = after.name;");
   assert.notEqual(fixed, original);
-  const replies = [`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${original}// a comment changes nothing\n\`\`\`\n`];
+  const replies = [`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${original}// a comment changes nothing\n\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`];
   const api = await fakeApi((n) => message(replies[n]!));
   const gh: string[][] = [];
   const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/7") : sh(cmd, args, cwd));
@@ -212,7 +212,8 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     }
     assert.ok(!gh.flat().includes("merge"), "never merges");
     assert.equal(git("rev-parse", "HEAD"), head, "the main working tree stays on HEAD");
-    assert.equal(git("status", "--porcelain"), "?? budget/", "only the LLM ledger is new");
+    assert.equal(git("status", "--porcelain"), "", "the repo is untouched: the LLM ledger is in the data dir");
+    assert.equal(readLlmLedger(join(data, "budget/llm.jsonl")).length, 1);
     assert.equal(git("worktree", "list").split("\n").length, 1, "the worktree is removed");
     assert.equal(git("diff", "--name-only", head, "align/assisted-2026-09-26-1"), FILE);
     assert.equal(git("show", `align/assisted-2026-09-26-1:${FILE}`) + "\n", fixed);
@@ -225,7 +226,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.deepEqual([bad.outcomes[0]!.result, bad.outcomes[0]!.gate?.after.trainDivergences], ["gate-failed", plan.baseline.trainDivergences]);
     assert.equal(gh.length, 1, "no PR when the gate fails");
     assert.equal(git("branch", "--list", "align/*"), "align/assisted-2026-09-26-1");
-    assert.equal(readLlmLedger(join(repo, "budget/llm.jsonl")).length, 2);
+    assert.equal(readLlmLedger(join(data, "budget/llm.jsonl")).length, 2);
 
     // No key: skipped and logged, nothing sent.
     const none = await assist(plan, { repo, dataDir: data, runId: "assist-3", env: {}, run, now: NOW });
@@ -238,14 +239,27 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.match(capped.outcomes[0]!.detail!, /> cap \$0 /);
     assert.equal(api.requests.length, 2);
 
+    // gh refuses the PR (the repo does not let GitHub Actions create pull requests): pr-failed, and the branch it
+    // pushed is deleted again, on origin and here.
+    const refuse: Run = (cmd, args, cwd) => {
+      if (cmd === "gh") throw new Error("gh: GitHub Actions is not permitted to create or approve pull requests");
+      return sh(cmd, args, cwd);
+    };
+    const denied = await assist(plan, { repo, dataDir: data, runId: "assist-5", env, run: refuse, now: NOW });
+    assert.deepEqual([denied.outcomes[0]!.result, denied.outcomes[0]!.branch], ["pr-failed", undefined]);
+    assert.match(denied.outcomes[0]!.detail!, /not permitted to create/);
+    assert.doesNotMatch(git("ls-remote", "--heads", "origin"), /assisted-2026-09-26-2/);
+    assert.equal(git("branch", "--list", "align/*"), "align/assisted-2026-09-26-1");
+
     const log = readJsonl<LogEntry>(logPath(data));
-    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 5 });
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 6 });
     assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [
       ["patch", "assist-1", "assisted", "proposed"],
       ["note", "assist-1", undefined, undefined],
       ["note", "assist-2", undefined, undefined],
       ["note", "assist-3", undefined, undefined],
       ["note", "assist-4", undefined, undefined],
+      ["note", "assist-5", undefined, undefined],
     ]);
     assert.deepEqual([log[0]!.data.pr, log[0]!.data.branch, log[0]!.data.file], ["https://github.com/example/parity/pull/7", "align/assisted-2026-09-26-1", FILE]);
     assert.deepEqual((log[3]!.data.assist as { skipped?: string }).skipped, none.skipped);

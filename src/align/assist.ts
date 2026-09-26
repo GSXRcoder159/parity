@@ -164,16 +164,29 @@ function openDraftPr(repo: string, run: Run, date: string, file: string, content
   const tmp = mkdtempSync(join(tmpdir(), "parity-assist-wt-"));
   const wt = join(tmp, "wt");
   git("worktree", "add", "-q", "-b", branch, wt, "HEAD"); // the main working tree is never checked out elsewhere
+  let pushed = false;
+  let done = false;
   try {
     writeFileSync(join(wt, file), content);
     run("git", ["commit", "-q", "-m", msg, "--", file], wt);
     const commit = run("git", ["rev-parse", "HEAD"], wt);
     run("git", ["push", "-q", "-u", "origin", branch], wt);
+    pushed = true;
     const pr = run("gh", ["pr", "create", "--draft", "--head", branch, "--title", title, "--body", body], repo);
+    done = true;
     return { branch, commit, pr };
   } finally {
     git("worktree", "remove", "--force", wt);
     rmSync(tmp, { recursive: true, force: true });
+    // A proposal without its PR leaves no branch behind, here or on origin (e.g. the repo does not allow GitHub Actions
+    // to create pull requests: STATUS B2).
+    if (!done) {
+      for (const args of [...(pushed ? [["push", "-q", "origin", "--delete", branch]] : []), ["branch", "-q", "-D", branch]]) {
+        try {
+          git(...args);
+        } catch {}
+      }
+    }
   }
 }
 
@@ -232,7 +245,8 @@ export async function assist(
   const twin = new Map(r.twin.filter((x) => !x.heldOut).map((x) => [x.seq, x]));
   const model = env.PARITY_LLM_MODEL || DEFAULT_MODEL;
   const res: AssistResult = { model, cap: capUsd(env), clusters: all.length, cost_usd: 0, outcomes: [] };
-  const ledger = join(o.repo, "budget/llm.jsonl");
+  // In the data repo, like the read ledger: the nightly pushes it, so the daily cap survives a failed night and a rerun.
+  const ledger = join(o.dataDir, "budget/llm.jsonl");
   for (const c of all.slice(0, o.k ?? 3)) {
     const out: Outcome = { locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "no-owner", cost_usd: 0 };
     res.outcomes.push(out);
@@ -289,6 +303,7 @@ export async function assist(
       `- Before: ${split(g.before)}`,
       `- After: ${split(g.after)}`,
       "> This description holds normalized sandbox response values (decision 0001 C3): delete or scrub it before the repository becomes public.",
+      "> CI does not run on this PR when the nightly opened it with the workflow's GITHUB_TOKEN (GitHub starts no workflows for it), and the gate ran score-twin only: run `npx tsc -p tsconfig.json` and `node --test test/*.test.ts` before merging.",
       ce.text,
     ].join("\n\n");
     try {
