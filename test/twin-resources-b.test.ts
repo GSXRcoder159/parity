@@ -48,13 +48,14 @@ const ok = (n: number) => Array<string>(n).fill("200");
 // Event sets from the validation notes. The subscribed() prefix and a successful first payment:
 const PREFIX = ["customer.created", "payment_method.attached", "plan.created", "price.created", "product.created"];
 const PAID = ["charge.succeeded", "customer.subscription.created", "invoice.created", "invoice.finalized", "invoice.paid", "invoice.payment_succeeded", "payment_intent.created", "payment_intent.succeeded"];
+/** Whether the prefix set the default payment method on the customer (vs on the subscription). */
+const onCustomer = (steps: { method: string; path: string }[]) => steps.some((s) => s.method === "POST" && /^\/v1\/customers\/cus_/.test(s.path));
 /** Expected types: prefix + `extra` + one customer.updated per default-PM-on-customer step and `fromSub` from the subscription. */
 function expected(steps: { method: string; path: string }[], extra: string[], fromSub = 1): string[] {
   return [...PREFIX, ...extra, ...Array<string>(Number(onCustomer(steps)) + fromSub).fill("customer.updated")].sort();
 }
 /** The prefix's step count: customer, attach, (default PM on the customer), price, subscription. */
 const prefixLen = (steps: { method: string; path: string }[]) => steps.findIndex((s) => s.method === "POST" && s.path === "/v1/subscriptions") + 1;
-const onCustomer = (steps: { method: string; path: string }[]) => steps.some((s) => s.method === "POST" && /^\/v1\/customers\/cus_/.test(s.path));
 
 test("period math: calendar months with day clamping, years, weeks, days, interval_count", () => {
   const t = (iso: string) => Date.parse(iso) / 1000;
@@ -266,6 +267,8 @@ test("Jan 31 monthly subscription: item period ends Feb 28, cancel_at follows it
   const again = t.store.events.length;
   await call(t, "POST", `/v1/subscriptions/${sub.id}`, { cancel_at_period_end: true }, at); // no change, no event
   assert.equal(t.store.events.length, again);
+  const atCreate = (await call(t, "POST", "/v1/subscriptions", { customer: c.id, items: [{ price: price.id }], cancel_at_period_end: true, metadata: { m: "1" } }, at)).body;
+  assert.deepEqual([atCreate.cancel_at, atCreate.canceled_at, atCreate.cancellation_details.reason, atCreate.metadata], [end, Number(at["Parity-Now"]), "cancellation_requested", { m: "1" }]);
 });
 
 test("send_invoice: open invoice with a due date, no payment, active subscription", async () => {
