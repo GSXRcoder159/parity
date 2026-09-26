@@ -6,12 +6,12 @@ import { TEMPLATES } from "../templates/index.ts";
 const SEEDS = [1, 2, 3, 4, 5];
 const corpus = buildCorpus(TEMPLATES, SEEDS);
 
-test("catalog: 26 unique names, #7/#9/#12/#18/#21 held out", () => {
-  assert.equal(TEMPLATES.length, 26);
-  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 26);
+test("catalog: 30 unique names, #7/#9/#12/#18/#21/#28 held out", () => {
+  assert.equal(TEMPLATES.length, 30);
+  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 30);
   assert.deepEqual(
     TEMPLATES.filter((t) => t.heldOut).map((t) => t.name),
-    ["subscription-cancel-at-period-end", "refund-partial-then-rest", "invalid-params", "subscription-update-quantity", "boundaries-list-limits"],
+    ["subscription-cancel-at-period-end", "refund-partial-then-rest", "invalid-params", "subscription-update-quantity", "boundaries-list-limits", "clock-trial-end"],
   );
 });
 
@@ -58,6 +58,17 @@ test("refs are bound earlier, $run only in headers, list calls are scoped, email
       if (typeof query === "string" && query.includes("email:")) assert.match(query, / AND created>=\$c1\.created$/, `${where}: email search without created>=`);
       if (step.ref) bound.add(step.ref);
     }
+  }
+});
+
+test("clock templates: one clock, at most 3 customers on it, at most 2 advances (5 invoices a subscription), the clock deleted last", () => {
+  for (const s of corpus.filter((q) => q.stratum === "clocks")) {
+    const count = (f: (step: (typeof s.steps)[number]) => boolean) => s.steps.filter(f).length;
+    assert.equal(count((st) => st.method === "POST" && st.path === "/v1/test_helpers/test_clocks"), 1, s.id);
+    assert.ok(count((st) => st.method === "POST" && st.path === "/v1/customers") <= 3, s.id);
+    // Each advance spans at most two intervals: the first invoice plus two renewals per advance stays within 5.
+    assert.ok(count((st) => st.path.endsWith("/advance")) <= 2, s.id);
+    assert.deepEqual([s.steps.at(-1)!.method, s.steps.at(-1)!.path], ["DELETE", "/v1/test_helpers/test_clocks/$ck.id"], s.id);
   }
 });
 

@@ -1,4 +1,4 @@
-// Customers: create/retrieve/update/delete (tombstones), list, search.
+// Customers: create (on a test clock: at most 3 per clock, docs) / retrieve / update / delete (tombstones), list, search.
 import { list, search } from "../list.ts";
 import type { Route } from "../server.ts";
 import { assign, checkAttached, diff, isHash, live } from "../util.ts";
@@ -30,7 +30,9 @@ export const routes: Route[] = [
     /^\/v1\/customers$/,
     (ctx, { params }) => {
       checkAttached(ctx, defaultPm(params), undefined, DEFAULT_PM);
-      const c = assign(ctx.build("customer", { id: ctx.id("cus"), created: ctx.now() }), params, FIELDS);
+      const clock = params.test_clock ? (live(ctx, params.test_clock, "test_helpers.test_clock") ?? ctx.fail("resource_missing_400", { param: "test_clock" })) : undefined;
+      if (clock && ctx.all("customer").filter((c) => c.test_clock === clock.id).length >= 3) ctx.fail("test_clock_customer_limit");
+      const c = assign(ctx.build("customer", { id: ctx.id("cus"), created: ctx.now(), test_clock: clock?.id ?? null }), params, FIELDS);
       return { body: c, emits: [{ type: "customer.created", object: c }] };
     },
     "post /v1/customers",
@@ -38,8 +40,13 @@ export const routes: Route[] = [
   [
     "GET",
     /^\/v1\/customers$/,
+    // Docs: a test clock's customers are listed only with its `test_clock`, which lists only them.
     (ctx, { params }) => ({
-      body: list(ctx.all("customer").filter((c) => !params.email || c.email === params.email), params, "/v1/customers"),
+      body: list(
+        ctx.all("customer").filter((c) => (!params.email || c.email === params.email) && (c.test_clock ?? null) === (params.test_clock || null)),
+        params,
+        "/v1/customers",
+      ),
     }),
     "get /v1/customers",
   ],

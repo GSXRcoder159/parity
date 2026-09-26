@@ -154,6 +154,7 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
     lines: { data: lines, has_more: false, object: "list", total_count: lines.length, url: `/v1/invoices/${id}/lines` },
     parent: { quote_details: null, subscription_details: { metadata: sub.metadata, subscription: sub.id }, type: "subscription_details" },
     period_end: at,
+    test_clock: customer.test_clock ?? null,
     period_start: at,
     status: "open",
     status_transitions: { finalized_at: at, marked_uncollectible_at: null, paid_at: null, voided_at: null },
@@ -166,14 +167,15 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
 }
 
 /**
- * A subscription's first invoice, finalized (`open`), one line per item for its current period, with the customer's
- * balance applied (its `ending_balance` is the customer's new balance).
+ * A subscription's first invoice, finalized (`open`), one line per item for its current period (a trial's: 0, per the
+ * docs), with the customer's balance applied (its `ending_balance` is the customer's new balance).
  */
 export function firstInvoice(ctx: Ctx, sub: Obj, customer: Obj): Obj {
   const id = ctx.id("in");
-  const lines = ((sub.items as Obj).data as Obj[]).map((item) =>
-    itemLine(ctx, id, sub, item, { end: item.current_period_end as number, start: item.current_period_start as number }),
-  );
+  const lines = ((sub.items as Obj).data as Obj[]).map((item) => {
+    const line = itemLine(ctx, id, sub, item, { end: item.current_period_end as number, start: item.current_period_start as number });
+    return sub.status === "trialing" ? { ...line, amount: 0, subtotal: 0 } : line;
+  });
   return applyBalance(subInvoice(ctx, sub, customer, id, lines, { billing_reason: "subscription_create" }), customer.balance as number);
 }
 
@@ -252,15 +254,20 @@ export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined, inte
   return { pi, ok, declined, emits: [...emits, { type: "charge.failed", object: charge }, { type: "payment_intent.payment_failed", object: pi }] };
 }
 
+/** The invoice's payment intent still awaiting payment: created at finalization, or left by a failed attempt. */
+export const openIntent = (ctx: Ctx, inv: Obj): Obj | undefined =>
+  ctx.all("payment_intent").findLast((pi) => (pi.payment_details as Obj).order_reference === inv.id && pi.status === "requires_payment_method");
+
 /**
- * Collects a finalized mid-cycle invoice (always_invoice, an anchor reset) the way a subscription update does
- * (payment_behavior allow_incomplete): nothing due -> paid; charge_automatically -> one attempt with the
- * subscription's, else the customer's, default payment method (`failed` when it does not succeed); send_invoice
- * stays open. `emits` are the payment and invoice events.
+ * Collects a finalized invoice the way a subscription update does (payment_behavior allow_incomplete), and a test
+ * clock's automatic collection and retries: nothing due -> paid; charge_automatically -> one attempt with the
+ * subscription's, else the customer's, default payment method, confirming the invoice's open payment intent if it has
+ * one (`failed` when it does not succeed); send_invoice stays open. `emits` are the payment events and the invoice
+ * events: `types` (default: a mid-cycle invoice's created + finalized), then the payment's.
  */
-export function collect(ctx: Ctx, sub: Obj, customer: Obj, inv: Obj): { invoice: Obj; emits: Emit[]; failed: boolean } {
+export function collect(ctx: Ctx, sub: Obj, customer: Obj, inv: Obj, prefix = ["invoice.created", "invoice.finalized"]): { invoice: Obj; emits: Emit[]; failed: boolean } {
   const now = ctx.now();
-  const types = ["invoice.created", "invoice.finalized"];
+  const types = [...prefix];
   const emits: Emit[] = [];
   let failed = false;
   if (inv.amount_due === 0) {
@@ -268,9 +275,9 @@ export function collect(ctx: Ctx, sub: Obj, customer: Obj, inv: Obj): { invoice:
     types.push("invoice.paid", "invoice.payment_succeeded");
   } else if (sub.collection_method === "charge_automatically") {
     const pm = live(ctx, sub.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method, "payment_method");
-    const attempt = attemptPayment(ctx, inv, pm);
+    const attempt = attemptPayment(ctx, inv, pm, openIntent(ctx, inv));
     emits.push(...attempt.emits);
-    if (pm) inv = { ...inv, attempt_count: 1, attempted: true };
+    if (pm) inv = { ...inv, attempt_count: (inv.attempt_count as number) + 1, attempted: true };
     if (attempt.ok) {
       inv = paid(inv, now);
       types.push("invoice.paid", "invoice.payment_succeeded");

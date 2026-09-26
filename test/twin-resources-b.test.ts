@@ -326,7 +326,7 @@ test("subscription create validation: nothing persists on a failed create", asyn
   const w4 = async (params: Obj) => (await call(t, "POST", "/v1/subscriptions", { customer: c.id, items, ...params })).body.error?.message;
   const inline = { currency: "usd", product: price.product, unit_amount: 700, recurring: { interval: "month" } };
   for (const params of [
-    { trial_period_days: 14 },
+    { trial_end: 1900000000 },
     { cancel_at: 1900000000 },
     { billing_mode: { type: "classic" } },
     { proration_behavior: "none" },

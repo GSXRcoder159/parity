@@ -1,4 +1,5 @@
-// Subscriptions: create (first invoice + synchronous payment; send_invoice: a draft), retrieve, list, update (items: price swaps,
+// Subscriptions: create (first invoice + synchronous payment; send_invoice: a draft; trial_period_days: trialing, a $0 first
+// invoice; on a test clock's customer: the clock's), retrieve, list, update (items: price swaps,
 // quantities, additions, deletions; proration_behavior, proration_date, billing_cycle_anchor=now;
 // cancel_at_period_end, metadata, default_payment_method, description), cancel. `change` is shared with
 // POST /v1/invoices/create_preview.
@@ -25,9 +26,20 @@ import { assign, checkAttached, diff, isHash, live } from "../util.ts";
 type Obj = Record<string, unknown>;
 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "subscription") ?? ctx.fail("resource_missing", { param: "id" });
-const cancellation = (reason: string | null): Obj => ({ comment: null, feedback: null, feedback_option: null, reason });
+export const cancellation = (reason: string | null): Obj => ({ comment: null, feedback: null, feedback_option: null, reason });
 const UPDATABLE = ["billing_cycle_anchor", "cancel_at_period_end", "default_payment_method", "description", "items", "metadata", "proration_behavior", "proration_date"];
-const CREATABLE = ["cancel_at_period_end", "collection_method", "customer", "days_until_due", "default_payment_method", "description", "items", "metadata", "payment_behavior"];
+const CREATABLE = [
+  "cancel_at_period_end",
+  "collection_method",
+  "customer",
+  "days_until_due",
+  "default_payment_method",
+  "description",
+  "items",
+  "metadata",
+  "payment_behavior",
+  "trial_period_days",
+];
 export const ITEM = ["metadata", "price", "price_data", "quantity"];
 
 /** A spec-valid param the handler does not implement (trials, anchors, discounts, ...) fails instead of being dropped. */
@@ -117,8 +129,9 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
   // debit up to a future anchor (docs: prorations) is unobserved.
   if (![undefined, "", "now", "unchanged"].includes(p.billing_cycle_anchor as string)) ctx.fail("not_implemented");
   const reset = p.billing_cycle_anchor === "now";
-  // ponytail: changing a canceled subscription is refused (the real API's error is unobserved).
-  if ((raw.length > 0 || reset) && sub.status === "canceled") ctx.fail("not_implemented");
+  // ponytail: changing a canceled subscription is refused (the real API's error is unobserved), and so is changing a
+  // trialing one (prorations during a trial are unobserved).
+  if ((raw.length > 0 || reset) && ["canceled", "trialing"].includes(sub.status as string)) ctx.fail("not_implemented");
   const changed: [Obj | undefined, Obj | undefined][] = [];
   let moved = false; // a price on another billing period
   raw.forEach((it, i) => {
@@ -217,14 +230,18 @@ export const routes: Route[] = [
       const now = ctx.now();
       const id = ctx.id("sub");
       const puts: Obj[] = [];
+      // A trial is the first period: it ends trial_period_days from now, where the paid periods start (docs: trials).
+      const days = typeof params.trial_period_days === "number" ? params.trial_period_days : 0;
+      if (days < 0) ctx.fail("not_implemented"); // ponytail: the real API's error is unobserved
+      const trialEnd = days > 0 ? now + days * 86400 : null;
       const items = rawItems.map((it, i) => {
         only(ctx, it, ITEM);
-        return newItem(ctx, it, itemPrice(ctx, it, i, puts), id);
+        return newItem(ctx, it, itemPrice(ctx, it, i, puts), id, trialEnd ? { end: trialEnd, start: now } : undefined);
       });
       let sub = assign(
         ctx.build("subscription", {
           id,
-          billing_cycle_anchor: now,
+          billing_cycle_anchor: trialEnd ?? now,
           billing_mode: { flexible: { proration_discounts: "included" }, type: "flexible", updated_at: now },
           cancellation_details: cancellation(null),
           collection_method: collection,
@@ -236,7 +253,10 @@ export const routes: Route[] = [
           items: { data: items, has_more: false, object: "list", url: `/v1/subscription_items?subscription=${id}` },
           quantity: legacyQuantity(items),
           start_date: now,
-          status: "active",
+          status: trialEnd ? "trialing" : "active",
+          test_clock: customer.test_clock ?? null,
+          trial_end: trialEnd,
+          trial_start: trialEnd ? now : null,
         }),
         params,
         ["description", "metadata"],
@@ -291,11 +311,12 @@ export const routes: Route[] = [
     "GET",
     /^\/v1\/subscriptions$/,
     (ctx, { params }) => {
-      const { customer, price, status } = params;
+      const { customer, price, status, test_clock } = params;
       const hasStatus = (s: unknown) =>
         status === "all" || (status === "ended" ? s === "canceled" || s === "incomplete_expired" : status ? s === status : s !== "canceled");
       const hit = (s: Obj) =>
         (!customer || s.customer === customer) &&
+        (!test_clock || s.test_clock === test_clock) &&
         hasStatus(s.status) &&
         (!price || ((s.items as Obj).data as Obj[]).some((i) => (i.price as Obj).id === price));
       return { body: list(ctx.all("subscription").filter(hit), params, "/v1/subscriptions") };

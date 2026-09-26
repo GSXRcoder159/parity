@@ -32,6 +32,9 @@
   "resource_missing": { "status": 404, "type": "invalid_request_error", "code": "resource_missing", "param": "{param}", "message": "parity: resource_missing" },
   "resource_missing_400": { "status": 400, "type": "invalid_request_error", "code": "resource_missing", "param": "{param}", "message": "parity: resource_missing_400" },
   "search_query_invalid": { "status": 400, "type": "invalid_request_error", "param": "query", "message": "parity: search_query_invalid" },
+  "test_clock_advance_too_far": { "status": 400, "type": "invalid_request_error", "param": "frozen_time", "message": "parity: test_clock_advance_too_far" },
+  "test_clock_customer_limit": { "status": 400, "type": "invalid_request_error", "param": "test_clock", "message": "parity: test_clock_customer_limit" },
+  "test_clock_frozen_time_not_after": { "status": 400, "type": "invalid_request_error", "param": "frozen_time", "message": "parity: test_clock_frozen_time_not_after" },
   "unrecognized_url": { "status": 404, "type": "invalid_request_error", "message": "parity: unrecognized_url" },
   "url_invalid": { "status": 400, "type": "invalid_request_error", "code": "url_invalid", "param": "url", "message": "parity: url_invalid" }
 }

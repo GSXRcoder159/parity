@@ -1,6 +1,6 @@
-# Templates #1–#26: live validation
+# Templates #1–#30: live validation
 
-#1–#15 were validated on 2026-09-25 (this part); #16–#26 on 2026-09-26 (see [Templates #16–#26](#templates-1626-2026-09-26) below).
+#1–#15 were validated on 2026-09-25 (this part); #16–#26 on 2026-09-26 (see [Templates #16–#26](#templates-1626-2026-09-26) below). #27–#30 (test clocks) are **unvalidated until B1** (see [Templates #27–#30](#templates-2730-test-clocks-unvalidated-until-b1) at the end).
 
 Date 2026-09-25. Target: the Stripe sandbox (unclaimed, as the error-message prefix below confirms; the key type is `rkcs_test_` according to the Task 4 brief and was not inspected here), API version `2026-08-26.dahlia`. Each template was run for seeds 1 and 2 with `runSequence` via `runCorpus` (concurrency 5, the shared 20 req/s limiter). This ran from a throwaway script, `buildCorpus(TEMPLATES, [1, 2])` followed by `runCorpus(seqs, sandboxTarget(key), …)`, and took 58 s for all 30 sequences.
 
@@ -293,3 +293,46 @@ These are the extra seeds for branches that seeds 1–2 miss:
 - #23 waits 60 s and is still expected to be noisy.
 - #24 never lists endpoints, because the list is account-global.
 - #25: the error that replays comes from inside the endpoint (the 402). The validation-failure step shows that validation errors are not saved.
+
+## Templates #27–#30 (test clocks): unvalidated until B1
+
+Written 2026-09-26 (W4 Task 4, surface-added). **Every row below is unvalidated until B1.** No sandbox clock data exists: the claimable key is refused until B1, so nothing here was recorded on the sandbox. The templates and the twin's clock behavior follow the public docs ([test clocks: API and advanced usage](https://docs.stripe.com/billing/testing/test-clocks/api-advanced-usage), [advance a test clock](https://docs.stripe.com/api/test_clocks/advance), [Smart Retries](https://docs.stripe.com/billing/revenue-recovery/smart-retries)). They were dry-run against the twin only.
+
+The prefix `onClock()` has five steps. It creates a recurring price `pr1` (month or year). Then it creates a test clock `ck` with `frozen_time=$pr1.created`: the clock starts now, so events stamped with its time still fall in the event sweep window. Then a customer `c1` with `test_clock=$ck.id`, an attached card `pm1` (visa or mastercard), and a subscription `s1` whose `default_payment_method` is `pm1`. `advance(x)` is `POST /v1/test_helpers/test_clocks/$ck.id/advance` with `frozen_time=x`. The runner has neither arithmetic nor loops, so `x` is always a ref, and the advance is followed by three clock retrieves after waits of 2 s, 3 s and 5 s (the docs say advancing "takes a few seconds"). Each clock has one customer (the docs' cap is 3) and each subscription gets at most 2 invoices (the plan's cap is 5). Every template deletes its clock last.
+
+| # | template | steps after the prefix (intended status) | validation |
+|---|---|---|---|
+| 27 | clock-period-rollover | `advance($s1.items.data.0.current_period_end)`, `GET /v1/invoices?customer=` (`l1`: the renewal draft is newest), `advance($l1.data.0.automatically_finalizes_at)`, list the invoices again, retrieve `s1`, delete the clock (all 200) | unvalidated until B1 |
+| 28 H | clock-trial-end | prefix with `trial_period_days` 4–14; `advance($s1.trial_end)`, retrieve `s1`, list the invoices, delete the clock (all 200) | unvalidated until B1 |
+| 29 | clock-cancel-at-period-end | `cancel_at_period_end=true` (`s2`), `advance($s2.cancel_at)`, retrieve `s1`, list the invoices, delete the clock (all 200) | unvalidated until B1 |
+| 30 | clock-declined-renewal | attach `pm_card_chargeCustomerFail` (`pm2`), set it as `s1`'s `default_payment_method`, `advance($s1.items.data.0.current_period_end)`, list the invoices (`l1`), `advance($l1.data.0.automatically_finalizes_at)`, retrieve `s1`, list the invoices, delete the clock (all 200) | unvalidated until B1 |
+
+### Twin dry-run (2026-09-26; the twin, not the sandbox)
+
+Seeds 1 and 2 ran through `runCorpus` against a listening twin, with the templates' real waits, at concurrency 8: 8 sequences, 127 requests (61 GETs), 20.9 s. `(ready)` marks a clock retrieve that saw `status=ready`. The twin's fixed advancing delay is 1 s, so the 2 s wait always sees `ready`. Every step returned 200. These rows are the twin's own behavior and are not evidence about the sandbox.
+
+| sequence | step statuses (twin) |
+|---|---|
+| clock-period-rollover#1, #2 | 200 ×6 · 200(ready) ×3 · 200 · 200 · 200(ready) ×3 · 200 ×3 |
+| clock-trial-end#1, #2 | 200 ×6 · 200(ready) ×3 · 200 ×3 |
+| clock-cancel-at-period-end#1, #2 | 200 ×7 · 200(ready) ×3 · 200 ×3 |
+| clock-declined-renewal#1, #2 | 200 ×8 · 200(ready) ×3 · 200 · 200 · 200(ready) ×3 · 200 ×3 |
+
+### Facts the B1 sandbox run must confirm
+
+1. **Advance seconds.** How long a clock stays `advancing`, and whether three retrieves after 2 + 3 + 5 s reach `ready` (if not, the next advance or read races the clock). The advance response's `frozen_time` is the old time in the docs' example. Still to confirm: the `status_details.advancing.target_frozen_time` shape, and `status_details` = `{}` once ready. The twin shows `advancing` for 1 s of wall clock (a `ponytail:` fixed delay).
+2. **Events in the sweep window.** Whether events for clock transitions (renewal, finalization, trial end, cancel) appear in `GET /v1/events?created[gte]=<corpus start − 60 s>` within the sweep's 30 s cap, and how late the ready-time events arrive.
+3. **Whether `created` follows the frozen time**, for the objects created on a clock (customer, subscription, invoices, payment intents, charges) and for the events of an advance. The twin puts everything on a clock at the frozen time, and each advance event at its own transition's time. The clock object itself, and its `created` / `advancing` / `ready` / `deleted` events, stay at the request's time.
+4. `deletes_after`: created + 30 days (the docs' text) or 7 days (the API reference's example)? The twin uses 30.
+5. Whether a renewal draft carries `automatically_finalizes_at` (and `next_payment_attempt`) = created + 1 h. The second advance of #27 and #30 targets `automatically_finalizes_at`; if the sandbox leaves it null, that step fails.
+6. The event set of each transition. The twin sends: at renewal `customer.subscription.updated` and `invoice.created`; at finalization `invoice.finalized`, `invoice.updated`, the payment events, then `invoice.paid` and `invoice.payment_succeeded` or `invoice.payment_failed`; `customer.subscription.trial_will_end` 3 days before a trial ends; `customer.subscription.deleted` at a period-end cancel. On clock delete it sends `customer.subscription.deleted` and `customer.deleted` per customer, as a customer delete does (observed, #26), then `test_helpers.test_clock.deleted`. It sends no `invoice.upcoming`.
+7. Declined renewal: the subscription goes `past_due` and the invoice stays `open` with `attempt_count=1` and some `next_payment_attempt`. The twin's retries are a `ponytail:` fixed stand-in for the Smart Retries default ("8 tries within 2 weeks"): a retry every 2 days, then the subscription is canceled with `cancellation_details.reason=payment_failed`.
+8. Trials: whether the first invoice is $0 and paid without a payment intent, and whether at trial end the subscription turns `active` immediately (the twin does) with a `subscription_cycle` draft.
+9. Error shapes: an advance to a time not later than the frozen time, an advance too far ahead, a 4th customer on a clock, and an unknown `test_clock`. The twin's keys are `test_clock_frozen_time_not_after`, `test_clock_advance_too_far`, `test_clock_customer_limit` and `resource_missing_400`. The `param`s (`frozen_time`, `test_clock`) are guesses. Also whether the sandbox refuses requests on a clock's objects, or a second advance, while the clock is advancing (the twin refuses neither).
+10. Customer lists: the twin leaves a clock's customers out of `GET /v1/customers` unless `test_clock` is given, as the docs say.
+
+### Deviations and gaps (#27–#30)
+
+- **Advance limit.** The docs (and the spec's parameter text) say two intervals of the **shortest** subscription interval, or two years without subscriptions. The twin follows the docs; the task brief said "longest".
+- `score-twin` strips `waitMs`, so twin recordings of #27–#30 show `advancing` on every clock retrieve. The oracle will likely show `ready` there, which is a divergence the twin cannot fix. The runner or `score-twin` (`src/cli.ts`) must keep clock waits for these templates to compare, or the twin needs an injectable delay.
+- Not built (each is a `ponytail:` or refusal in the twin): `incomplete` → `incomplete_expired` after 23 h; `trial_will_end` for trials of 3 days or less; `trial_end` at create; attaching an existing customer to a new clock (the `customer` param answers `not_implemented`); the 3-subscriptions-per-customer cap; item changes during a trial; `invoice.upcoming`.

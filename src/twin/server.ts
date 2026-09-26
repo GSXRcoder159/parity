@@ -6,7 +6,7 @@ import { build } from "./build.ts";
 import { TwinError, fail, renderError } from "./errors.ts";
 import { expand } from "./expand.ts";
 import { parseForm } from "./form.ts";
-import { API_VERSION, type Changes, Store, newId } from "./store.ts";
+import { API_VERSION, type Changes, type Emit, Store, newId } from "./store.ts";
 import { validate } from "./validate.ts";
 import { deliver } from "./webhooks.ts";
 
@@ -39,6 +39,8 @@ export interface Result extends Changes {
   body: unknown;
   /** Catalog key of a returned error (a `renderError` result spread into the Result carries it). */
   errorKey?: string;
+  /** An emit's `at` is its event's `created` (a test clock transition's time); default: the request's now. */
+  emits?: (Emit & { at?: number })[];
 }
 export type Handler = (ctx: Ctx, req: HandlerReq) => Result;
 /** [method, path pattern, handler, spec operation ("get /v1/events/{id}")]. */
@@ -97,6 +99,23 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
   };
   const all = (type: string): Obj[] =>
     structuredClone(type === "event" ? store.events : [...store.objects.values()].filter((o) => o.object === type));
+
+  /**
+   * The live test clock a request acts under: its `test_clock` param, else the clock of the customer, subscription,
+   * invoice, ... it names (by param or path), directly or through that object's customer. A clock's own routes name
+   * no such object, so they run at the request's now.
+   */
+  const clockFor = (params: Obj, pathParams: Record<string, string>): Obj | undefined => {
+    const obj = (id: unknown) => (typeof id === "string" ? store.objects.get(id) : undefined);
+    const direct = obj(params.test_clock);
+    if (direct?.object === "test_helpers.test_clock") return direct;
+    for (const id of [params.customer, params.subscription, ...Object.values(pathParams)]) {
+      const o = obj(id);
+      const clock = obj(o?.test_clock ?? obj(o?.customer)?.test_clock);
+      if (clock) return clock;
+    }
+    return undefined;
+  };
 
   async function handle(req: TwinRequest): Promise<TwinResponse> {
     const method = req.method.toUpperCase();
@@ -160,13 +179,20 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
 
       let res: TwinResponse;
       try {
-        const ctx: Ctx = { now: () => now, id: newId, get, all, requestId, fail, build };
+        // Objects on a test clock live at its frozen time; everything else at Parity-Now or the wall clock.
+        const clock = clockFor(params, match.pathParams);
+        const at = clock ? (clock.frozen_time as number) : now;
+        const ctx: Ctx = { now: () => at, id: newId, get, all, requestId, fail, build };
         const r = match.handler(ctx, { method, path: req.path, pathParams: match.pathParams, params, headers });
         // Expand before applying so an invalid path leaves no state behind; ids created by this request resolve too.
         // A returned error (a 402 that still persists its payment events) is never expanded.
         const pending = new Map([...(r.puts ?? []), ...(r.emits ?? []).map((e) => e.object)].map((o) => [o.id as string, o]));
         const body = (r.status ?? 200) >= 400 ? r.body : expand(r.body, params.expand, (id) => pending.get(id) ?? get(id));
-        deliver(store, store.apply(r, { now, requestId, idempotencyKey: idemKey ?? null }), opts.webhookBackoffMs);
+        const events = store.apply(r, { now: at, requestId, idempotencyKey: idemKey ?? null });
+        r.emits?.forEach((e, i) => {
+          if (e.at !== undefined) events[i]!.created = e.at;
+        });
+        deliver(store, events, opts.webhookBackoffMs);
         res = respond(r.status ?? 200, body, r.errorKey);
       } catch (e) {
         res = error(e);
