@@ -58,7 +58,7 @@ const USAGE = `usage:
     log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json; drift
     (drift/<date>.md + site/data/drift.json, or a note); commit and push the data repo, commit the public-safe files here
     (the workflow pushes). A refused or aborted recording (budget gate, circuit breaker) is noted and the night goes on
-    with the existing oracle (curve point oracleRefreshed: false). Run from the repo root.
+    with the existing oracle (curve point oracleRefreshed: false). Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
     and writes the public files to a temp dir.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;

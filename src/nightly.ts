@@ -23,11 +23,11 @@ import { readJsonl } from "./jsonl.ts";
 import type { Recording, Sequence } from "./types.ts";
 
 /** The noise pair's weekday (UTC; 0 = Sunday). */
-export const NOISE_DAY = 0;
+const NOISE_DAY = 0;
 /** The fixed noise subset: every template x these seeds (26 x 2 = 52 sequences), recorded twice back-to-back. */
-export const NOISE_SEEDS = [1, 2];
+const NOISE_SEEDS = [1, 2];
 /** Decision 0001 C2: the nightly path runs at <=10 req/s (the sandbox target's default bucket is 20). */
-export const NIGHTLY_RPS = 10;
+const NIGHTLY_RPS = 10;
 /** The corpus the slices rotate through: templates x seeds 1-20 (520 sequences, ~75 a night). */
 const CORPUS_SEEDS = "1-20";
 
@@ -46,7 +46,7 @@ async function recordSandbox(repo: string, dataDir: string, date: string, name: 
  * newest `noise-a` recorded before it, on the sequences clean in both (compare --oracle a --target b, score only).
  * A pair with no clean sequence in common is skipped for the one before it. Undefined when there is none.
  */
-export function noiseFloor(dataDir: string): (Noise & { pair: [string, string]; seqs: number }) | undefined {
+function noiseFloor(dataDir: string): (Noise & { pair: [string, string]; seqs: number }) | undefined {
   const runs = join(dataDir, "runs");
   const files = existsSync(runs) ? readdirSync(runs, { recursive: true, encoding: "utf8" }) : [];
   const id = (f: string, side: "a" | "b") => new RegExp(`^noise-${side}-(.+)\\.jsonl$`).exec(basename(f))?.[1];
@@ -95,7 +95,7 @@ function surfaceAdded(log: string): string[] {
  * Scores only, no values or ids (decision 0001 C3). Without a noise pair `noise` is absent (the page marks the night
  * invalid); a stratum the pair does not cover has no noise.
  */
-export function publicFiles(o: { date: string; score: Score; results: SeqResult[]; noise?: Noise; events: string[]; patches: Patches; oracleRefreshed: boolean }) {
+function publicFiles(o: { date: string; score: Score; results: SeqResult[]; noise?: Noise; events: string[]; patches: Patches; oracleRefreshed: boolean }) {
   const { date } = o;
   const s = o.score;
   const normalization = NORMALIZATION_VERSION;
@@ -288,7 +288,7 @@ export function nightlyText(r: NightlyResult): string {
     d.file
       ? `drift: ${d.items.length} paths in ${d.compared} sequences compared -> ${d.file}${d.withheld ? ` (${d.withheld} fraud or risk divergences withheld)` : ""}`
       : `drift: nothing to report (${d.compared} sequences compared${d.withheld ? `, ${d.withheld} fraud or risk divergences withheld` : ""}); sealed-log note`,
-    `published: ${r.published.join(", ")}`,
+    `${r.tmp ? `written under ${r.tmp}/parity (dry run)` : "published"}: ${r.published.join(", ")}`,
     r.commits ? `commits: data repo ${r.commits.data} pushed · parity ${r.commits.parity} (the workflow pushes it)` : "commits: none (dry run)",
   ].join("\n");
 }
