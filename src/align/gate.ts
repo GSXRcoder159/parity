@@ -54,8 +54,15 @@ export interface ScoreJson {
 }
 
 /**
- * `score-twin` on `oraclePath` from a temp copy of `repo` (src/, templates/, package.json) with `edits` applied;
- * with `recordings`, also the twin's raw recordings.
+ * The score-twin child's whole env. It runs code an LLM may have written (the assisted pass), so no secret reaches it:
+ * no ANTHROPIC_API_KEY, GH_TOKEN, STRIPE_API_KEY or PARITY_DATA_TOKEN.
+ */
+const childEnv = (): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "PARITY_DATA_DIR", "CI"].includes(k) || k.startsWith("NODE_")));
+
+/**
+ * `score-twin` on `oraclePath` from a temp copy of `repo` (src/, templates/, package.json) with `edits` applied, in a
+ * child process with childEnv(); with `recordings`, also the twin's raw recordings.
  */
 export function scoreTwinIn(repo: string, oraclePath: string, edits: Edit[], recordings = false): { json: ScoreJson; twin?: Recording[] } {
   const tmp = mkdtempSync(join(tmpdir(), "parity-gate-"));
@@ -65,7 +72,7 @@ export function scoreTwinIn(repo: string, oraclePath: string, edits: Edit[], rec
     const args = [join(tmp, "src/cli.ts"), "score-twin", "--oracle", resolve(oraclePath), "--json", join(tmp, "score.json")];
     if (recordings) args.push("--recordings", join(tmp, "twin.jsonl"));
     try {
-      execFileSync(process.execPath, args, { cwd: tmp, stdio: ["ignore", "ignore", "pipe"] });
+      execFileSync(process.execPath, args, { cwd: tmp, env: childEnv(), stdio: ["ignore", "ignore", "pipe"] });
     } catch (e) {
       throw new Error(`gate: score-twin failed: ${String((e as { stderr?: Buffer }).stderr ?? e).trim()}`);
     }
@@ -91,7 +98,7 @@ export function evalOf({ score, results }: ScoreJson): Eval {
   return { train: score.train, heldOut: score.heldOut, trainDivergences: train.length, ids: new Set(train) };
 }
 
-const scores = ({ train, heldOut, trainDivergences }: Eval): Scores => ({ train, heldOut, trainDivergences });
+export const scores = ({ train, heldOut, trainDivergences }: Eval): Scores => ({ train, heldOut, trainDivergences });
 
 export interface Judged {
   candidate: Candidate;

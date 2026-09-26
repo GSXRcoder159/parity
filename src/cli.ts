@@ -27,6 +27,7 @@ const USAGE = `usage:
   paritybench twin [--port 12111] [--host 127.0.0.1]
   paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
   paritybench align [--apply | --assist] [--max-batches N]
+  paritybench align surface --note "<text>" [--commit <sha>]
   paritybench nightly [--dry-run]
   paritybench help
 
@@ -53,13 +54,19 @@ const USAGE = `usage:
     locus (top 3); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
     merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
     call's tokens and cost_usd go to budget/llm.jsonl; daily cap $15 (UTC), PARITY_LLM_CAP_USD may only lower it.
+  align surface: log a surface-added twin change (decision 0002 §3; not counted as alignment): score-twin on the oracle for a
+    temp checkout of <commit>^ (--commit default HEAD) and for the working tree, then a sealed-log patch entry
+    {class: "surface-added", note, commit, before, after}; prints the deltas. The next nightly point annotates it. Needs
+    src/twin/, templates/ and package.json committed.
   nightly: record today's slice (--slice <UTC day of week>/7 of templates x seeds 1-20) on the sandbox at <=10 req/s, and on
     Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a
     sealed-log score entry) with the noise ceiling from the latest noise-a/noise-b pair; align --apply; align --assist;
     log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json; drift
     (drift/<date>.md + site/data/drift.json, or a note); commit and push the data repo, commit the public-safe files here
-    (the workflow pushes). A refused or aborted recording (budget gate, circuit breaker) is noted and the night goes on
-    with the existing oracle (curve point oracleRefreshed: false). Run from the repo root (.env).
+    (the workflow pushes). Tonight's run files and read-ledger entries are pushed as soon as recording ends. A refused or
+    aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
+    oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface
+    entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
     and writes the public files to a temp dir.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
@@ -73,11 +80,13 @@ const FLAGS: Record<string, string[]> = {
   oracle: ["max-age-days"],
   twin: ["port", "host"],
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
-  align: ["apply", "assist", "max-batches"],
+  align: ["apply", "assist", "max-batches", "note", "commit"],
   nightly: ["dry-run"],
 };
 
 class UsageError extends Error {}
+/** The sandbox refused a recording (the read-budget gate, or the circuit breaker after repeated 429s): nightly notes it and goes on. */
+export class Refused extends Error {}
 
 /** `--flag value` pairs (`--raw`, `--apply`, `--assist`, `--dry-run` take none) and positionals; unknown flags and missing values are usage errors. */
 function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -199,7 +208,7 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
     const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
     const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep;
     const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget, ledger);
-    if (refusal) throw new Error(refusal);
+    if (refusal) throw new Refused(refusal);
     console.log(`projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes)`);
   }
   const size = o.chunk ?? seqs.length;
@@ -250,7 +259,7 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
       console.log(`rolling 30-day sandbox GETs: ${rollingGets(readLedger(ledger), date)} / ${budget} (ledger ${ledger})`);
     }
     if (summary.aborted) {
-      throw new Error(`${summary.aborted}; ${seqs.length - recordings.length} sequences not run; recordings flagged (status 0, eventsError) in ${o.out}`);
+      throw new Refused(`${summary.aborted}; ${seqs.length - recordings.length} sequences not run; recordings flagged (status 0, eventsError) in ${o.out}`);
     }
   }
   console.log(`wrote ${o.out}`);
@@ -380,6 +389,14 @@ export async function main(argv: string[]): Promise<number> {
       console.log(oracleBuild(num(flags, "max-age-days")));
       return 0;
     }
+    if (cmd === "align" && positional[0] === "surface") {
+      if (positional.length > 1 || flags.apply || flags.assist || flags["max-batches"]) throw new UsageError("align surface takes only --note and --commit");
+      const note = need(flags, "note");
+      if (!note.trim()) throw new UsageError("--note needs text");
+      const { surface, surfaceText } = await import("./align/surface.ts");
+      console.log(surfaceText(surface({ repo: REPO_ROOT, dataDir: dataDir(), runId: newRunId(), note, commit: flags.commit })));
+      return 0;
+    }
     if (positional.length !== (cmd === "bench" ? 1 : 0)) throw new UsageError(`unexpected arguments: ${positional.join(" ") || "(missing <baseURL>)"}`);
 
     if (cmd === "twin") return (await import("./twin/main.ts")).main(rest);
@@ -390,6 +407,7 @@ export async function main(argv: string[]): Promise<number> {
     if (cmd === "align") {
       // The assisted pass gates against HEAD and branches from it: after an --apply commit that baseline is stale.
       if (flags.apply && flags.assist) throw new UsageError("--apply and --assist are separate runs: align --apply, then align --assist");
+      if (flags.note !== undefined || flags.commit !== undefined) throw new UsageError("--note and --commit are for align surface");
       const { align, planText } = await import("./align/index.ts");
       const r = align({ repo: REPO_ROOT, dataDir: dataDir(), runId: newRunId(), apply: flags.apply === "1", maxBatches: num(flags, "max-batches", { integer: true }) });
       console.log(planText(r));

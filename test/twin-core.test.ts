@@ -13,6 +13,8 @@ type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
 
 const AUTH = { Authorization: "Bearer sk_test_parity" };
+/** CI runners are slower: wall-clock upper bounds get x3 there (as in twin-main.test.ts). */
+const SLOW = process.env.CI ? 3 : 1;
 
 // Fake handlers on real spec operations, so validation runs against the real request schemas.
 const FAKE: Route[] = [
@@ -516,7 +518,7 @@ test("reset clears 1,000 objects in under 50 ms", async () => {
   const r = await t.handle({ method: "POST", path: "/_parity/reset" });
   const ms = performance.now() - t0;
   assert.equal(r.status, 200);
-  assert.ok(ms < 50, `reset took ${ms} ms`);
+  assert.ok(ms < 50 * SLOW, `reset took ${ms} ms`);
   assert.deepEqual((await t.handle({ method: "GET", path: "/_parity/state" })).body, { objects: [], deleted: [], events: 0 });
   assert.equal(t.store.idem.size, 0);
 });

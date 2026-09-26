@@ -51,14 +51,14 @@ export interface AlignResult {
   applied?: { files: string[]; log: string; entries: number; commit?: string };
 }
 
-const DATA_PATHS = [SHAPES_DIR, CATALOG_FILE];
-const git = (repo: string, ...args: string[]): string => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+export const git = (repo: string, ...args: string[]): string => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 
 export function align(o: { repo: string; dataDir: string; runId: string; apply?: boolean; maxBatches?: number }): AlignResult {
   const oraclePath = join(o.dataDir, "oracle.jsonl");
-  // --apply commits the data files as automatic patches: a pending hand edit there must never ride along.
-  const dirty = o.apply ? git(o.repo, "status", "--porcelain", "--", ...DATA_PATHS) : "";
-  if (dirty) throw new Error(`refusing --apply: uncommitted changes in the twin's data files:\n${dirty}`);
+  // --apply commits the data files as automatic patches: a pending hand edit there must never ride along, and the gate
+  // scores the working tree, so anything else it scores must be what the commit sits on.
+  const dirty = o.apply ? git(o.repo, "status", "--porcelain", "--", "src", "templates", "package.json") : "";
+  if (dirty) throw new Error(`refusing --apply: uncommitted changes in src/, templates/ or package.json:\n${dirty}`);
   // A broken chain would refuse the append only after the data files are rewritten: check it before anything is written.
   const v = o.apply ? verifyLog(logPath(o.dataDir)) : { ok: true as const };
   if (!v.ok) throw new Error(`refusing --apply: the sealed log is broken: ${v.error}`);

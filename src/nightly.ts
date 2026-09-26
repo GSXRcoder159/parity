@@ -3,6 +3,7 @@
 // noise ceiling, align (mechanical, then assisted), log merged assisted PRs, publish the public-safe curve point and
 // scores file, run drift, commit. A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2) is a
 // sealed-log note, not a failure: the night goes on with the existing oracle and the curve point says oracleRefreshed: false.
+// Any other error (a missing key, a bug) fails the night.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -17,7 +18,7 @@ import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
 import { contaminated } from "./bench/oracle.ts";
 import { score, type LevelScores, type Score } from "./bench/score.ts";
-import { compareSets, LEDGER, newRunId, oracleBuild, readsLedger, recordCorpus, resolveTarget, slice } from "./cli.ts";
+import { compareSets, LEDGER, newRunId, oracleBuild, readsLedger, recordCorpus, Refused, resolveTarget, slice } from "./cli.ts";
 import { drift, type DriftResult } from "./drift.ts";
 import { readJsonl } from "./jsonl.ts";
 import type { Recording, Sequence } from "./types.ts";
@@ -81,13 +82,17 @@ export function logMerged(o: { repo: string; log: string; runId: string; oracle:
   return fresh.length;
 }
 
-/** `surface-added: <surface>` per sealed-log `patch` entry of class surface-added since the last `score` entry (annotated, never counted). */
+/**
+ * `surface-added: <note>` per sealed-log `patch` entry of class surface-added (align surface) since the previous curve
+ * point, i.e. the last nightly `publish` entry (annotated, never counted). A night that fails before publishing leaves
+ * its entries for the next one.
+ */
 function surfaceAdded(log: string): string[] {
   const entries = existsSync(log) ? readJsonl<LogEntry>(log) : [];
   return entries
-    .slice(entries.findLastIndex((e) => e.kind === "score") + 1)
+    .slice(entries.findLastIndex((e) => e.kind === "publish" && e.data.label === "nightly") + 1)
     .filter((e) => e.kind === "patch" && e.data.class === "surface-added")
-    .map((e) => `surface-added: ${String(e.data.surface)}`);
+    .map((e) => `surface-added: ${String(e.data.note)}`);
 }
 
 /**
@@ -95,12 +100,12 @@ function surfaceAdded(log: string): string[] {
  * Scores only, no values or ids (decision 0001 C3). Without a noise pair `noise` is absent (the page marks the night
  * invalid); a stratum the pair does not cover has no noise.
  */
-function publicFiles(o: { date: string; score: Score; results: SeqResult[]; noise?: Noise; events: string[]; patches: Patches; oracleRefreshed: boolean }) {
+function publicFiles(o: { date: string; score: Score; results: SeqResult[]; noise?: Noise; events: string[]; patches: Patches; oracleRefreshed: boolean; oracleSeqs: number }) {
   const { date } = o;
   const s = o.score;
   const normalization = NORMALIZATION_VERSION;
   const noise = o.noise && { overall: o.noise.overall, byStratum: o.noise.byStratum };
-  const point = { date, normalization, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, oracleRefreshed: o.oracleRefreshed };
+  const point = { date, normalization, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
   const byStratum = Object.keys(s.byStratum)
     .sort()
     .map((k) => {
@@ -133,6 +138,8 @@ export interface NightlyResult {
   assist: string;
   merged: number;
   patches: Patches;
+  /** The curve point's annotations. */
+  events: string[];
   drift: DriftResult;
   published: string[];
   commits?: { data: string; parity: string };
@@ -168,28 +175,40 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   let today: Recording[] = [];
   const refused: { step: string; error: string }[] = [];
   const refuse = (step: string, e: unknown): string => {
-    refused.push({ step, error: (e as Error).message });
-    return (e as Error).message;
+    if (!(e instanceof Refused)) throw e;
+    refused.push({ step, error: e.message });
+    return e.message;
   };
-  if (!o.dryRun) {
-    try {
-      today = await recordSandbox(o.repo, data, date, "slice", seqs);
-      sliceRes.recorded = today.filter((r) => !contaminated(r)).length;
-    } catch (e) {
-      sliceRes.refused = refuse(`record slice ${spec}`, e);
-    }
-  }
-  if (dow === NOISE_DAY) {
-    const noiseSeqs = buildCorpus(TEMPLATES, NOISE_SEEDS);
-    noisePair = { seqs: noiseSeqs.length, recorded: false };
-    // After a refused slice the sandbox is refusing: the pair waits for next week.
-    if (!o.dryRun && !sliceRes.refused) {
+  try {
+    if (!o.dryRun) {
       try {
-        for (const name of ["noise-a", "noise-b"]) await recordSandbox(o.repo, data, date, name, noiseSeqs);
-        noisePair.recorded = true;
+        today = await recordSandbox(o.repo, data, date, "slice", seqs);
+        sliceRes.recorded = today.filter((r) => !contaminated(r)).length;
       } catch (e) {
-        noisePair.refused = refuse("record noise pair", e);
+        sliceRes.refused = refuse(`record slice ${spec}`, e);
       }
+    }
+    if (dow === NOISE_DAY) {
+      const noiseSeqs = buildCorpus(TEMPLATES, NOISE_SEEDS);
+      noisePair = { seqs: noiseSeqs.length, recorded: false };
+      // After a refused slice the sandbox is refusing: the pair waits for next week.
+      if (!o.dryRun && !sliceRes.refused) {
+        try {
+          for (const name of ["noise-a", "noise-b"]) await recordSandbox(o.repo, data, date, name, noiseSeqs);
+          noisePair.recorded = true;
+        } catch (e) {
+          noisePair.refused = refuse("record noise pair", e);
+        }
+      }
+    }
+  } finally {
+    // Tonight's run files and read-ledger entries are pushed as soon as recording ends, so a later failure cannot lose
+    // them (the next night's budget gate counts those reads; decision 0001 C2).
+    const paths = ["runs", "budget"].filter((p) => existsSync(join(data, p)));
+    if (!o.dryRun && paths.length && run("git", ["status", "--porcelain", "--", ...paths], data)) {
+      run("git", ["add", "-A", "--", ...paths], data);
+      run("git", ["commit", "-q", "-m", `nightly ${date} run ${runId}: recordings and read ledger`, "--", ...paths], data);
+      run("git", ["push", "-q"], data);
     }
   }
   const oracleRefreshed = !o.dryRun && !sliceRes.refused;
@@ -202,7 +221,6 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   // 3. score-twin on the whole oracle, the noise ceiling from the latest pair, one sealed-log `score` entry.
   const { json } = scoreTwinIn(o.repo, oraclePath, []);
   const noise = noiseFloor(data);
-  const events = surfaceAdded(log); // before tonight's score entry
   const commit = run("git", ["rev-parse", "HEAD"], o.repo);
   appendLog(log, runId, [{ kind: "score", data: { label: "nightly", date, commit, normalization: NORMALIZATION_VERSION, score: json.score, ...(noise && { noise }), oracleRefreshed, oracle } }]);
 
@@ -218,11 +236,15 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const merged = logMerged({ repo: o.repo, log, runId, oracle, run });
   const patches = { automatic: plan.applied ? plan.gate.accepted.length : 0, assisted: merged };
 
-  // 6. The public-safe curve point and scores file.
-  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed });
+  // 6. The public-safe curve point and scores file, then a `publish` entry: the next night's surface-added window starts here.
   const curveFile = join(root, "site/data/curve.json");
-  writeJson(curveFile, [...(existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as unknown[]) : []), point]);
+  const curve = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { oracleSeqs?: number }[]) : [];
+  const last = curve.at(-1)?.oracleSeqs; // points before W4 do not carry it: no comparison
+  const events = [...surfaceAdded(log), ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : [])];
+  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
+  writeJson(curveFile, [...curve, point]);
   writeJson(join(root, `site/data/scores/${date}.json`), scores);
+  appendLog(log, runId, [{ kind: "publish", data: { label: "nightly", date, events, oracle } }]);
   const published = ["site/data/curve.json", `site/data/scores/${date}.json`];
 
   // 7. Drift: tonight's slice against the previous recording of each sequence.
@@ -263,6 +285,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     assist: assisted,
     merged,
     patches,
+    events,
     drift: d,
     published,
     ...(commits && { commits }),
@@ -286,6 +309,7 @@ export function nightlyText(r: NightlyResult): string {
     r.plan,
     r.assist,
     `merged align/assisted-* PRs newly logged: ${r.merged} · patches this night: automatic ${r.patches.automatic}, assisted ${r.patches.assisted}`,
+    `curve annotations: ${r.events.join("; ") || "none"}`,
     d.file
       ? `drift: ${d.items.length} paths in ${d.compared} sequences compared -> ${d.file}${d.withheld ? ` (${d.withheld} fraud or risk divergences withheld)` : ""}`
       : `drift: nothing to report (${d.compared} sequences compared${d.withheld ? `, ${d.withheld} fraud or risk divergences withheld` : ""}); sealed-log note`,

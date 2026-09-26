@@ -15,7 +15,7 @@ import { normalizeRecording } from "../bench/normalize.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
 import type { Route } from "../twin/server.ts";
-import { evalOf, scoreTwinIn, type Eval, type Scores } from "./gate.ts";
+import { evalOf, scores, scoreTwinIn, type Eval, type Scores } from "./gate.ts";
 import { split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
@@ -135,7 +135,6 @@ export function parseReply(text: string, allowed: string[]): { file: string; con
   return { file: files[0]!, content: blocks[0]! };
 }
 
-const scores = ({ train, heldOut, trainDivergences }: Eval): Scores => ({ train, heldOut, trainDivergences });
 /** The gate's single-edit rule (gate.ts): one of the locus's own divergences goes, held-out L3 holds, train divergences fall. */
 const passes = (before: Eval, after: Eval, ids: string[]): boolean =>
   ids.some((id) => !after.ids.has(id)) && after.heldOut.L3.k >= before.heldOut.L3.k && after.trainDivergences < before.trainDivergences;

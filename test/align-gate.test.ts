@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { applyEdits, gate, type Eval } from "../src/align/gate.ts";
+import { applyEdits, gate, scoreTwinIn, type Eval } from "../src/align/gate.ts";
 import { align, planText } from "../src/align/index.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import type { Candidate, Edit } from "../src/align/patch.ts";
@@ -96,6 +96,31 @@ test("gate: accepts a batch whose every edit helps; bisects a failing batch to t
   assert.deepEqual([ptr(capped.accepted), capped.notGated.map((c) => c.pointer)], [["/b1", "/b2", "/b3", "/b4"], ["/a1", "/a2", "/c1", "/c2"]]);
 });
 
+test("scoreTwinIn: the score-twin child (gate and assisted pass) gets PATH, HOME, NODE_*, PARITY_DATA_DIR and CI only", () => {
+  // A stand-in repo whose src/cli.ts writes its own env where score-twin writes its JSON (--json is the last argument).
+  const repo = mkdtempSync(join(tmpdir(), "pb-child-env-"));
+  mkdirSync(join(repo, "src"));
+  mkdirSync(join(repo, "templates"));
+  writeFileSync(join(repo, "package.json"), '{ "type": "module" }\n');
+  writeFileSync(join(repo, "src/cli.ts"), 'import { writeFileSync } from "node:fs";\nwriteFileSync(process.argv.at(-1)!, JSON.stringify({ score: process.env, results: [] }));\n');
+  const set = { ANTHROPIC_API_KEY: "sk-ant-leak", GH_TOKEN: "ghp_leak", STRIPE_API_KEY: "sk_test_leak", PARITY_DATA_TOKEN: "github_pat_leak", PARITY_LLM_MODEL: "x", PARITY_DATA_DIR: "/data", CI: "1", NODE_ENV: "test" };
+  const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, set);
+  try {
+    const env = scoreTwinIn(repo, join(repo, "oracle.jsonl"), []).json.score as unknown as Record<string, string>;
+    const kept = Object.keys(process.env).filter((k) => ["PATH", "HOME", "PARITY_DATA_DIR", "CI"].includes(k) || k.startsWith("NODE_"));
+    // macOS itself adds __CF_USER_TEXT_ENCODING (a locale code) to every process it starts.
+    assert.deepEqual(Object.keys(env).filter((k) => k !== "__CF_USER_TEXT_ENCODING").sort(), kept.sort());
+    assert.deepEqual([env.PARITY_DATA_DIR, env.CI, env.NODE_ENV, env.PATH], ["/data", "1", "test", process.env.PATH]);
+    for (const k of ["ANTHROPIC_API_KEY", "GH_TOKEN", "STRIPE_API_KEY", "PARITY_DATA_TOKEN"]) assert.equal(env[k], undefined, k);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 test("applyEdits: JSON-pointer set/delete in shapes (2-space JSON) and errors.json (one entry per line, round-trips byte for byte)", () => {
   const root = mkdtempSync(join(tmpdir(), "pb-edits-"));
   cpSync(join(REPO, "src/twin/errors.json"), join(root, "src/twin/errors.json"));
@@ -169,9 +194,12 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   assert.match(planText(plan), /^accepted:\n {2}src\/twin\/shapes\/customer\.json \/tax_exempt set "reverse" · /m);
   assert.equal(git("status", "--porcelain"), "", "the plan writes nothing");
 
-  writeFileSync(join(repo, "src/twin/shapes/customer.json"), readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8") + " ");
-  assert.throws(() => align({ repo, dataDir: data, runId: "dirty", apply: true }), /refusing --apply: uncommitted changes/);
-  git("checkout", "--", "src/twin/shapes/customer.json");
+  // --apply refuses a dirty data file, and any uncommitted change the gate would score but the commit would not carry.
+  for (const f of ["src/twin/shapes/customer.json", "src/twin/resources/customers.ts", "templates/index.ts"]) {
+    writeFileSync(join(repo, f), readFileSync(join(repo, f), "utf8") + " ");
+    assert.throws(() => align({ repo, dataDir: data, runId: "dirty", apply: true }), new RegExp(`^Error: refusing --apply: uncommitted changes in src/, templates/ or package\\.json:\\nM ${f}$`));
+    git("checkout", "--", f);
+  }
 
   // Nothing is written when the sealed log is broken, and nothing is logged when the commit fails (files restored).
   const customerJson = readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8");
