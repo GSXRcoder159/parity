@@ -361,3 +361,27 @@ test("create_preview: a new subscription's first invoice, validation, and GET /v
     ["404 invalid_request_error", undefined, "parity: invoice_upcoming_deprecated"],
   ]);
 });
+
+test("create_preview: an anchor timestamp is refused, not read as unchanged; a new subscription takes no anchor or proration_date", async () => {
+  const t = createTwin();
+  const { c, B, sub, si } = await subscribed(t);
+  const from = t.store.events.length;
+  const preview = (params: Obj) => call(t, "POST", "/v1/invoices/create_preview", params, at(HALF));
+  const anchor = HALF + 10 * 86400; // docs (prorations): a future anchor debits the time up to it; unobserved
+  const items = [{ price: B.id }];
+  const refused = [
+    await preview({ subscription: sub.id, subscription_details: { billing_cycle_anchor: anchor } }),
+    await preview({ subscription: sub.id, subscription_details: { items: [{ id: si, price: B.id }], billing_cycle_anchor: anchor } }),
+    await preview({ customer: c.id, subscription_details: { items, billing_cycle_anchor: anchor } }),
+    await preview({ customer: c.id, subscription_details: { items, billing_cycle_anchor: "now" } }),
+    await preview({ customer: c.id, subscription_details: { items, proration_date: HALF } }),
+  ];
+  assert.deepEqual(refused.map((r) => [r.status, r.body.error?.message]), Array(5).fill([400, "parity: not_implemented"]));
+  // unchanged is the renewal preview; proration_behavior without an anchor changes nothing on a new subscription.
+  const renewal = (await preview({ subscription: sub.id })).body;
+  const unchanged = (await preview({ subscription: sub.id, subscription_details: { billing_cycle_anchor: "unchanged" } })).body;
+  assert.deepEqual([unchanged.created, lineAmounts(unchanged)], [renewal.created, lineAmounts(renewal)]);
+  const fresh = (await preview({ customer: c.id, subscription_details: { items, proration_behavior: "none" } })).body;
+  assert.deepEqual(lineAmounts(fresh), [[2000, false]]);
+  assert.equal(t.store.events.length, from);
+});

@@ -39,6 +39,9 @@ const preview: Handler = (ctx, { params }) => {
 
   if (!params.subscription) {
     const customer = live(ctx, params.customer, "customer") ?? ctx.fail(params.customer ? "resource_missing_400" : "parameter_missing", { param: "customer" });
+    // ponytail: a new subscription's anchor (any value) and proration_date are refused (unobserved; docs: a future
+    // anchor debits the time up to it). proration_behavior only governs the anchor's prorations, so it changes nothing.
+    only(ctx, sd, ["items", "proration_behavior"]);
     const items = (sd.items as Obj[]).map((it, i) => {
       only(ctx, it, ITEM);
       return newItem(ctx, it, itemPrice(ctx, it, i, []), null);

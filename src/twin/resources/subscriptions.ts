@@ -112,6 +112,9 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
   const before = (sub.items as Obj).data as Obj[];
   const items = structuredClone(before);
   const raw = Array.isArray(p.items) ? (p.items as Obj[]) : [];
+  // ponytail: an anchor timestamp (create_preview's spec allows one, the update's only now|unchanged) is refused: the
+  // debit up to a future anchor (docs: prorations) is unobserved.
+  if (![undefined, "", "now", "unchanged"].includes(p.billing_cycle_anchor as string)) ctx.fail("not_implemented");
   const reset = p.billing_cycle_anchor === "now";
   // ponytail: changing a canceled subscription is refused (the real API's error is unobserved).
   if ((raw.length > 0 || reset) && sub.status === "canceled") ctx.fail("not_implemented");
