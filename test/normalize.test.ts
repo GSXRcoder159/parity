@@ -30,8 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.1");
-  assert.equal(RULES.length, 8);
+  assert.equal(NORMALIZATION_VERSION, "v1.2");
+  assert.equal(RULES.length, 11);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -160,37 +160,61 @@ test("run nonce, secrets, hosted urls, per-account opaques", () => {
   assert.equal(body(r, 2).number, "A1B2C3D4-0002"); // only invoice numbers
 });
 
-test("lists: data sorted by raw created desc, ties by normalized JSON; livemode compared as-is", () => {
-  const list = (order: number[]) => ({
-    object: "list",
-    livemode: false,
-    data: order.map((n) => [
-      { id: "cus_Aaaaaaaaaa1", created: T0, email: "b@x" },
-      { id: "cus_Bbbbbbbbbb2", created: T0 + 7200, email: "c@x" },
-      { id: "cus_Cccccccccc3", created: T0, email: "a@x" },
-    ][n]),
-  });
-  const a = normalizeRecording(rec([step(0, list([0, 1, 2]))]));
-  const b = normalizeRecording(rec([step(0, list([2, 0, 1]))]));
-  assert.deepEqual(body(a, 0), body(b, 0));
-  assert.deepEqual(
-    body(a, 0).data.map((c: any) => c.email),
-    ["c@x", "a@x", "b@x"],
-  );
+test("lists: data compared in the order returned (v1.2 has no list-order sort)", () => {
+  const c = (id: string, email: string) => ({ id, created: T0, email });
+  const list = (data: unknown[]) => ({ object: "list", livemode: false, has_more: false, data });
+  const x = c("cus_Aaaaaaaaaa1", "a@x");
+  const y = c("cus_Bbbbbbbbbb2", "b@x");
+  const a = normalizeRecording(rec([step(0, list([x, y]))]));
+  const b = normalizeRecording(rec([step(0, list([y, x]))]));
+  assert.deepEqual(body(a, 0).data.map((e: any) => e.email), ["a@x", "b@x"]);
+  assert.deepEqual(body(b, 0).data.map((e: any) => e.email), ["b@x", "a@x"]);
+  assert.notDeepEqual(body(a, 0), body(b, 0));
   assert.equal(body(a, 0).livemode, false);
+});
 
+test("v1.2: request_log_url dropped under error only; updated is a timestamp; card-network values opaque unless null", () => {
+  const r = normalizeRecording(
+    rec([
+      step(0, { object: "product", created: T0, updated: T0 + 7200, request_log_url: "https://x.example/keep" }),
+      step(1, { error: { type: "invalid_request_error", request_log_url: "https://dashboard.stripe.com/acct_1/test/logs?object=req_1" } }, 400),
+      step(2, {
+        object: "charge",
+        outcome: { risk_level: "normal", risk_score: 42 },
+        payment_method_details: { card: { authorization_code: "123456", network_transaction_id: "5550001112223", transaction_link_id: null, brand: "visa" } },
+      }),
+    ]),
+  );
+  assert.deepEqual(body(r, 0), { object: "product", created: "<t:~0>", updated: "<t:+2h>", request_log_url: "https://x.example/keep" });
+  assert.deepEqual(body(r, 1), { error: { type: "invalid_request_error" } });
+  assert.deepEqual(body(r, 2), {
+    object: "charge",
+    outcome: { risk_level: "normal", risk_score: "<opaque>" },
+    payment_method_details: { card: { authorization_code: "<opaque>", network_transaction_id: "<opaque>", transaction_link_id: null, brand: "visa" } },
+  });
+});
 
-  // Ties ignore key order (a twin need not emit Stripe's): fields cross-ordered so a key-order-sensitive tie-break flips.
-  const x = { email: "a@x", name: "z", created: T0 };
-  const y = { email: "b@x", name: "a", created: T0 };
-  const flip = (o: typeof x) => ({ name: o.name, email: o.email, created: o.created });
-  const p = normalizeRecording(rec([step(0, { object: "list", data: [x, y] })]));
-  const q = normalizeRecording(rec([step(0, { object: "list", data: [flip(y), flip(x)] })]));
-  assert.deepEqual(body(p, 0), body(q, 0));
+test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {
+  const refund = (card: Record<string, unknown>) => ({ id: "re_Abcdefghij12", object: "refund", created: T0, destination_details: { type: "card", card } });
+  const pending = refund({ reference_status: "pending", reference_type: "acquirer_reference_number", type: "refund" });
+  const available = refund({ reference: "2263411961024116", reference_status: "available", reference_type: "acquirer_reference_number", type: "refund" });
+  const other = { object: "payout", destination_details: { card: { reference: "r1" } } };
+  const ev = { id: "evt_1AbcDEFghijk", type: "charge.refund.updated", created: T0, data: { object: available } };
+  const a = normalizeRecording(rec([step(0, pending), step(1, { object: "list", data: [pending] }), step(2, other)], [ev]));
+  const b = normalizeRecording(rec([step(0, available), step(1, { object: "list", data: [available] }), step(2, other)], [ev]));
+  assert.deepEqual(body(a, 0), body(b, 0));
+  assert.deepEqual(body(a, 0).destination_details, { type: "card", card: { type: "refund" } });
+  assert.deepEqual(body(a, 1), body(b, 1));
+  assert.deepEqual(body(a, 2), other);
+  assert.deepEqual(a.events[0]!.data.object.destination_details, { type: "card", card: { type: "refund" } });
 });
 
 test("normalizeRecording and normalizeRaw do not mutate the input", () => {
-  const r = rec([step(0, { id: "cus_Ab12Cd34Ef", created: T0 })]);
+  const r = rec([
+    step(0, { id: "cus_Ab12Cd34Ef", created: T0 }),
+    step(1, { error: { request_log_url: "https://dashboard.stripe.com/x" } }, 400),
+    step(2, { object: "refund", destination_details: { card: { reference: "1", reference_status: "available" } } }),
+  ]);
   const before = structuredClone(r);
   normalizeRecording(r);
   const raw = normalizeRaw(r);

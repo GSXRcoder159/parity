@@ -8,6 +8,7 @@ export interface Target {
   baseUrl: string;
   apiKey: string;
   rps?: number;
+  /** Wait before the first event pass and between passes (default 200 ms); 0 skips event collection. */
   eventWaitMs?: number;
 }
 
@@ -16,7 +17,9 @@ const REF = /\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)/g;
 const EXACT_REF = new RegExp(`^${REF.source}$`);
 // Stripe object id: lowercase prefix + mixed-case tail (the uppercase/digit lookahead excludes enums).
 const ID = /^[a-z]+(?:_[a-z]+)*_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}$/;
-const RES_HEADERS = ["request-id", "idempotent-replayed", "stripe-version"];
+const RES_HEADERS = ["request-id", "idempotent-replayed", "stripe-version", "stripe-rate-limited-reason", "retry-after"];
+/** Consecutive steps ending 429 after all retries that abort a corpus (W0: B and C sent 966 retries into a limited key). */
+const BREAKER = 10;
 
 export function sandboxTarget(apiKey: string): Target {
   return { name: "sandbox", baseUrl: "https://api.stripe.com", apiKey, rps: 20, eventWaitMs: 3000 };
@@ -80,7 +83,10 @@ export function runNonce(runId: string, seqId: string): string {
   return `${runId}-${seqId}`.replace(/[^A-Za-z0-9]/g, "-");
 }
 
-/** Every HTTP request actually sent (each 429 retry and event page counts); `eventOverlaps` = events assigned to >1 recording. */
+/**
+ * Every HTTP request actually sent (each 429 retry and event page counts); `eventOverlaps` = events assigned to >1 recording.
+ * `aborted` is set when the circuit breaker tripped: later steps were not sent and events were not collected.
+ */
 export interface RunSummary {
   requests: number;
   gets: number;
@@ -89,14 +95,17 @@ export interface RunSummary {
   eventSweepGets: number;
   retries429: number;
   eventOverlaps: number;
+  aborted?: string;
 }
 
 const newSummary = (): RunSummary => ({ requests: 0, gets: 0, posts: 0, deletes: 0, eventSweepGets: 0, retries429: 0, eventOverlaps: 0 });
 const COUNTER = { GET: "gets", POST: "posts", DELETE: "deletes" } as const;
 
+/** Shared by reference across a corpus's workers. `streak429` = consecutive answered steps that ended 429. */
 interface Io {
   take: () => Promise<void>;
   stats: RunSummary;
+  streak429: number;
 }
 
 /** One HTTP call through the limiter; 429s retried up to 3 times (1 s, 2 s, 4 s). `ms` = final attempt. */
@@ -126,37 +135,51 @@ const errMsg = (e: unknown): string => {
   return err.cause?.message ? `${err.message}: ${err.cause.message}` : String(err.message ?? e);
 };
 
-/**
- * `collectEvents` (default true) polls /v1/events for this sequence alone (single-sequence re-runs);
- * runCorpus passes false and sweeps once for the whole corpus. `stats` accumulates request counts.
- */
-export async function runSequence(
-  seq: Sequence,
-  target: Target,
-  opts: { take: () => Promise<void>; runId: string; collectEvents?: boolean; stats?: RunSummary },
-): Promise<Recording> {
-  const io: Io = { take: opts.take, stats: opts.stats ?? newSummary() };
+/** Runs one sequence alone: its steps, then an event sweep since its start − 60 s (single-sequence re-runs). */
+export async function runSequence(seq: Sequence, target: Target, opts: { take: () => Promise<void>; runId: string }): Promise<Recording> {
+  const io: Io = { take: opts.take, stats: newSummary(), streak429: 0 };
+  const out = await runSteps(io, seq, target, opts.runId, {});
+  const ids = idsIn(out.steps);
+  if (target.eventWaitMs !== 0 && ids.size > 0) {
+    try {
+      out.events = touching(ids, await sweepEvents(io, target, Math.floor(Date.parse(out.startedAt) / 1000) - 60, 15_000));
+    } catch (e) {
+      out.eventsError = errMsg(e);
+    }
+  }
+  out.ms = Date.now() - Date.parse(out.startedAt);
+  return out;
+}
+
+/** Sends a sequence's steps (`seqHeaders` on every step, step headers win) and records them; events are left to the caller. */
+async function runSteps(io: Io, seq: Sequence, target: Target, runId: string, seqHeaders: Record<string, string>): Promise<Recording> {
   const started = Date.now();
-  const nonce = runNonce(opts.runId, seq.id);
+  const nonce = runNonce(runId, seq.id);
   const bound: Record<string, unknown> = {};
   const steps: StepRecord[] = [];
   for (const [i, step] of seq.steps.entries()) {
-    if (step.waitMs) await sleep(step.waitMs);
+    const unsent = (error: string): void => void steps.push({ i, method: step.method, path: step.path, status: 0, body: null, resHeaders: {}, ms: 0, error });
+    if (step.waitMs && !io.stats.aborted) await sleep(step.waitMs);
+    if (io.stats.aborted) {
+      unsent(`not sent: ${io.stats.aborted}`);
+      continue;
+    }
     let path: string;
     let params: Record<string, unknown> | undefined;
-    let headers: Record<string, string> | undefined;
+    let headers: Record<string, string>;
     try {
       path = String(resolveRefs(step.path, bound, nonce));
       params = step.params && (resolveRefs(step.params, bound, nonce) as Record<string, unknown>);
-      headers = step.headers && (resolveRefs(step.headers, bound, nonce) as Record<string, string>);
+      headers = { ...seqHeaders, ...(step.headers && (resolveRefs(step.headers, bound, nonce) as Record<string, string>)) };
     } catch (e) {
       // Not sent; `path` stays the unresolved template string.
-      steps.push({ i, method: step.method, path: step.path, status: 0, body: null, resHeaders: {}, ms: 0, error: errMsg(e) });
+      unsent(errMsg(e));
       continue;
     }
     const rec: StepRecord = { i, method: step.method, path, status: 0, body: null, resHeaders: {}, ms: 0 };
     if (params) rec.params = params;
-    if (headers) rec.headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "authorization"));
+    const kept = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "authorization");
+    if (kept.length) rec.headers = Object.fromEntries(kept);
     try {
       const r = await send(io, target, step.method, path, params ? encodeForm(params) : "", headers);
       rec.status = r.status;
@@ -172,35 +195,28 @@ export async function runSequence(
       rec.ms = r.ms;
       if (r.retries) rec.retries = r.retries;
       if (step.ref) bound[step.ref] = rec.body;
+      io.streak429 = r.status === 429 ? io.streak429 + 1 : 0;
+      if (io.streak429 >= BREAKER && !io.stats.aborted) {
+        io.stats.aborted = `corpus aborted by the circuit breaker: ${BREAKER} consecutive steps ended 429 after all retries`;
+      }
     } catch (e) {
       rec.error = errMsg(e);
     }
     steps.push(rec);
   }
-  const out: Recording = {
+  return {
     seq: seq.id,
     template: seq.template,
     stratum: seq.stratum,
     seed: seq.seed,
     heldOut: seq.heldOut,
     target: target.name,
-    runId: opts.runId,
+    runId,
     startedAt: new Date(started).toISOString(),
-    ms: 0,
+    ms: Date.now() - started,
     steps,
     events: [],
   };
-  const ids = idsIn(steps);
-  if (opts.collectEvents !== false && target.eventWaitMs !== 0 && ids.size > 0) {
-    try {
-      const since = Math.floor(started / 1000) - 60;
-      out.events = touching(ids, await pollEvents(io, target, since, (all) => touching(ids, all).length, 2000, 15_000));
-    } catch (e) {
-      out.eventsError = errMsg(e);
-    }
-  }
-  out.ms = Date.now() - started;
-  return out;
 }
 
 /** Every object id (whole-string match) in the step response bodies. */
@@ -222,69 +238,79 @@ function touching(ids: Set<string>, all: StripeEvent[]): StripeEvent[] {
     .sort((a, b) => a.created - b.created || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));
 }
 
-/** Every page of GET /v1/events since `sinceSec`; throws on a non-200 (after 429 retries) or unparsable page. */
-async function listEvents(io: Io, target: Target, sinceSec: number): Promise<StripeEvent[]> {
+/**
+ * GET /v1/events since `sinceSec`, newest first: every page (`starting_after`), or with `newerThan` only the events
+ * newer than that id (`ending_before`, whose pages arrive oldest to newest). Throws on a non-200 (after 429 retries).
+ */
+async function listEvents(io: Io, target: Target, sinceSec: number, newerThan?: string): Promise<StripeEvent[]> {
   const all: StripeEvent[] = [];
-  for (let after: string | undefined; ; ) {
-    const r = await send(io, target, "GET", "/v1/events", encodeForm({ created: { gte: sinceSec }, limit: 100, starting_after: after }));
+  for (let cursor = newerThan; ; ) {
+    const page = newerThan ? { ending_before: cursor } : { starting_after: cursor };
+    const r = await send(io, target, "GET", "/v1/events", encodeForm({ created: { gte: sinceSec }, limit: 100, ...page }));
     if (r.status !== 200) throw new Error(`GET /v1/events -> ${r.status}`);
     const list = JSON.parse(r.text) as { data: StripeEvent[]; has_more: boolean };
-    all.push(...list.data);
-    after = list.data.at(-1)?.id;
-    if (!list.has_more || !after) return all;
+    if (newerThan) all.unshift(...list.data);
+    else all.push(...list.data);
+    cursor = newerThan ? list.data[0]?.id : list.data.at(-1)?.id;
+    if (!list.has_more || !cursor) return all;
   }
 }
 
-/** Waits eventWaitMs, then lists all events every `everyMs` until `count` repeats on consecutive lists or `capMs` passes. */
-async function pollEvents(
-  io: Io,
-  target: Target,
-  sinceSec: number,
-  count: (all: StripeEvent[]) => number,
-  everyMs: number,
-  capMs: number,
-): Promise<StripeEvent[]> {
-  await sleep(target.eventWaitMs ?? 200);
+/**
+ * Incremental sweep: waits eventWaitMs, lists every event since `sinceSec`, then every eventWaitMs fetches only the
+ * events newer than the newest seen, until two passes in a row find nothing new or `capMs` passes since the first list.
+ */
+async function sweepEvents(io: Io, target: Target, sinceSec: number, capMs: number): Promise<StripeEvent[]> {
+  const every = target.eventWaitMs ?? 200;
+  await sleep(every);
   const first = performance.now();
-  for (let prev = -1; ; ) {
-    const all = await listEvents(io, target, sinceSec);
-    const n = count(all);
-    if (n === prev || performance.now() - first >= capMs) return all;
-    prev = n;
-    await sleep(everyMs);
+  // ponytail: an event that becomes visible after a newer one was listed is missed; widen to a created[gte] re-list if W1 shows gaps.
+  const all = await listEvents(io, target, sinceSec);
+  for (let empty = 0; empty < 2 && performance.now() - first < capMs; ) {
+    await sleep(every);
+    const fresh = await listEvents(io, target, sinceSec, all[0]?.id);
+    all.unshift(...fresh);
+    empty = fresh.length ? 0 : empty + 1;
   }
+  return all;
 }
 
 /**
  * Runs the corpus, then ONE event sweep for all of it (events are attached after every sequence has
  * finished). `onRecord` fires as each sequence's steps finish, BEFORE its events are attached: use it
  * for progress, and write the returned `recordings` (the same objects, completed by the sweep).
+ * `headersFor(seq)` headers go on every step of that sequence. If the circuit breaker trips, the rest of the
+ * corpus is recorded as not sent (status 0), the sweep is skipped, and every recording gets `eventsError`.
  */
 export async function runCorpus(
   seqs: Sequence[],
   target: Target,
-  opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void },
+  opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void; headersFor?: (seq: Sequence) => Record<string, string> },
 ): Promise<{ recordings: Recording[]; summary: RunSummary }> {
-  const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary() };
+  const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary(), streak429: 0 };
   const startSec = Math.floor(Date.now() / 1000);
   const out: Recording[] = new Array(seqs.length);
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < seqs.length) {
       const i = next++;
-      const r = await runSequence(seqs[i]!, target, { ...io, runId: opts.runId, collectEvents: false });
+      const r = await runSteps(io, seqs[i]!, target, opts.runId, opts.headersFor?.(seqs[i]!) ?? {});
       out[i] = r;
       opts.onRecord?.(r);
     }
   };
   await Promise.all(Array.from({ length: opts.concurrency }, worker));
 
+  if (io.stats.aborted) {
+    for (const r of out) r.eventsError = `not collected: ${io.stats.aborted}`;
+    return { recordings: out, summary: io.stats };
+  }
   const idSets = out.map((r) => idsIn(r.steps));
   if (target.eventWaitMs !== 0 && idSets.some((s) => s.size > 0)) {
     const gets0 = io.stats.gets;
     try {
       // ponytail: pages every account event since corpus start − 60 s; filter by type if other traffic on the account grows.
-      const all = await pollEvents(io, target, startSec - 60, (all) => all.length, 3000, 30_000);
+      const all = await sweepEvents(io, target, startSec - 60, 30_000);
       const owners = new Map<string, number>();
       out.forEach((r, i) => {
         r.events = touching(idSets[i]!, all);

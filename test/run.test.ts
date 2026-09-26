@@ -50,6 +50,8 @@ const EVENTS = [
 ];
 let events = EVENTS; // served 4 per page, like a newest-first Stripe list
 let eventFaults: number[] = []; // statuses /v1/events answers (in order) before serving pages
+let onEventsGet: (() => void) | undefined; // runs before each /v1/events answer (events arriving mid-sweep)
+let limited = false; // every non-events request answers 429, like a rate-limited key
 const server = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -59,6 +61,9 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { "content-type": "application/json", "request-id": "req_local", ...headers });
     res.end(JSON.stringify(obj));
   };
+  if (limited && url.pathname !== "/v1/events") {
+    return json(429, { error: { type: "rate_limit_error" } }, { "retry-after": "1", "stripe-rate-limited-reason": "global-rate" });
+  }
   if (req.method === "POST" && url.pathname === "/v1/customers") {
     return json(
       200,
@@ -71,8 +76,14 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/v1/flaky") return ++flakyHits === 1 ? json(429, { error: { type: "rate_limit" } }) : json(200, { ok: true });
   if (url.pathname === "/v1/text") return void res.end("not json");
   if (url.pathname === "/v1/events") {
+    onEventsGet?.();
     const fault = eventFaults.shift();
     if (fault) return json(fault, { error: { type: "api_error" } });
+    const before = url.searchParams.get("ending_before"); // the 4 events just newer than the cursor; has_more = even newer ones exist
+    if (before) {
+      const end = events.findIndex((e) => e.id === before);
+      return json(200, { object: "list", has_more: end > 4, data: events.slice(Math.max(0, end - 4), end) });
+    }
     const after = url.searchParams.get("starting_after");
     const from = after ? events.findIndex((e) => e.id === after) + 1 : 0;
     return json(200, { object: "list", has_more: from + 4 < events.length, data: events.slice(from, from + 4) });
@@ -89,6 +100,13 @@ after(() => {
   server.closeAllConnections();
   server.close();
 });
+
+/** The pagination cursor of a /v1/events request ("" for the first page of a full list). */
+const cursor = (url: string): string => {
+  const q = new URL(url, "http://x").searchParams;
+  for (const k of ["starting_after", "ending_before"]) if (q.has(k)) return `${k}=${q.get(k)}`;
+  return "";
+};
 
 // ---- pure functions ----
 test("encodeForm: Stripe nested form encoding", () => {
@@ -203,10 +221,8 @@ test("runSequence end-to-end against a local server", async () => {
   // events: filtered by ids seen in bodies (incl. nested + .customer), paginated, sorted by created then type
   assert.deepEqual(rec.events.map((e) => e.id), ["evt_D", "evt_C", "evt_A"]);
   const polls = seen.filter((r) => r.url.startsWith("/v1/events"));
-  const firstPages = polls.filter((r) => !r.url.includes("starting_after"));
-  assert.equal(firstPages.length, 2, "stops after two polls with the same kept count");
-  assert.equal(polls.length, 4);
-  const q = new URL(firstPages[0]!.url, "http://x").searchParams;
+  assert.deepEqual(polls.map((r) => cursor(r.url)), ["", "starting_after=evt_E", "ending_before=evt_A", "ending_before=evt_A"], "full list, then two empty incremental passes");
+  const q = new URL(polls[0]!.url, "http://x").searchParams;
   assert.equal(q.get("limit"), "100");
   assert.equal(Number(q.get("created[gte]")), Math.floor(Date.parse(rec.startedAt) / 1000) - 60);
   assert.equal(polls[0]!.headers.authorization, "Bearer sk_test_local");
@@ -268,9 +284,9 @@ test("runCorpus: ONE sweep assigns interleaved events to two sequences; summary 
   assert.deepEqual(b!.events.map((e) => e.id), ["evt_2", "evt_6", "evt_7"]);
   assert.equal(a!.eventsError, undefined);
 
-  // one corpus sweep (2 pages, repeated once to confirm the count), not per-sequence polls
+  // one corpus sweep (2 pages, then two empty incremental passes), not per-sequence polls
   const polls = seen.filter((r) => r.url.startsWith("/v1/events"));
-  assert.equal(polls.length, 5, "429 + retry + page 2, then pages 1-2 again");
+  assert.deepEqual(polls.map((r) => cursor(r.url)), ["", "", "starting_after=evt_4", "ending_before=evt_7", "ending_before=evt_7"], "429 + retry + page 2, then 2 incremental passes");
   const gte = Number(new URL(polls[0]!.url, "http://x").searchParams.get("created[gte]"));
   assert.ok(Math.abs(gte - (Math.floor(Date.parse(a!.startedAt) / 1000) - 60)) <= 1, `created[gte]=${gte}`);
 
@@ -298,6 +314,92 @@ test("a 500 from /v1/events sets eventsError (corpus sweep and per-sequence) and
   const withEvents = { ...structuredClone(c!), eventsError: undefined, events: [ev("evt_1", 1, "customer.created", { id: CUS })] };
   const r = compareRecordings(c!, withEvents);
   assert.deepEqual([r.eventsSkipped, r.eventsMatch, r.L4, r.divergences], [true, true, true, []]);
+});
+
+test("runCorpus: incremental sweep pages the events once, then fetches only newer ones (ending_before chain)", async () => {
+  seen.length = 0;
+  const e = (n: number) => ev(`evt_${n}`, 100 + n, "customer.updated", { id: CUS });
+  const upTo = (hi: number, lo = 1) => Array.from({ length: hi - lo + 1 }, (_, i) => e(hi - i)); // newest first
+  events = upTo(9);
+  let gets = 0;
+  onEventsGet = () => {
+    if (++gets === 4) events = [...upTo(15, 10), ...events]; // 6 new events land after the first full list
+  };
+  const one = [seq([{ method: "POST", path: "/v1/customers" }])];
+  const { recordings: [a], summary } = await runCorpus(one, local, { concurrency: 1, runId: "r" });
+  const polls = seen.filter((r) => r.url.startsWith("/v1/events")).map((r) => cursor(r.url));
+  assert.deepEqual(polls, [
+    "", // full list: 3 pages of 4
+    "starting_after=evt_6",
+    "starting_after=evt_2",
+    "ending_before=evt_9", // pass 1: the 6 newer events, oldest page first
+    "ending_before=evt_13",
+    "ending_before=evt_15", // passes 2-3: nothing new twice -> stop
+    "ending_before=evt_15",
+  ]);
+  assert.equal(summary.eventSweepGets, 7, "pages of events + one GET per empty pass, not pages x passes");
+  assert.deepEqual(a!.events.map((x) => x.id), upTo(15).reverse().map((x) => x.id));
+
+  // An empty first list has no cursor: repeat passes re-list in full until an event appears.
+  seen.length = 0;
+  events = [];
+  gets = 0;
+  onEventsGet = () => {
+    if (++gets === 2) events = [e(1)];
+  };
+  const { recordings: [b], summary: s2 } = await runCorpus(one, local, { concurrency: 1, runId: "r" });
+  onEventsGet = undefined;
+  events = EVENTS;
+  assert.deepEqual(seen.filter((r) => r.url.startsWith("/v1/events")).map((r) => cursor(r.url)), ["", "", "ending_before=evt_1", "ending_before=evt_1"]);
+  assert.equal(s2.eventSweepGets, 4);
+  assert.deepEqual(b!.events.map((x) => x.id), ["evt_1"]);
+});
+
+test("runCorpus: headersFor(seq) goes on every step of that sequence, is recorded, and step headers win", async () => {
+  seen.length = 0;
+  const steps: Step[] = [
+    { method: "POST", path: "/v1/customers", headers: { "Idempotency-Key": "$run" } },
+    { method: "GET", path: `/v1/customers/${CUS}` },
+    { method: "GET", path: `/v1/customers/${CUS}`, headers: { "Parity-Now": "5" } },
+  ];
+  const now: Record<string, string> = { "a#1": "1790000000", "b#2": "1790086400" };
+  const { recordings } = await runCorpus([seq(steps, "a#1"), seq(steps, "b#2")], { ...local, eventWaitMs: 0 }, {
+    concurrency: 2,
+    runId: "r",
+    headersFor: (s) => ({ "Parity-Now": now[s.id]! }),
+  });
+  for (const r of recordings) {
+    const t = now[r.seq]!;
+    assert.deepEqual(r.steps.map((s) => s.headers), [{ "Parity-Now": t, "Idempotency-Key": runNonce("r", r.seq) }, { "Parity-Now": t }, { "Parity-Now": "5" }]);
+  }
+  const sent = (id: string) => seen.filter((x) => x.headers["idempotency-key"] === runNonce("r", id) || x.headers["parity-now"] === now[id]);
+  assert.deepEqual(sent("a#1").map((x) => x.headers["parity-now"]), ["1790000000", "1790000000"]);
+  assert.deepEqual(sent("b#2").map((x) => x.headers["parity-now"]), ["1790086400", "1790086400"]);
+  assert.equal(seen.filter((x) => x.headers["parity-now"] === "5").length, 2);
+});
+
+test("runCorpus: circuit breaker aborts after 10 consecutive steps ending 429; rest recorded as not sent, no sweep", { timeout: 30_000 }, async () => {
+  seen.length = 0;
+  limited = true;
+  const steps: Step[] = [
+    { method: "GET", path: `/v1/customers/${CUS}` },
+    { method: "POST", path: "/v1/customers", waitMs: 300 }, // lets the 10 in-flight 429s land before the check
+  ];
+  const seqs = Array.from({ length: 11 }, (_, i) => seq(steps, `s#${i}`));
+  const { recordings, summary } = await runCorpus(seqs, local, { concurrency: 10, runId: "r" });
+  limited = false;
+  const reason = "corpus aborted by the circuit breaker: 10 consecutive steps ended 429 after all retries";
+  assert.equal(summary.aborted, reason);
+  assert.equal(recordings.length, 11);
+  for (const r of recordings.slice(0, 10)) {
+    assert.deepEqual([r.steps[0]!.status, r.steps[0]!.retries], [429, 3]);
+    assert.deepEqual(r.steps[0]!.resHeaders, { "request-id": "req_local", "retry-after": "1", "stripe-rate-limited-reason": "global-rate" });
+    assert.deepEqual([r.steps[1]!.status, r.steps[1]!.error], [0, `not sent: ${reason}`]);
+  }
+  assert.deepEqual(recordings[10]!.steps.map((s) => s.status), [0, 0], "a sequence started after the trip sends nothing");
+  assert.ok(recordings.every((r) => r.eventsError === `not collected: ${reason}`));
+  assert.equal(seen.filter((r) => r.url.startsWith("/v1/events")).length, 0, "no event sweep into a limited key");
+  assert.deepEqual([summary.requests, summary.gets, summary.posts, summary.retries429], [40, 40, 0, 30]);
 });
 
 // ---- live sandbox smoke (PARITY_LIVE=1) ----

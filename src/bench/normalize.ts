@@ -1,10 +1,10 @@
-// Normalization v1.1: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
-// per-account opaques, list order, the unclaimed-sandbox banner) so two faithful runs compare equal.
-// Published with every score.
+// Normalization v1.2: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
+// per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
+// faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.1";
+export const NORMALIZATION_VERSION = "v1.2";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -15,7 +15,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "timestamps",
     rationale:
-      "Absolute times differ per run; times under timestamp keys become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset.",
+      "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `*_at`, `*_start`, `*_end`, `*_date`, …) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset.",
   },
   {
     name: "run-nonce",
@@ -38,9 +38,24 @@ export const RULES: { name: string; rationale: string }[] = [
       "`fingerprint` and `invoice_prefix` are per-account → `<opaque>`; invoice `number` keeps only its numeric suffix (`<number:-0002>`). Hides: fingerprints that fail to match across equal cards, wrong invoice prefixes.",
   },
   {
+    name: "card-network-opaques",
+    rationale:
+      "Simulated card-network values are random per charge: `authorization_code`, `network_transaction_id` and `transaction_link_id` (charge `payment_method_details.card`) and `risk_score` (`outcome`; a fraud/risk field, never published per decision 0001 R8) → `<opaque>` wherever they are non-null. Hides: a wrong value, format or type in those fields (a null-vs-value difference is still compared).",
+  },
+  {
+    name: "request-log-url",
+    rationale:
+      "`error.request_log_url` is a dashboard link, and the unclaimed sandbox omits it exactly on the responses that carry the sandbox banner; the key is dropped. Hides: a target that omits it, adds it, or points it anywhere.",
+  },
+  {
+    name: "refund-network-reference",
+    rationale:
+      "A refund's `destination_details.card.{reference, reference_status, reference_type}` is a random card-network reference assigned asynchronously (sometimes still absent when read back); those keys are dropped from refunds. Hides: a target that omits them, adds them, or never moves `reference_status` from `pending` to `available`.",
+  },
+  {
     name: "list-order",
     rationale:
-      "Objects created within the same second list in arbitrary order; `data` of `list`/`search_result` is sorted by raw `created` descending, ties by normalized JSON. Hides: any wrong list order (e.g. ascending instead of newest-first, or misordered elements without `created`), not just same-second ties; page membership and `has_more` are still compared.",
+      "Not normalized: `data` of lists and search results is compared in the order returned. Stripe lists are deterministic (`created` descending, same-second ties in reverse insertion order; templates-validation.md), and v1.1's sort created the W0 pagination noise by reordering same-second elements. Hides: nothing (a wrong order is a divergence).",
   },
   {
     name: "sandbox-banner",
@@ -54,6 +69,7 @@ const ID = /\b([a-z]+(?:_[a-z]+)*)_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}\b/g;
 const BANNER = "This is an unclaimed Stripe sandbox. Dashboard links in this error message will not work until the sandbox is claimed. ";
 const TS_KEYS = new Set([
   "created",
+  "updated",
   "date",
   "start",
   "end",
@@ -67,11 +83,11 @@ const TS_KEYS = new Set([
 const TS_SUFFIX = /(_at|_start|_end|_date)$/;
 const STRIPE_HOST = /(^|\.)stripe\.(com|network)$/;
 const INVOICE_NUMBER = /^[A-Z0-9]+-(\d+)$/;
+const CARD_NETWORK = new Set(["authorization_code", "network_transaction_id", "transaction_link_id", "risk_score"]);
+const REFUND_REFERENCE = ["reference", "reference_status", "reference_type"];
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
-/** JSON.stringify replacer: canonical key order, so tie-breaks ignore a target's key order. */
-const sortKeys = (_: string, x: unknown): unknown => (isObj(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x);
 
 /** First integer `created`, depth-first, own key before children. */
 function firstCreated(v: unknown): number | undefined {
@@ -113,6 +129,7 @@ export function normalizeRecording(r: Recording): Recording {
       const num = k === "number" && parent.object === "invoice" ? INVOICE_NUMBER.exec(v) : null;
       if (num) return `<number:-${num[1]}>`;
     }
+    if (CARD_NETWORK.has(k) && v !== null) return "<opaque>";
     // ponytail: no anchor (no `created` in any step body) leaves timestamps raw; they then surface as noise.
     if (t0 !== undefined && Number.isInteger(v) && (TS_KEYS.has(k) || TS_SUFFIX.test(k))) {
       const t = v as number;
@@ -129,15 +146,12 @@ export function normalizeRecording(r: Recording): Recording {
     if (typeof v === "string") return str(v);
     if (Array.isArray(v)) return v.map(walk);
     if (!isObj(v)) return v;
+    // Dropped keys (v is part of the structuredClone below, so deleting is safe).
+    if (isObj(v.error)) delete v.error.request_log_url;
+    const card = v.object === "refund" && isObj(v.destination_details) ? v.destination_details.card : undefined;
+    if (isObj(card)) for (const k of REFUND_REFERENCE) delete card[k];
     const out: Obj = {};
     for (const [k, x] of Object.entries(v)) out[k] = field(v, k, x);
-    if ((v.object === "list" || v.object === "search_result") && Array.isArray(v.data)) {
-      const norm = out.data as unknown[];
-      out.data = v.data
-        .map((raw, i) => ({ c: isObj(raw) && typeof raw.created === "number" ? raw.created : 0, n: norm[i], j: JSON.stringify(norm[i], sortKeys) }))
-        .sort((a, b) => b.c - a.c || (a.j < b.j ? -1 : a.j > b.j ? 1 : 0))
-        .map((e) => e.n);
-    }
     return out;
   };
 

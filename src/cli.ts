@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle.
+// paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle.
 import { randomInt } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { TEMPLATES } from "../templates/index.ts";
 import { appendLedger, readLedger, rollingGets, type LedgerEntry } from "./bench/budget.ts";
 import { compareRecordings, noiseKeys } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION, normalizeRaw, normalizeRecording } from "./bench/normalize.ts";
+import { buildOracle, dataDir } from "./bench/oracle.ts";
 import { renderMarkdown, toJson, type ReportInput } from "./bench/report.ts";
 import { runCorpus, sandboxTarget, type Target } from "./bench/run.ts";
 import { score } from "./bench/score.ts";
@@ -15,21 +17,30 @@ import { readJsonl, writeJsonl } from "./jsonl.ts";
 import type { Recording, Sequence } from "./types.ts";
 
 const USAGE = `usage:
-  paritybench record --target <sandbox|URL> [--name N] [--templates all|a,b] [--seeds 1-20] [--concurrency 8] [--out recordings/<date>/<name>-<runId>.jsonl]
+  paritybench record --target <sandbox|URL> [--name N] [--templates all|a,b] [--seeds 1-20] [--slice k/n] [--concurrency 8]
+                     [--chunk <n> --chunk-wait <minutes>] [--out <file>]
   paritybench compare --oracle A.jsonl --target B.jsonl [--noise C.jsonl] [--raw] --out reports/<name>
   paritybench bench <baseURL> --oracle A.jsonl [--noise C.jsonl] [--out recordings/<date>/bench-<name>-<runId>]
+  paritybench oracle build [--max-age-days N]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
   Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger budget/reads.jsonl.
+  Data dir: PARITY_DATA_DIR, else ../parity-data next to the repo if present, else recordings/.
+  record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
+  --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
+  --chunk n --chunk-wait m: run n sequences at a time, m minutes apart (each chunk ledgered and written as it ends).
+  bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence.
+  oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
   --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
   compare/bench outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
 const FLAGS: Record<string, string[]> = {
-  record: ["target", "name", "templates", "seeds", "concurrency", "out"],
+  record: ["target", "name", "templates", "seeds", "slice", "concurrency", "chunk", "chunk-wait", "out"],
   compare: ["oracle", "target", "noise", "raw", "out"],
   bench: ["oracle", "noise", "out"],
+  oracle: ["max-age-days"],
 };
 
 class UsageError extends Error {}
@@ -63,6 +74,26 @@ function need(flags: Record<string, string>, k: string): string {
   return v;
 }
 
+/** `--k` as a number > 0 (or >= 0 with `zero`), integer if asked; undefined when absent. */
+function num(flags: Record<string, string>, k: string, o: { integer?: boolean; zero?: boolean } = {}): number | undefined {
+  const v = flags[k];
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (v.trim() === "" || !(o.zero ? n >= 0 : n > 0) || (o.integer && !Number.isInteger(n))) {
+    throw new UsageError(`--${k} must be a ${o.zero ? "non-negative" : "positive"} ${o.integer ? "integer" : "number"}, got "${v}"`);
+  }
+  return n;
+}
+
+/** `k/n` (0 <= k < n): the items whose index is k mod n. */
+export function slice<T>(xs: T[], spec: string): T[] {
+  const m = /^(\d+)\/(\d+)$/.exec(spec);
+  const k = Number(m?.[1]);
+  const n = Number(m?.[2]);
+  if (!m || n < 1 || k >= n) throw new UsageError(`--slice must be k/n with 0 <= k < n, got "${spec}"`);
+  return xs.filter((_, i) => i % n === k);
+}
+
 /** UTC `YYYYMMDDTHHMMSS-xxxx` (4 random base36): idempotency nonces derive from it and must never repeat. */
 export function newRunId(now = new Date()): string {
   return `${now.toISOString().replace(/[-:]/g, "").slice(0, 15)}-${randomInt(36 ** 4).toString(36).padStart(4, "0")}`;
@@ -83,58 +114,116 @@ export function resolveTarget(spec: string, name?: string): Target {
     if (!key) throw new Error("STRIPE_API_KEY is not set (put it in .env)");
     return sandboxTarget(key);
   }
+  // `oracle build` trusts recordings whose target is "sandbox"; another server must not borrow the name.
+  if (name === "sandbox") throw new UsageError(`--name sandbox is reserved for the Stripe sandbox (target ${spec})`);
   return { name: name ?? spec, baseUrl: spec.replace(/\/+$/, ""), apiKey: process.env.PARITY_TARGET_KEY ?? "sk_test_parity" };
 }
 
 const fileName = (spec: string, name?: string): string => name ?? (spec === "sandbox" ? "sandbox" : new URL(spec).host.replace(/[^A-Za-z0-9.-]/g, "-"));
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-/** Runs `seqs` against `target` (budget-gated and ledgered on the sandbox), writes the recordings, prints a summary. */
-async function recordCorpus(target: Target, seqs: Sequence[], concurrency: number, runId: string, out: string): Promise<Recording[]> {
+const isSandbox = (t: Target): boolean => new URL(t.baseUrl).hostname === "api.stripe.com";
+
+interface RecordOpts {
+  concurrency: number;
+  runId: string;
+  out: string;
+  headersFor?: (seq: Sequence) => Record<string, string>;
+  /** Sequences per chunk and minutes between chunks (the claimable key's quota: ~460 requests per ~20 min is safe). */
+  chunk?: number;
+  chunkWaitMin?: number;
+}
+
+/**
+ * Runs `seqs` against `target` (budget-gated and ledgered on the sandbox), writes the recordings, prints a summary.
+ * Chunked runs ledger and rewrite `out` after every chunk. A circuit-breaker abort is ledgered and written, then thrown.
+ */
+async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Promise<Recording[]> {
+  if (!seqs.length) throw new Error("no sequences to run");
   // By host, not name: `--target https://api.stripe.com` or `--name sandbox` must not dodge (or fake) the budget.
-  const sandbox = new URL(target.baseUrl).hostname === "api.stripe.com";
+  const sandbox = isSandbox(target);
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
   if (sandbox) {
-    const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + 20;
+    const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
+    const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep;
     const refusal = budgetRefusal(readLedger(LEDGER), projected, new Date().toISOString(), budget);
     if (refusal) throw new Error(refusal);
-    console.log(`projected sandbox GETs: ${projected} (GET steps + 20 for the event sweep)`);
+    console.log(`projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes)`);
   }
-  console.log(`run ${runId}: ${seqs.length} sequences against ${target.name} at concurrency ${concurrency}`);
-  const t0 = performance.now();
-  let done = 0;
-  let stepsEnd = t0;
-  // ponytail: an interrupted sandbox run (Ctrl-C) is not ledgered; add a signal handler if runs get long.
-  const { recordings, summary } = await runCorpus(seqs, target, {
-    concurrency,
-    runId,
-    onRecord: () => {
-      stepsEnd = performance.now();
-      if (++done % 10 === 0) console.log(`  ${done}/${seqs.length} sequences`);
-    },
-  });
-  const wall = (performance.now() - t0) / 1000;
-  const stepsWall = (stepsEnd - t0) / 1000;
-  writeJsonl(out, recordings);
+  const size = o.chunk ?? seqs.length;
+  const chunks = Math.ceil(seqs.length / size);
+  console.log(
+    `run ${o.runId}: ${seqs.length} sequences against ${target.name} at concurrency ${o.concurrency}` +
+      (chunks > 1 ? ` in ${chunks} chunks of ${size}, ${o.chunkWaitMin ?? 0} min apart` : ""),
+  );
+  const recordings: Recording[] = [];
+  for (let c = 0; c < chunks; c++) {
+    if (c > 0) {
+      console.log(`waiting ${o.chunkWaitMin ?? 0} min before chunk ${c + 1}/${chunks}`);
+      await sleep((o.chunkWaitMin ?? 0) * 60_000);
+    }
+    const part = seqs.slice(c * size, (c + 1) * size);
+    const t0 = performance.now();
+    let done = 0;
+    let stepsEnd = t0;
+    // ponytail: an interrupted sandbox run (Ctrl-C) loses its current chunk's ledger entry; add a signal handler if runs get long.
+    const { recordings: recs, summary } = await runCorpus(part, target, {
+      concurrency: o.concurrency,
+      runId: o.runId,
+      headersFor: o.headersFor,
+      onRecord: () => {
+        stepsEnd = performance.now();
+        if (++done % 10 === 0) console.log(`  ${done}/${part.length} sequences`);
+      },
+    });
+    const wall = (performance.now() - t0) / 1000;
+    const stepsWall = (stepsEnd - t0) / 1000;
+    recordings.push(...recs);
+    writeJsonl(o.out, recordings);
 
-  const perHour = (s: number): string => (s > 0 ? Math.round((seqs.length * 3600) / s).toString() : "—");
-  const charges = new Set(recordings.flatMap((r) => r.events).filter((e) => e.type === "charge.succeeded").map((e) => e.id)).size;
-  const eventsFailed = recordings.filter((r) => r.eventsError).length;
+    const perHour = (s: number): string => (s > 0 ? Math.round((part.length * 3600) / s).toString() : "—");
+    const charges = new Set(recs.flatMap((r) => r.events).filter((e) => e.type === "charge.succeeded").map((e) => e.id)).size;
+    const eventsFailed = recs.filter((r) => r.eventsError).length;
+    console.log(
+      [
+        `${chunks > 1 ? `chunk ${c + 1}/${chunks}: ` : ""}sequences ${part.length} · requests ${summary.requests} (GET ${summary.gets} incl. ${summary.eventSweepGets} event-sweep, POST ${summary.posts}, DELETE ${summary.deletes}) · 429 retries ${summary.retries429}`,
+        `wall ${wall.toFixed(1)} s (steps ${stepsWall.toFixed(1)} s + event sweep ${(wall - stepsWall).toFixed(1)} s) · sequences/hour ${perHour(stepsWall)} on steps, ${perHour(wall)} on wall`,
+        `charge.succeeded events ${charges} · event overlaps ${summary.eventOverlaps}${eventsFailed ? ` · EVENT COLLECTION FAILED for ${eventsFailed} sequences: ${recs.find((r) => r.eventsError)!.eventsError}` : ""}`,
+      ].join("\n"),
+    );
+    if (sandbox) {
+      const date = new Date().toISOString();
+      const account = process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown";
+      appendLedger(LEDGER, { date, account, target: target.name, runId: o.runId, gets: summary.gets, posts: summary.posts, deletes: summary.deletes, charges });
+      console.log(`rolling 30-day sandbox GETs: ${rollingGets(readLedger(LEDGER), date)} / ${budget} (ledger ${LEDGER})`);
+    }
+    if (summary.aborted) {
+      throw new Error(`${summary.aborted}; ${seqs.length - recordings.length} sequences not run; recordings flagged (status 0, eventsError) in ${o.out}`);
+    }
+  }
+  console.log(`wrote ${o.out}`);
+  return recordings;
+}
+
+/** `oracle build`: writes <dataDir>/oracle.jsonl and prints counts per template and the date range. */
+function oracleBuild(maxAgeDays: number | undefined): void {
+  const dir = dataDir();
+  const b = buildOracle(dir, maxAgeDays === undefined ? -Infinity : Date.now() - maxAgeDays * 86_400_000);
+  const excluded = `${b.contaminated} contaminated (a step with status 0 or 429, or eventsError)${maxAgeDays === undefined ? "" : `, ${b.tooOld} older than ${maxAgeDays} days`}`;
+  if (!b.oracle.length) throw new Error(`no eligible sandbox recordings under ${join(dir, "runs")} (${b.sandbox} scanned; excluded ${excluded})`);
+  const out = join(dir, "oracle.jsonl");
+  writeJsonl(out, b.oracle);
+  const perTemplate = new Map<string, number>();
+  for (const r of b.oracle) perTemplate.set(r.template, (perTemplate.get(r.template) ?? 0) + 1);
+  const started = b.oracle.map((r) => r.startedAt).sort();
   console.log(
     [
-      `sequences ${seqs.length} · requests ${summary.requests} (GET ${summary.gets} incl. ${summary.eventSweepGets} event-sweep, POST ${summary.posts}, DELETE ${summary.deletes}) · 429 retries ${summary.retries429}`,
-      `wall ${wall.toFixed(1)} s (steps ${stepsWall.toFixed(1)} s + event sweep ${(wall - stepsWall).toFixed(1)} s) · sequences/hour ${perHour(stepsWall)} on steps, ${perHour(wall)} on wall`,
-      `charge.succeeded events ${charges} · event overlaps ${summary.eventOverlaps}${eventsFailed ? ` · EVENT COLLECTION FAILED for ${eventsFailed} sequences: ${recordings.find((r) => r.eventsError)!.eventsError}` : ""}`,
+      `oracle: ${b.oracle.length} sequences, newest clean per sequence, from ${b.sandbox} sandbox recordings in ${b.files} files; excluded ${excluded}`,
+      ...[...perTemplate].map(([t, n]) => `  ${t} ${n}`),
+      `oldest ${started[0]} · newest ${started.at(-1)}`,
+      `wrote ${out}`,
     ].join("\n"),
   );
-  if (sandbox) {
-    const date = new Date().toISOString();
-    const account = process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown";
-    appendLedger(LEDGER, { date, account, target: target.name, runId, gets: summary.gets, posts: summary.posts, deletes: summary.deletes, charges });
-    console.log(`rolling 30-day sandbox GETs: ${rollingGets(readLedger(LEDGER), date)} / ${budget} (ledger ${LEDGER})`);
-  }
-  console.log(`wrote ${out}`);
-  return recordings;
 }
 
 /** Pairs by `seq` (oracle order), normalizes (or not), scores, and writes `<out>.md` + `<out>.json`. */
@@ -181,6 +270,11 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (cmd === undefined || !FLAGS[cmd]) throw new UsageError(cmd === undefined ? "no command" : `unknown command "${cmd}"`);
     const { flags, positional } = parseArgs(cmd, rest);
+    if (cmd === "oracle") {
+      if (positional.join(" ") !== "build") throw new UsageError(`expected "oracle build", got "oracle ${positional.join(" ")}"`);
+      oracleBuild(num(flags, "max-age-days"));
+      return 0;
+    }
     if (positional.length !== (cmd === "bench" ? 1 : 0)) throw new UsageError(`unexpected arguments: ${positional.join(" ") || "(missing <baseURL>)"}`);
 
     if (cmd === "compare") {
@@ -200,21 +294,29 @@ export async function main(argv: string[]): Promise<number> {
       } catch (e) {
         throw new UsageError((e as Error).message);
       }
-      const concurrency = Number(flags.concurrency ?? 8);
-      if (!Number.isInteger(concurrency) || concurrency < 1) throw new UsageError(`--concurrency must be a positive integer, got "${flags.concurrency}"`);
-      const out = flags.out ?? `recordings/${today()}/${fileName(spec, flags.name)}-${runId}.jsonl`;
-      await recordCorpus(target, buildCorpus(templates, seeds), concurrency, runId, out);
+      const concurrency = num(flags, "concurrency", { integer: true }) ?? 8;
+      const chunk = num(flags, "chunk", { integer: true });
+      const chunkWaitMin = num(flags, "chunk-wait", { zero: true });
+      if (chunkWaitMin !== undefined && chunk === undefined) throw new UsageError("--chunk-wait needs --chunk");
+      const corpus = buildCorpus(templates, seeds);
+      const seqs = flags.slice === undefined ? corpus : slice(corpus, flags.slice);
+      const dir = isSandbox(target) ? join(dataDir(), "runs") : "recordings";
+      const out = flags.out ?? join(dir, today(), `${fileName(spec, flags.name)}-${runId}.jsonl`);
+      await recordCorpus(target, seqs, { concurrency, runId, out, chunk, chunkWaitMin });
       return 0;
     }
 
     // bench: re-record the oracle's exact (template, seed) pairs against the URL, then compare.
     const url = positional[0]!;
     const oraclePath = need(flags, "oracle");
-    const seqs = readJsonl<Recording>(oraclePath).map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
+    const oracle = readJsonl<Recording>(oraclePath);
+    const seqs = oracle.map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
+    // The oracle's clock: a twin answers as of the day the oracle was recorded (decision 0002 §4.4); other targets ignore it.
+    const now = new Map(oracle.map((r) => [r.seq, String(Math.floor(Date.parse(r.startedAt) / 1000))]));
     const target = resolveTarget(url);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
-    await recordCorpus(target, seqs, 8, runId, recPath);
+    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor: (s) => ({ "Parity-Now": now.get(s.id)! }) });
     compareFiles(oraclePath, recPath, flags.noise, false, flags.out ?? `recordings/${today()}/bench-${name}-${runId}`);
     return 0;
   } catch (e) {
