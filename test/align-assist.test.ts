@@ -220,13 +220,20 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.equal(none.skipped, "ANTHROPIC_API_KEY is not set: no LLM call, assisted pass skipped");
     assert.equal(api.requests.length, 2);
 
+    // At the cap: the loop stops before anything is sent, and the run's note records it.
+    const capped = await assist(plan, { repo, dataDir: data, runId: "assist-4", env: { ...env, PARITY_LLM_CAP_USD: "0" }, run, now: NOW });
+    assert.deepEqual([capped.outcomes.length, capped.outcomes[0]!.result, capped.cost_usd], [1, "cap", 0]);
+    assert.match(capped.outcomes[0]!.detail!, /> cap \$0 /);
+    assert.equal(api.requests.length, 2);
+
     const log = readJsonl<LogEntry>(logPath(data));
-    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 4 });
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 5 });
     assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [
       ["patch", "assist-1", "assisted", "proposed"],
       ["note", "assist-1", undefined, undefined],
       ["note", "assist-2", undefined, undefined],
       ["note", "assist-3", undefined, undefined],
+      ["note", "assist-4", undefined, undefined],
     ]);
     assert.deepEqual([log[0]!.data.pr, log[0]!.data.branch, log[0]!.data.file], ["https://github.com/example/parity/pull/7", "align/assisted-2026-09-26-1", FILE]);
     assert.deepEqual((log[3]!.data.assist as { skipped?: string }).skipped, none.skipped);
