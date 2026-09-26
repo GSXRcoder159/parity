@@ -202,3 +202,37 @@ details {
   margin: 0;
   padding-left: 18px;
 }
+
+nav {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.tiers {
+  display: grid;
+  margin-top: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.tiers section {
+  margin-top: 0;
+}
+.price {
+  margin: 4px 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+}
+dt {
+  margin-top: 8px;
+  font-weight: 600;
+}
+dd {
+  margin: 2px 0 0;
+}
+.tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--warn-bg);
+  font-size: 12px;
+  font-weight: 400;
+}

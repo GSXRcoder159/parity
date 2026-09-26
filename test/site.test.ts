@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 // site/app.js is browser JS with no build step; a computed specifier keeps tsc from asking for its types.
 const app = await import(new URL("../site/app.js", import.meta.url).href);
@@ -91,4 +92,12 @@ test("cells: an interval with its sample size, and a dash for an empty one", () 
   assert.equal(app.cell({ p: 0.924, lo: 0.894, hi: 0.946, n: 420 }), "92.4% [89.4–94.6] (420)");
   assert.equal(app.cell({ p: 0, lo: 0, hi: 0, n: 0 }), "—");
   assert.equal(app.cell(undefined), "—");
+});
+
+test("the pricing page exists, says it is only proposed, and the score page links to it", () => {
+  const read = (f: string) => readFileSync(new URL(`../site/${f}`, import.meta.url), "utf8");
+  const pricing = read("pricing.html");
+  assert.match(pricing, /<p class="banner"><strong>Proposed pricing\. Nothing is for sale yet\.<\/strong><\/p>/);
+  assert.doesNotMatch(pricing.match(/<title>(.*)<\/title>/)![1]!, /stripe/i); // decision 0001 C4
+  assert.match(read("index.html"), /<a href="pricing\.html">/);
 });

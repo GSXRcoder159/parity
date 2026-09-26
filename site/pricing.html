@@ -1,0 +1,104 @@
+<!doctype html>
+<!-- DRAFT — not for publication before the launch gate (docs/plan/STATUS.md) -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parity pricing</title>
+    <meta name="description" content="Proposed pricing for Parity: the open-source twin, ParityBench and the score are free; private alignment with paritybench agree in your CI is the one paid offer. Nothing is for sale yet." />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <nav><a href="index.html">Parity score</a></nav>
+    <header>
+      <h1>Pricing</h1>
+      <p class="banner"><strong>Proposed pricing. Nothing is for sale yet.</strong></p>
+      <p>
+        Parity is an open-source Stripe-compatible Billing twin, plus ParityBench, the harness that scores it against the real Stripe sandbox every
+        night. This page shows how we plan to charge for work on your own account.
+      </p>
+    </header>
+
+    <main>
+      <div class="tiers">
+        <section>
+          <h2>Open source</h2>
+          <p class="price">Free, forever</p>
+          <ul>
+            <li>The twin: a stateful Billing server you run locally, in Docker or in CI</li>
+            <li>ParityBench: scores any Stripe-compatible server against the sandbox</li>
+            <li>The score: published nightly, with its noise floor and ceiling</li>
+            <li>The alignment loop that keeps the twin close to the sandbox</li>
+          </ul>
+          <!-- Pledge: plan §2.2; wording from README.md "License and pledge". -->
+          <p><strong>Pledge: the alignment loop and the score stay open.</strong> Apache-2.0.</p>
+        </section>
+
+        <section>
+          <h2>Private alignment + <code>paritybench agree</code> in your CI</h2>
+          <!-- $99–$299/month and the SKU: docs/plan/2026-09-25-parity-mvp-plan.md §6.3. Nov 2: plan §2.2 and §5. -->
+          <p class="price">$99–$299/month</p>
+          <ul>
+            <li>The twin aligned to your account config and your call shapes</li>
+            <li><code>paritybench agree</code> runs your test or eval suite on the twin and on the sandbox and reports how often pass/fail agrees</li>
+            <li>Runs use your own sandbox key</li>
+          </ul>
+          <p class="muted">This is the offer a letter of intent names. Delivery starts after Nov 2, 2026.</p>
+        </section>
+      </div>
+
+      <section>
+        <h2>Not offered yet</h2>
+        <!-- Prices: parity-research.md §5. Cut, and when each comes back: docs/plan/2026-09-25-parity-mvp-plan.md §2.3. -->
+        <p class="muted">
+          Both are cut from the current plan. Drift pull requests come back when a real drift event is caught; hosted runs come back when a paying team
+          needs more than 50 parallel instances.
+        </p>
+        <dl>
+          <dt>Drift Guard <span class="tag">not offered yet</span></dt>
+          <dd>Alerts, and pull requests in your repo, when sandbox behavior your code depends on changes. $299/org/month.</dd>
+          <dt>Parity Cloud <span class="tag">not offered yet</span></dt>
+          <dd>Hosted, parallel, resettable twin instances. 1,000 hosted runs/month free, then $0.10/run.</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Questions</h2>
+
+        <h3>What does “private alignment” mean?</h3>
+        <!-- Decision 0001 C8; account config examples: parity-research.md §5. -->
+        <p>
+          The public twin is aligned to our own sandbox and a public corpus of call sequences. Private alignment aligns it to your account config
+          (for example Connect, tax or custom billing settings) and to the call shapes your code actually makes. Every run for you uses your own
+          Stripe account and your own sandbox key, never ours.
+        </p>
+
+        <h3>Why is the open score free?</h3>
+        <p>
+          A fidelity score only means something if anyone can check it. The harness, the method and the numbers are public, so you can rerun the score
+          on your own account instead of trusting ours. What costs money is work on your account: its config and your call shapes, which the public
+          corpus does not cover.
+        </p>
+
+        <h3>How does the rolling oracle work?</h3>
+        <!-- Decision 0002 §1; read budget: decision 0001 C2; 88 sequences: reports/2026-09-26-twin-day0.md. -->
+        <p>
+          The oracle is the latest sandbox recording of each sequence in the corpus. Until Stripe confirms whether its read allocation applies to
+          sandboxes, we cap sandbox reads at 10,000 per account per rolling 30 days. Re-recording the whole corpus every night would exceed that, so
+          each night we re-record a slice (sequence index mod 7 = day of week), and the whole corpus refreshes weekly. The twin is then scored on the whole corpus against the latest recording of each sequence. So the twin is scored nightly against
+          an oracle that is at most 7 days old; drift on any sequence is detected within 7 days.
+        </p>
+        <p>
+          Today the oracle is v0: 88 sequences, not the planned 520
+          (<a href="https://github.com/GSXRcoder159/parity/blob/main/reports/2026-09-26-twin-day0.md">day-0 report</a>).
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <p>Parity is not affiliated with, endorsed by, or sponsored by Stripe, Inc. Stripe is a trademark of Stripe, Inc.</p>
+      <p>Method, reproduction and license: <a href="https://github.com/GSXRcoder159/parity#readme">README</a> · Apache-2.0</p>
+    </footer>
+  </body>
+</html>
