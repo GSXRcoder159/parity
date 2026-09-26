@@ -128,7 +128,7 @@ This is the second run of #2 with the same seeds. By this point, 10 sandbox cust
 
 ## Templates #16–#26 (2026-09-26)
 
-Target: the same unclaimed sandbox (claimable key), API version `2026-08-26.dahlia`. Recorded with the CLI, so every run was budget-gated and ledgered in `budget/reads.jsonl`:
+Target: the same sandbox, still unclaimed (the error-message banner shows it; the key itself was not inspected), API version `2026-08-26.dahlia`. Recorded with the CLI, so every run was budget-gated and ledgered in `budget/reads.jsonl`:
 
 - `paritybench record --target sandbox --templates invoice-preview-proration,subscription-update-price,subscription-update-quantity,invoice-send-invoice,boundaries-amounts,boundaries-list-limits,expand-paths,customer-search,webhook-endpoint-crud,idempotency-errors,customer-delete-cascade --seeds 1-2`: run `20260926T012758-uxv2`, 22 sequences at concurrency 8, 148 requests (35 GETs), 0 429s, 75 s wall.
 - `paritybench record --target sandbox --templates subscription-update-price,invoice-send-invoice,expand-paths --seeds 3-4`: run `20260926T012914-57wc`, 6 sequences, 49 requests (16 GETs), 0 429s. This covers the generator branches that seeds 1–2 do not take.
