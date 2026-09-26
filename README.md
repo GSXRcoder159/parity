@@ -15,7 +15,7 @@ Parity measures how faithfully a Stripe-compatible server reproduces the real St
 npx paritybench twin                  # http://127.0.0.1:12111
 ```
 
-The package is not on npm yet. From a checkout (Node ≥ 22.18, nothing to install), run `node src/cli.ts twin [--port 12111] [--host 127.0.0.1]`.
+This line does not work yet, and publishing alone will not fix it. The package is not on npm, and its `bin` is `src/cli.ts`: Node refuses to strip TypeScript types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so `npx` needs a compiled JavaScript build first. Today, from a checkout (Node ≥ 22.18, nothing to install), run `node src/cli.ts twin [--port 12111] [--host 127.0.0.1]`, or use Docker or the Action below.
 
 With Docker:
 
