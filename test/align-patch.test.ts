@@ -189,7 +189,7 @@ test("constant only in this oracle: a message quoting the request, an account- o
     rec(`e#${n}`, false, [
       { ...st(0, 400, { error: { type: "invalid_request_error", message: `Too deep: ${path}` } }), params: { expand: [path] } },
       { ...st(1, 402, { error: { type: "card_error", message: "Your card was declined." } }), params: { customer: `cus_${n}abc`, confirm: true, metadata: { tag: "de" } } },
-      st(2, 200, customer({ address: { country: "US" }, invoice_settings: { card: { exp_month: 9 } }, account_country: "US" })),
+      st(2, 200, customer({ address: { country: "ZZ" }, invoice_settings: { card: { exp_month: 12 } }, account_country: "ZZ" })),
     ]),
   );
   const twin = [1, 2].map((n) => rec(`e#${n}`, false, [st(0, 400, {}, "expand_too_deep"), st(1, 402, {}, "card_declined"), st(2, 200, {})]));
@@ -211,7 +211,7 @@ test("constant only in this oracle: a message quoting the request, an account- o
   // The declined message quotes no request value (short and boolean leaves never count); the address is API semantics.
   assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
     ["/card_declined/message", "Your card was declined."],
-    ["/address", { country: "US" }],
+    ["/address", { country: "ZZ" }],
   ]);
   assert.deepEqual(notMechanical.map((n) => n.reason), [
     "request-derived: the message quotes a request parameter value",
