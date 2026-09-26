@@ -51,7 +51,7 @@ const ACCOUNT_OR_TIME = new Set(["account_country", "account_name", "calculated_
  * Fraud and risk fields ("information Stripe uses for security or fraud prevention", 0001 §(c)/R8): never published in
  * any form, so never seeded into the public templates. `checks` holds card verification results (cvc, address).
  */
-const FRAUD_OR_RISK = new Set(["fraud_details", "outcome", "risk_level", "risk_score", "checks", "radar_options"]);
+export const FRAUD_OR_RISK = new Set(["fraud_details", "outcome", "risk_level", "risk_score", "checks", "radar_options"]);
 /**
  * An API type default is an enum token (lowercase, digits, `_.-`). Any other text (prose, labels, country or descriptor
  * codes) is set by the request, the account or the context, e.g. a charge description that follows its invoice's reason.

@@ -140,6 +140,13 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     return o.object === "customer" && !o.deleted ? { ...o, description: o.name ?? null } : o;
   };
   const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: described(s.body) })) }));
+  // Fraud and risk fields (0001 R8) in a train response, as a field and nested in another field's value: they must reach
+  // neither the prompt nor the PR. Train only: in the held-out customers they would block the L3 match below.
+  const RISK = "RISKMARK";
+  Object.assign(oracle.find((r) => r.seq === "customer-crud#1")!.steps[0]!.body as object, {
+    outcome: { type: "authorized", risk_level: RISK, seller_message: RISK },
+    payment: { card: { brand: "visa", checks: { cvc_check: RISK } } },
+  });
   const data = mkdtempSync(join(tmpdir(), "pb-assist-data-"));
   writeJsonl(join(data, "oracle.jsonl"), oracle);
 
@@ -198,6 +205,11 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.deepEqual(args!.slice(0, 5), ["pr", "create", "--draft", "--head", "align/assisted-2026-09-26-1"]);
     const body = args![args!.indexOf("--body") + 1]!;
     for (const s of ["**Draft: merge only after review**", "- Before: train L1", "- After: train L1", "cost_usd 0.0070", "## Counterexample (normalized): customer-crud#1", "decision 0001 C3"]) assert.ok(body.includes(s), s);
+    const ce = user.slice(user.indexOf("## Counterexample"));
+    for (const text of [ce, body]) {
+      assert.ok(!text.includes(RISK) && !/"(outcome|checks|risk_level|seller_message|cvc_check)"|\$\.outcome/.test(text), "no fraud or risk field, key or value");
+      assert.match(text, /^- step 0 \$\.payment MISSING_FIELD expected \{"card":\{"brand":"visa"\}\} actual undefined$/m);
+    }
     assert.ok(!gh.flat().includes("merge"), "never merges");
     assert.equal(git("rev-parse", "HEAD"), head, "the main working tree stays on HEAD");
     assert.equal(git("status", "--porcelain"), "?? budget/", "only the LLM ledger is new");

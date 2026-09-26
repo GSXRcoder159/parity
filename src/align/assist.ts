@@ -19,8 +19,8 @@ import { evalOf, scoreTwinIn, type Eval, type Scores } from "./gate.ts";
 import { split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
-import { locusKey } from "./patch.ts";
-import { divergenceId, type Locus, type Triaged } from "./triage.ts";
+import { FRAUD_OR_RISK, locusKey } from "./patch.ts";
+import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
 
 /** Runs a command in `cwd` and returns its trimmed stdout (injectable: tests fake `gh`). */
 export type Run = (cmd: string, args: string[], cwd: string) => string;
@@ -33,13 +33,21 @@ interface Cluster {
   divergences: Triaged[];
 }
 
+/**
+ * Fraud and risk fields (patch.ts FRAUD_OR_RISK; 0001 R8: never published, in any form) are kept out of the prompt and
+ * the PR: `risky` paths are dropped, `scrub` removes those keys at any depth of a value.
+ */
+const risky = (path: string): boolean => segments(path).some((s) => FRAUD_OR_RISK.has(String(s)));
+const scrub = (v: unknown): unknown =>
+  Array.isArray(v) ? v.map(scrub) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !FRAUD_OR_RISK.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
+
 /** Non-mechanical train loci worth a code change, most train divergences first. Noise and fraud/risk loci are skipped. */
 function clusters(r: AlignResult): Cluster[] {
   const train = r.divergences.filter((d) => !d.heldOut && d.cls !== "NONDETERMINISTIC");
   const loci = [
     ...r.notMechanical.filter((n) => !/^(noise|fraud)/.test(n.reason)).map((n) => ({ locus: n.locus, reason: n.reason })),
     ...r.gate.blocked.map((j) => ({ locus: j.candidate.locus, reason: "blocked-by-code: the data edit changed nothing" })),
-  ];
+  ].filter((l) => !(l.locus.kind === "field" && risky(`.${l.locus.fieldPath}`))); // e.g. "no template" is decided before the fraud check
   return loci
     .map((l) => ({ ...l, divergences: train.filter((d) => locusKey(d.locus) === locusKey(l.locus)) }))
     .filter((c) => c.divergences.length)
@@ -80,18 +88,19 @@ function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recordin
   const ev = mine.find((d) => d.locus.kind === "events")?.locus;
   const step = steps.length ? last : ev?.kind === "events" ? (ev.steps.find((s) => s.step >= 0)?.step ?? last) : last;
   const json = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
-  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches."];
+  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches. Fraud and risk fields (outcome, checks, fraud_details, risk_*, radar_options) are removed from both sides and are out of scope."];
   for (const s of o.steps.slice(0, last + 1)) {
     const ts = t.steps[s.i];
-    out.push(`### Step ${s.i}: ${s.method} ${s.path}`, `params: ${JSON.stringify(s.params ?? {})}`, `oracle: status ${s.status}`, json(s.body));
-    out.push(ts && ts.status === s.status && isDeepStrictEqual(ts.body, s.body) ? "twin: identical" : `twin: status ${ts?.status}\n${json(ts?.body)}`);
+    const [ob, tb] = [scrub(s.body), scrub(ts?.body)];
+    out.push(`### Step ${s.i}: ${s.method} ${s.path}`, `params: ${JSON.stringify(scrub(s.params ?? {}))}`, `oracle: status ${s.status}`, json(ob));
+    out.push(ts && ts.status === s.status && isDeepStrictEqual(tb, ob) ? "twin: identical" : `twin: status ${ts?.status}\n${json(tb)}`);
   }
   if (ev) out.push(`### Events of the whole sequence\noracle: ${JSON.stringify(o.events.map((e) => e.type))}\ntwin: ${JSON.stringify(t.events.map((e) => e.type))}`);
   const ids = new Set(mine.map((d) => divergenceId(d.seq, d.step, d.path)));
-  const shown = all.filter((d) => d.seq === seq && d.cls !== "NONDETERMINISTIC" && d.step <= last);
+  const shown = all.filter((d) => d.seq === seq && d.cls !== "NONDETERMINISTIC" && d.step <= last && !risky(d.path));
   out.push(
     `## Divergences in these steps (* = the locus to fix: ${where(c.locus)}; ${c.reason}; ${c.divergences.length} train divergences there in ${new Set(c.divergences.map((d) => d.seq)).size} sequences)`,
-    ...shown.map((d) => `${ids.has(divergenceId(d.seq, d.step, d.path)) ? "*" : "-"} step ${d.step} ${d.path} ${d.cls} expected ${JSON.stringify(d.expected)} actual ${JSON.stringify(d.actual)}`),
+    ...shown.map((d) => `${ids.has(divergenceId(d.seq, d.step, d.path)) ? "*" : "-"} step ${d.step} ${d.path} ${d.cls} expected ${JSON.stringify(scrub(d.expected))} actual ${JSON.stringify(scrub(d.actual))}`),
   );
   return { seq, last, step, text: out.join("\n") };
 }
