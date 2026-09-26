@@ -18,14 +18,23 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §2.1, §3.1 (`parit
 
 ## Task 1: Surface-added log entries and curve annotations
 
-**Paths:** `src/align/index.ts`, `src/align/log.ts`, `src/cli.ts`, `src/nightly.ts`, `test/align-surface.test.ts`
+**Paths:** `src/align/*.ts`, `src/cli.ts`, `src/nightly.ts`, `test/align-*.test.ts`, `test/nightly.test.ts`, `test/twin-core.test.ts`
 
 - `paritybench align surface --note "<text>" [--commit <sha>]`:
   1. Runs `score-twin` on the current oracle for the working tree, and on a temp checkout of `<commit>^` (default: HEAD's parent), to get before and after scores.
   2. Appends a sealed-log `patch` entry `{class: "surface-added", status: "applied", note, commit, before, after}` with provenance.
   3. Prints the deltas.
 - The nightly curve writer adds each surface-added entry since the previous curve point as an `events` annotation (`"surface-added: <note>"`). The score page already renders annotations.
-- Tests: the entry shape, and that the annotation is emitted once.
+- Match the entry shape nightly already reads: W3 Task 4 defined `class: "surface-added"` with a `surface` field. Read `src/nightly.ts` and keep one shape.
+- **W3 carry-overs** (from the W3 reviews; these are in this task because it owns `src/nightly.ts` and `src/align/*`):
+  - (a) **Secrets never reach LLM-authored code.** The score-twin child process that the gate and the assist pass spawn gets a minimal env: `PATH`, `HOME`, `NODE_*`, `PARITY_DATA_DIR` and `CI` only. No `ANTHROPIC_API_KEY`, `GH_TOKEN`, `STRIPE_API_KEY` or `PARITY_DATA_TOKEN`. Add a test that asserts the child env.
+  - (b) nightly's degraded path catches only sandbox-refusal errors (circuit breaker, budget gate, HTTP 429). A missing key or a programming error fails the run loudly.
+  - (c) Tonight's read-ledger entry and slice file are persisted as soon as recording ends, not only at the final push.
+  - (d) The curve point carries `oracleSeqs`. When it grows versus the previous point, nightly emits an `"oracle expanded: <old>→<new>"` annotation.
+  - (e) Seed the noise pair from the W0 A and D recordings (`recordings/2026-09-2{5,6}/` or `../parity-data/runs`) under the names nightly recognizes, labelled as the 2026-09-25 pair covering templates #1–#15. Commit and push the data repo.
+  - (f) The in-process twin reset bound in `test/twin-core.test.ts` gets the ×3 CI slack.
+  - (g) `align --apply` refuses when `src/` or `templates/` has uncommitted changes, not only the data files.
+- Tests: the entry shape, that the annotation is emitted once, and (a)–(d).
 
 ## Task 2 (surface-added): Subscription updates and proration
 
