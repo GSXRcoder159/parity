@@ -158,7 +158,8 @@ def setup(base_url: str, task: str) -> dict:
 
 def score(base_url: str, task: str, ids: dict) -> float:
     """1.0 if the twin's final state solves `task` for the objects `setup` created, else 0.0."""
-    # ponytail: fetches the whole store per score; add an ids filter to /_parity/state if long runs make it slow.
+    # ponytail: fetches the whole store per score, and nothing resets it (rollouts share the twin), so it grows with
+    # every rollout; restart the twin between runs, or add an ids filter to /_parity/state if long runs get slow.
     with urlopen(f"{base_url}/_parity/state") as r:
         objects = {o["id"]: o for o in json.load(r)["objects"]}
     return float(TASKS[task].check(objects.__getitem__, ids))
