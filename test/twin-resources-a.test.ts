@@ -29,7 +29,9 @@ async function run(id: string) {
   const steps: (Res & { method: string; path: string })[] = [];
   for (const s of seq.steps) {
     const path = String(resolveRefs(s.path, bound, "nonce"));
-    const r = await call(twin, s.method, path, s.params && (resolveRefs(s.params, bound, "nonce") as Obj), s.headers && (resolveRefs(s.headers, bound, "nonce") as Obj));
+    // A pinned clock keeps same-second assumptions (list order, product `updated`) from flaking.
+    const headers = { "Parity-Now": "1790379195", ...(s.headers && (resolveRefs(s.headers, bound, "nonce") as Obj)) };
+    const r = await call(twin, s.method, path, s.params && (resolveRefs(s.params, bound, "nonce") as Obj), headers);
     if (s.ref) bound[s.ref] = r.body;
     steps.push({ ...r, method: s.method, path });
   }
