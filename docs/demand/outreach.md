@@ -18,7 +18,7 @@
 ## 1. Autumn (channel)
 
 **Channel:** email hey@useautumn.com; post the same text in the Autumn Discord (https://discord.gg/53emPtY9tA)
-**Subject:** PR #3491 and a Stripe twin for Autumn's tests
+**Subject:** PR #3491 and a Billing twin for Autumn's tests
 
 > Hi Ayush and John,
 >
@@ -172,7 +172,7 @@ Source: https://www.getmacha.com/blog/handling-subscription-billing-questions-st
 
 > Hi LiveX team,
 >
-> Stripe's case study says your agents use the Stripe agent toolkit to "negotiate offers, apply discounts, and resolve customer issues automatically" in customers' Stripe accounts. I'm Adam Kuca (University of Michigan), measuring how faithfully Stripe mocks reproduce real Stripe Billing behavior.
+> The Stripe case study on LiveX says your agents use the Stripe agent toolkit to "negotiate offers, apply discounts, and resolve customer issues automatically" in customers' Stripe accounts. I'm Adam Kuca (University of Michigan), measuring how faithfully Stripe mocks reproduce real Stripe Billing behavior.
 >
 > Could you send your Stripe integration tests, or 5 eval scenarios your agents run? A mid-cycle plan change is a good one. Within a week I'll run them against the real Stripe sandbox and the existing mocks (stripe-mock, localstripe) and send you every divergence. From mid-October I'll run the plan-change and refund steps on our open-source twin and send the agreement number within 48 hours.
 >
@@ -247,7 +247,7 @@ Source: https://github.com/okou-ai/okou/blob/c1469bbd47aeea42ceaedc53c270923a82e
 
 > Hi Gram (via support; please forward),
 >
-> Stripe's case study describes Decagon agents that help customers "manage their subscriptions, access invoices, deliver refunds, and more," and quotes you on the subscription lookups. I'm Adam Kuca (University of Michigan), measuring how faithfully Stripe mocks reproduce real Stripe Billing behavior.
+> The Stripe case study on Decagon describes Decagon agents that help customers "manage their subscriptions, access invoices, deliver refunds, and more," and quotes you on the subscription lookups. I'm Adam Kuca (University of Michigan), measuring how faithfully Stripe mocks reproduce real Stripe Billing behavior.
 >
 > Could you send your Stripe integration tests, or 5 eval scenarios your agents run? Within a week I'll run them against the real Stripe sandbox and the existing mocks (stripe-mock, localstripe) and send you every divergence. From mid-October I'll run them on our open-source twin and send the agreement number within 48 hours.
 >
@@ -354,5 +354,5 @@ A second touch for a target who has not replied. Once B5 clears, it takes F2's p
 Source: `reports/2026-09-26-baseline.md` (H1 verdict: stripe-mock 0.0% [0.0–4.2] over 88 sequences, localstripe 0.0% [0.0–16.1] over 20; sandbox against itself 100.0% [94.0–100.0] over 60 pairs).
 
 Before sending:
-- The numbers come from oracle v0 (88 of 520 planned sequences). If a later report replaces it, take the numbers from that report.
+- The numbers come from oracle v0 (88 of 600 planned sequences). If a later report replaces it, take the numbers from that report.
 - Fill the URL from the public report. If there is none, do not send (the F2 rule: no placeholders).

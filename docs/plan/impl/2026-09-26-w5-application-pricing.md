@@ -18,7 +18,7 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §2.2, §5 W5, §6.3
   - **Open source, free forever:** twin, ParityBench, the score, and the alignment loop, with the plan §2.2 pledge.
   - **Private alignment + `paritybench agree` in your CI:** $99–$299/month. This is the LOI SKU (plan §6.3). Delivery starts after Nov 2.
   - **Later, listed as "not offered yet":** Drift Guard ($299/org/month) and Parity Cloud (1,000 hosted runs/month free, then $0.10/run). Plan §2.3 cuts both.
-- An FAQ covering: what "private alignment" means (aligning to the customer's own account config and call shapes, with the customer's own sandbox key: decision 0001 C8); why the open score is free; and how the rolling oracle works (0002 §1 wording).
+- An FAQ covering: what "private alignment" means (aligning to the customer's own call shapes, with the customer's own sandbox key: decision 0001 C8, the SKU of plan §6.3; account-config alignment is on the §2.3 cut list); why the open score is free; and how the rolling oracle works (0002 §1 wording).
 
 ## Task 2: Demand collateral
 

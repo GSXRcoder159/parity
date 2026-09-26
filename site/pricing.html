@@ -15,8 +15,8 @@
       <h1>Pricing</h1>
       <p class="banner"><strong>Proposed pricing. Nothing is for sale yet.</strong></p>
       <p>
-        Parity is an open-source Stripe-compatible Billing twin, plus ParityBench, the harness that scores it against the real Stripe sandbox every
-        night. This page shows how we plan to charge for work on your own account.
+        Parity is an open-source Stripe-compatible Billing twin, plus ParityBench, the harness that scores it against recordings of the real Stripe
+        sandbox. This page shows how we plan to charge for work on your own account.
       </p>
     </header>
 
@@ -28,7 +28,7 @@
           <ul>
             <li>The twin: a stateful Billing server you run locally, in Docker or in CI</li>
             <li>ParityBench: scores any Stripe-compatible server against the sandbox</li>
-            <li>The score: published nightly, with its noise floor and ceiling</li>
+            <li>The score, with its noise floor and ceiling: published nightly once the nightly runs on a schedule (it needs a claimed sandbox)</li>
             <li>The alignment loop that keeps the twin close to the sandbox</li>
           </ul>
           <!-- Pledge: plan §2.2; wording from README.md "License and pledge". -->
@@ -44,7 +44,7 @@
             <li><code>paritybench agree</code> runs your test or eval suite on the twin and on the sandbox and reports how often pass/fail agrees</li>
             <li>Runs use your own sandbox key</li>
           </ul>
-          <p class="muted">This is the offer a letter of intent names. Delivery starts after Nov 2, 2026.</p>
+          <p class="muted">This is the offer in our letter-of-intent template. Delivery starts after Nov 2, 2026.</p>
         </section>
       </div>
 
@@ -87,11 +87,12 @@
         <p>
           The oracle is the latest sandbox recording of each sequence in the corpus. Until Stripe confirms whether its read allocation applies to
           sandboxes, we cap sandbox reads at 10,000 per account per rolling 30 days. Re-recording the whole corpus every night would exceed that, so
-          each night we re-record a slice (sequence index mod 7 = day of week), and the whole corpus refreshes weekly. The twin is then scored on the whole corpus against the latest recording of each sequence. So the twin is scored nightly against
-          an oracle that is at most 7 days old; drift on any sequence is detected within 7 days.
+          each night will re-record a slice (sequence index mod 7 = day of week), so the whole corpus refreshes weekly. The twin is then scored on the whole corpus against the latest recording of each sequence. So, once the nightly runs, the twin is scored nightly against
+          an oracle that is at most 7 days old, and drift on any sequence is detected within 7 days.
         </p>
         <p>
-          Today the oracle is v0: 88 sequences, not the planned 520
+          The nightly is built but does not run on a schedule yet: it needs a claimed sandbox key. Today the oracle is v0: 88 sequences, not the
+          planned 600 (30 templates × 20 seeds)
           (<a href="https://github.com/GSXRcoder159/parity/blob/main/reports/2026-09-26-twin-day0.md">day-0 report</a>).
         </p>
       </section>

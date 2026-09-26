@@ -48,16 +48,15 @@ The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day,
 ## Status (2026-09-26)
 
 - **Scripted agent on the twin: 19/20 pass; twin vs control 20/20** (the scripted agent is deterministic, so this
-  checks the control path, not an agent). `switch-to-annual` fails because the twin answers `not_implemented` to a
-  price with a different interval (`src/twin/resources/subscriptions.ts`). This is a twin surface gap, and the task stays
-  in the suite: removing it would tune H4 to the twin. W4 Task 3 owns the fix.
-- **Known twin gap the scripted calls miss: booleans.** stripe-python 11.6 sends Python booleans as `True`/`False`
-  (e.g. `items[0][deleted]=True`), and the twin accepts only `true`/`false` (`src/twin/validate.ts`), so it answers
-  `parameter_invalid`. `update_subscription`'s own description tells the model to delete the old item and add the new
-  one when it changes a price, so LLM runs of the price-change tasks will likely hit this. The scripted calls swap the
-  price in place, so they do not. The real API is expected to accept `True`, since the official Python library sends
-  it; that is unverified until B1. The fix belongs in the twin (W4 Task 3). The bridge keeps sending what the toolkit
-  sends.
+  checks the control path, not an agent; rerun 2026-09-26 after the final-review fixes, same result).
+  `switch-to-annual` fails because the twin answers `not_implemented` to a price on another billing interval without
+  `billing_cycle_anchor=now` (`src/twin/resources/subscriptions.ts`). W4 Task 3 deliberately kept that refusal: how the
+  real API aligns the new period when the anchor is not reset is unobserved. This is a twin surface gap, and the task
+  stays in the suite: removing it would tune H4 to the twin. **Owner: the first post-B1 recording task** (record the
+  monthly → annual swap on the claimed sandbox, then implement what it shows). `test/h4.test.ts` pins the failure in
+  `TWIN_GAPS`; the fix removes it from there.
+- **Booleans: fixed.** stripe-python 11.6 sends Python booleans as `True`/`False` (e.g. `items[0][deleted]=True`). W4
+  Task 3 made the twin accept them (`src/twin/validate.ts`); the real API's acceptance is unverified until B1.
 - **LLM agent: not run.** There is no `ANTHROPIC_API_KEY` in the environment or `.env`. The tool-use loop, the ledger and
   the caps are tested against a fake Messages API only, so there is no control number for the LLM agent yet either.
 - **Sandbox half: waits for B1.** The claimable key is refused, so there is no H4 number yet. The sandbox path is tested

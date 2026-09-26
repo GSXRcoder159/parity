@@ -42,9 +42,9 @@ For the sandbox half: a Stripe sandbox in your own account (see "What we never d
 
 ## Measured so far
 
-Gated on B5 (see "Before sending"). Intervals are 95% Wilson. Train sequences are the ones the align loop learns from; held-out ones it is never shown. "Sequence agreement" means every step matches the sandbox after normalization and the sequence emits the same event types.
+Gated on B5 (see "Before sending"). Intervals are 95% Wilson. Train sequences are the ones the align loop learns from; held-out ones the align loop is never shown. "Sequence agreement" means every step matches the sandbox after normalization and the sequence emits the same event types.
 
-Every number below comes from **oracle v0: 88 sandbox sequences from 26 templates, out of 520 planned.** The rest wait on claiming our sandbox (B1), because the claimable key's quota stopped recording (`reports/2026-09-26-baseline.md`).
+Every number below comes from **oracle v0: 88 sandbox sequences from 26 templates, out of 600 planned (30 templates × 20 seeds).** The rest wait on claiming our sandbox (B1), because the claimable key's quota stopped recording (`reports/2026-09-26-baseline.md`).
 
 - **Existing mocks: 0% sequence agreement.** Source: `reports/2026-09-26-baseline.md`.
   - stripe-mock 0.205.0 (pinned image): 0.0% [0.0–4.2] over 88 sequences. Its status codes match on 80.9% of steps. This is as documented: its README says it is stateless.
@@ -54,7 +54,7 @@ Every number below comes from **oracle v0: 88 sandbox sequences from 26 template
 - **After the first align run:** 174 automatic patches, all data-file edits. On train sequences, 18.8% of steps match on value (from 3.8%) and 5.6% of sequences [2.2–13.4] (from 0.0%). On held-out, 8.8% of steps [4.9–15.5] (from 0.0%) and 0 of 16 sequences. Source: `reports/2026-09-26-align-first-run.md`.
 
 The limits of these numbers:
-- **Held-out is only partly held out at day 0.** The scaffold's own tests exercised two held-out templates (#7, #9), so held-out measures generalization after the freeze only (`reports/2026-09-26-twin-day0.md`).
+- **Held-out is only partly held out at day 0.** The scaffold's own tests exercised two held-out templates (#7, #9), so held-out measures generalization after the freeze only. Later an implementer's context contained the validation notes of held-out #7, #9 and #12; the align loop never saw them, and they stay held out (`reports/2026-09-26-twin-day0.md`).
 - **The LLM-assisted patch path has not run live.** It is built, but no LLM key is set, so all 174 patches are automatic (`docs/plan/STATUS.md`).
 - **Test clocks are unvalidated until B1.** The unclaimed sandbox key refuses them, so no clock sequence is in the oracle (`reports/2026-09-26-baseline.md`).
 

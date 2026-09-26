@@ -45,14 +45,14 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST -u "$STRIPE_API_KEY:" -H 'Strip
 
 ```sh
 node reports/baseline.ts pair $P/oracle.jsonl $D/w1-noise-oracle.jsonl $D/w1-noise-partner.jsonl \
-  $P/runs/2026-09-25/w0-a-c8-20260925T233315-zdmc.jsonl \
+  $P/runs/2026-09-25/noise-a-20260925T233315-zdmc.jsonl \
   $P/runs/2026-09-26/sandbox-20260926T012758-uxv2.jsonl
 node src/cli.ts compare --oracle $D/w1-noise-oracle.jsonl --target $D/w1-noise-partner.jsonl --out $D/w1-noise
 ```
 
-`pair` keeps a partner only if it is a clean recording with a different `runId` than the oracle's recording of that sequence. With today's oracle that leaves 60 pairs: A vs D. The uxv2 recordings are themselves the oracle for #16–#26 × 1–2. Once a fresh #16–#26 × 1–2 run lands, the same command pairs it with uxv2.
+`pair` keeps a partner only if it is a clean recording with a different `runId` than the oracle's recording of that sequence. With today's oracle that leaves 60 pairs: A vs D. (The data repo renamed the W0 runs A and D to `runs/2026-09-25/noise-a-20260925T233315-zdmc.jsonl` and `runs/2026-09-26/noise-b-20260926T000140-m0x6.jsonl`; the oracle holds D's recordings, so only A is named above.) The uxv2 recordings are themselves the oracle for #16–#26 × 1–2. Once a fresh #16–#26 × 1–2 run lands, the same command pairs it with uxv2.
 
-`bench --noise` needs a partner for every oracle sequence, and the pair covers only a subset. So the noise floor is computed separately, and `summarize` applies its `template|step|path` keys to the target divergences. Scores do not depend on the noise keys; they only relabel divergences as NONDETERMINISTIC.
+When this was written, `bench --noise` needed a partner for every oracle sequence and the pair covers only a subset, so the noise floor was computed separately and `summarize` applied its `template|step|path` keys to the target divergences. Since the final review (2026-09-26), `bench`, `score-twin` and `compare` accept a noise recording that covers part of the oracle: the floor is measured on the covered sequences and the report states the coverage (`score-twin --noise $P/runs/2026-09-26/noise-b-20260926T000140-m0x6.jsonl` covers 60 of 88). Scores do not depend on the noise keys; they only relabel divergences as NONDETERMINISTIC.
 
 ## 3. stripe-mock (pinned by digest)
 

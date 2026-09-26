@@ -19,7 +19,9 @@ const task = (id: string) => TASKS.find((t) => t.id === id)!;
 const tmp = (): string => mkdtempSync(join(tmpdir(), "pb-h4-"));
 const quiet = () => {};
 /** Twin surface gaps this harness found: the scripted agent's correct calls fail on the twin. */
-const TWIN_GAPS = ["switch-to-annual"]; // a price with another interval: the twin answers not_implemented
+// switch-to-annual: a price on another interval without billing_cycle_anchor=now answers not_implemented. Owner: the first
+// post-B1 recording task (record the swap on the claimed sandbox, implement it, then drop it from here; evals/h4/README.md).
+const TWIN_GAPS = ["switch-to-annual"];
 
 /** Sets env vars for one test (undefined deletes) and returns the restore. */
 function withEnv(vars: Record<string, string | undefined>): () => void {
