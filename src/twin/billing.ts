@@ -67,19 +67,20 @@ export const pendingItems = (ctx: Ctx, sub: unknown): Obj[] =>
   ctx.all("invoiceitem").filter((ii) => ii.invoice === null && ((ii.parent as Obj).subscription_details as Obj).subscription === sub);
 
 /**
- * The last debit of subscription item `item`, which a flexible-mode credit is based on (docs: "the last price billed
- * for the subscription item"): a pending proration invoice item, else the newest invoice line.
+ * The last debit of subscription item `item`, which a flexible-mode credit is based on (docs: credits use "the original
+ * debited amount"): a pending proration invoice item, else the newest invoice line, with the period it billed.
  */
-export function lastDebit(ctx: Ctx, sub: unknown, item: unknown): { price: Obj; quantity: number; credited: Obj } | undefined {
+export function lastDebit(ctx: Ctx, sub: unknown, item: unknown): { price: Obj; quantity: number; period: { start: number; end: number }; credited: Obj } | undefined {
   const debit = (o: Obj, parent: unknown) => (o.amount as number) >= 0 && (parent as Obj | null | undefined)?.subscription_item === item;
   const ii = pendingItems(ctx, sub).findLast((i) => debit(i, (i.parent as Obj).subscription_details));
   const price = (o: Obj) => ctx.get(((o.pricing as Obj).price_details as Obj).price as string)!;
-  if (ii) return { price: price(ii), quantity: ii.quantity as number, credited: { invoice_item: ii.id, type: "invoice_item" } };
+  const period = (o: Obj) => o.period as { start: number; end: number };
+  if (ii) return { price: price(ii), quantity: ii.quantity as number, period: period(ii), credited: { invoice_item: ii.id, type: "invoice_item" } };
   for (const inv of ctx.all("invoice").reverse()) {
     const line = ((inv.lines as Obj).data as Obj[]).findLast((l) => debit(l, (l.parent as Obj | null)?.subscription_item_details));
     if (line) {
       const credited = { invoice_line_item_details: { invoice: inv.id, invoice_line_items: [line.id] }, type: "invoice_line_items" };
-      return { price: price(line), quantity: line.quantity as number, credited };
+      return { price: price(line), quantity: line.quantity as number, period: period(line), credited };
     }
   }
   return undefined;

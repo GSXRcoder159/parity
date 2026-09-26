@@ -155,7 +155,11 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     return { amount: Math.round((((price.unit_amount as number | null) ?? 0) * quantity * (end - date)) / (end - start)), period: { end, start: date } };
   };
   const credit = (old: Obj) => {
-    const d = lastDebit(ctx, sub.id, old.id) ?? { price: old.price as Obj, quantity: old.quantity as number, credited: null };
+    const d = lastDebit(ctx, sub.id, old.id);
+    // ponytail: the credit assumes one debit billed all of [date, period end] (docs: one credit per original debit, and
+    // no debit, no credit). Refused otherwise: an item never billed (added under none), a period restarted by a none
+    // anchor reset, a proration_date before the last debit. Unobserved until B1.
+    if (!d || d.period.start > date || d.period.end !== old.current_period_end) return ctx.fail("not_implemented");
     const { amount, period } = part(old, d.price, d.quantity);
     prorations.push({ item: old.id as string, price: d.price, quantity: d.quantity, amount: -amount, period, credited: d.credited });
   };

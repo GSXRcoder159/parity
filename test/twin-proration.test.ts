@@ -162,18 +162,21 @@ test("mid-period proration: by the second over the item period, each amount roun
   // Half the period left: credit 1000/2 = 500, debit 3001/2 = 1500.5 -> 1501.
   await update(t, sub, { items: [{ id: si, price: C.id }] });
   assert.deepEqual(created(t, from).map((i) => [i.amount, i.period]), [[-500, { end: END, start: HALF }], [1501, { end: END, start: HALF }]]);
-  // proration_date 10 days in, 20 of 30 days left: the last debit was the pending C proration (flexible mode credits
-  // what was billed): -3001 * 2/3 = -2000.67 -> -2001; A's debit 1000 * 2/3 = 666.67 -> 667.
+  // proration_date 20 days in, sent on day 25: 10 of 30 days left, inside the pending C debit [HALF, END] (flexible mode
+  // credits what was billed): -3001/3 = -1000.33 -> -1000; A's debit 1000/3 = 333.33 -> 333.
   const next = t.store.events.length;
-  const date = T0 + 10 * 86400;
-  await update(t, sub, { items: [{ id: si, price: A.id }], proration_date: date });
+  const [date, day25] = [T0 + 20 * 86400, T0 + 25 * 86400];
+  await update(t, sub, { items: [{ id: si, price: A.id }], proration_date: date }, day25);
   const [credit, debit] = created(t, next);
-  assert.deepEqual([credit!.amount, debit!.amount, credit!.period], [-2001, 667, { end: END, start: date }]);
+  assert.deepEqual([credit!.amount, debit!.amount, credit!.period], [-1000, 333, { end: END, start: date }]);
   assert.deepEqual(credit!.proration_details.credited_items, { invoice_item: created(t, from)[1]!.id, type: "invoice_item" });
-  // A preview with the same proration_date prorates the same way.
-  const p = (await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: C.id }], proration_date: date } }, at(HALF))).body;
+  // A preview with the same proration_date prorates the same way (A's pending 333 credited, C debited).
+  const p = (await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: C.id }], proration_date: date } }, at(day25))).body;
   assert.equal(p.parent.subscription_details.subscription_proration_date, date);
-  assert.deepEqual(lineAmounts(p).slice(-3), [[-667, true], [2001, true], [3001, false]]);
+  assert.deepEqual(lineAmounts(p).slice(-3), [[-333, true], [1000, true], [3001, false]]);
+  // A proration_date before the last debit's start spans two debits (docs: one credit per original debit): refused.
+  const early = await update(t, sub, { items: [{ id: si, price: C.id }], proration_date: T0 + 10 * 86400 }, day25);
+  assert.equal(early.body.error.message, "parity: not_implemented");
   // A proration date outside the item's current period is refused.
   const late = await update(t, sub, { items: [{ id: si, price: C.id }], proration_date: END + 1 });
   assert.equal(late.body.error.message, "parity: not_implemented");
@@ -310,6 +313,29 @@ test("billing_cycle_anchor=now: with item changes, unused time is credited and t
   assert.deepEqual(refused.map(cell), Array(3).fill("400 invalid_request_error"));
   assert.deepEqual(refused.map((r) => r.body.error.message), Array(3).fill("parity: not_implemented"));
   assert.equal(t.store.events.length, from + 1);
+});
+
+test("a credit needs one debit that billed the whole credited span; otherwise refused (docs: no debit, no credit)", async () => {
+  const t = createTwin();
+  const { B, C, sub, si } = await subscribed(t);
+  // A none anchor reset restarts the period at HALF and bills nothing: A's only debit is [T0, END], not the item's
+  // new period [HALF, HALF + 1 month]. A later credit of A over that period would credit unbilled time.
+  await update(t, sub, { billing_cycle_anchor: "now", proration_behavior: "none" });
+  const day = HALF + 5 * 86400;
+  // An item added under none is never billed.
+  const added = (await update(t, sub, { items: [{ price: C.id }], proration_behavior: "none" }, day)).body.items.data[1];
+  const from = t.store.events.length;
+  const refused = [
+    await update(t, sub, { items: [{ id: si, price: B.id }] }, day),
+    await update(t, sub, { items: [{ id: si, price: B.id }], billing_cycle_anchor: "now" }, day),
+    await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: B.id }] } }, at(day)),
+    await update(t, sub, { items: [{ id: added.id, deleted: true }] }, day),
+  ];
+  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(4).fill("parity: not_implemented"));
+  assert.equal(t.store.events.length, from);
+  // Changes without prorations still go through.
+  const up = (await update(t, sub, { items: [{ id: si, price: B.id }], proration_behavior: "none" }, day)).body;
+  assert.deepEqual([up.items.data[0].price.id, types(t, from)], [B.id, ["customer.subscription.updated"]]);
 });
 
 test("create_preview: a new subscription's first invoice, validation, and GET /v1/invoices/upcoming", async () => {
