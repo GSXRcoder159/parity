@@ -36,14 +36,33 @@ function add(out: Map<string, Outcome>, name: string, o: Outcome): void {
 }
 
 /**
- * `node --test --test-reporter=tap` output: the top-level `ok` / `not ok` lines. `# SKIP` and `# TODO` count as skip.
- * ponytail: top-level only (a describe block is one test); pass --junit for per-subtest outcomes.
+ * `node --test --test-reporter=tap` output: one outcome per test, not per block. A nested test (4 spaces per level) is
+ * named `parent > child` from the `# Subtest:` lines; a describe block or a test with subtests is not counted itself,
+ * its tests are. `# SKIP` and `# TODO` count as skip. YAML diagnostic blocks (`---` .. `...`) are skipped.
+ * ponytail: a block that fails with every one of its tests passing (an after-hook error) is not reported; --junit is.
  */
 export function parseTap(stdout: string): Map<string, Outcome> {
   const out = new Map<string, Outcome>();
-  for (const line of stdout.split("\n")) {
-    const m = /^(not )?ok \d+ - (.*?)(?:(?<!\\) # (SKIP|TODO)\b.*)?$/.exec(line.trimEnd());
-    if (m) add(out, m[2]!.replace(/\\([#\\])/g, "$1"), m[3] ? "skip" : m[1] ? "fail" : "pass");
+  const unescape = (s: string) => s.replace(/\\([#\\])/g, "$1");
+  const names: string[] = []; // `# Subtest:` names by depth
+  const children: number[] = []; // results at depth d + 1 since the last result at depth d
+  let yaml = false;
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trimEnd();
+    const body = line.trimStart();
+    const depth = Math.floor((line.length - body.length) / 4);
+    if (yaml || body === "---") {
+      yaml = body === "---" || (yaml && body !== "...");
+      continue;
+    }
+    const sub = /^# Subtest: (.*)$/.exec(body);
+    if (sub) names.splice(depth, Infinity, unescape(sub[1]!));
+    const m = /^(not )?ok \d+ - (.*?)(?:(?<!\\) # (SKIP|TODO)\b.*)?$/.exec(body);
+    if (!m) continue;
+    const leaf = !children[depth];
+    children[depth] = 0;
+    if (depth > 0) children[depth - 1] = (children[depth - 1] ?? 0) + 1;
+    if (leaf) add(out, [...names.slice(0, depth), unescape(m[2]!)].join(" > "), m[3] ? "skip" : m[1] ? "fail" : "pass");
   }
   return out;
 }

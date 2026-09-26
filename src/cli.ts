@@ -84,7 +84,7 @@ const USAGE = `usage:
     https://api.stripe.com (refused when the read budget is already reached; the proxy holds 20 req/s, ledgers the
     command's requests, and halts the run, with no report, when the rolling GETs reach the budget or after 10 consecutive
     429s). Outcomes come from the JUnit XML the command writes to --junit, else from node --test TAP on stdout (pass
-    --test-reporter=tap; top-level tests only). Reports per-test outcomes, agreement with a Wilson 95% CI and the
+    --test-reporter=tap; one outcome per test, nested ones named "block > test"). Reports per-test outcomes, agreement with a Wilson 95% CI and the
     disagreeing tests (names and outcomes only) to stdout, and to <out>.md + <out>.json with --out. The suite's contract:
     send requests to STRIPE_API_BASE. Example: examples/agree-suite.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;

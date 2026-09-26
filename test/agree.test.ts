@@ -22,7 +22,7 @@ const cli = (args: string[], cwd: string, env: Record<string, string> = {}) =>
   spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8", env: { ...parentEnv, PARITY_DATA_DIR: join(cwd, "data"), ...env } });
 const tmp = (): string => mkdtempSync(join(tmpdir(), "pb-agree-"));
 
-test("parseTap: top-level results only, SKIP and TODO as skip, escapes undone, duplicate names numbered", () => {
+test("parseTap: one outcome per test (a block's tests, not the block), SKIP and TODO as skip, escapes undone, duplicate names numbered", () => {
   const tap = [
     "TAP version 13",
     "# Subtest: a \\# hash",
@@ -48,9 +48,34 @@ test("parseTap: top-level results only, SKIP and TODO as skip, escapes undone, d
       ["a # hash", "pass"],
       ["b fails", "fail"],
       ["c skip", "skip"],
-      ["grp", "fail"],
+      ["grp > inner", "fail"],
       ["d todo", "skip"],
       ["b fails (2)", "pass"],
+    ],
+  );
+});
+
+test("parseTap on real node --test output: nested describe blocks and subtests count per test", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pb-tap-"));
+  writeFileSync(
+    join(dir, "nested.test.mjs"),
+    [
+      'import { describe, it, test } from "node:test";',
+      'describe("billing", () => { it("previews", () => {}); describe("refunds", () => { it("full", () => {}); it("partial # x", () => { throw new Error("no"); }); }); });',
+      'test("top", () => {});',
+      'test("with subtests", async (t) => { await t.test("a", () => {}); await t.test("b", { skip: true }, () => {}); });',
+    ].join("\n"),
+  );
+  const r = spawnSync(process.execPath, ["--test", "--test-reporter=tap", join(dir, "nested.test.mjs")], { encoding: "utf8", env: parentEnv });
+  assert.deepEqual(
+    [...parseTap(r.stdout)],
+    [
+      ["billing > previews", "pass"],
+      ["billing > refunds > full", "pass"],
+      ["billing > refunds > partial # x", "fail"],
+      ["top", "pass"],
+      ["with subtests > a", "pass"],
+      ["with subtests > b", "skip"],
     ],
   );
 });
