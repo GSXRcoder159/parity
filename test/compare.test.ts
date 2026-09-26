@@ -131,15 +131,14 @@ test("a missing target step fails L1 with a STATUS_MISMATCH", () => {
   assert.deepEqual(r.divergences, [{ seq: "tmpl#1", step: 1, path: "$", cls: "STATUS_MISMATCH", expected: 200, actual: undefined }]);
 });
 
-test("eventsError on either side skips the event check: eventsMatch, no EVENT_SET_MISMATCH, eventsSkipped", () => {
+test("an oracle eventsError skips the event check; a target eventsError fails it (a broken /v1/events never scores better)", () => {
   const a = rec([step(0, 200, sub)], [ev("customer.created")]);
   const b = rec([step(0, 200, sub)]);
   assert.deepEqual([compareRecordings(a, b).eventsMatch, compareRecordings(a, b).eventsSkipped], [false, false]);
-  for (const [o, t] of [
-    [{ ...a, eventsError: "GET /v1/events -> 500" }, b],
-    [a, { ...b, eventsError: "fetch failed" }],
-  ] as const) {
-    const r = compareRecordings(o, t);
-    assert.deepEqual([r.eventsSkipped, r.eventsMatch, r.L4, r.divergences], [true, true, true, []]);
-  }
+  const skipped = compareRecordings({ ...a, eventsError: "GET /v1/events -> 500" }, b);
+  assert.deepEqual([skipped.eventsSkipped, skipped.eventsMatch, skipped.L4, skipped.divergences], [true, true, true, []]);
+  // Same steps, the target's events endpoint 404s: L4 false, like a target that returns the wrong events.
+  const broken = compareRecordings(a, { ...a, events: [], eventsError: "GET /v1/events -> 404" });
+  assert.deepEqual([broken.eventsSkipped, broken.eventsMatch, broken.L4], [false, false, false]);
+  assert.deepEqual(broken.divergences, [{ seq: "tmpl#1", step: -1, path: "$", cls: "EVENT_SET_MISMATCH", expected: ["customer.created"], actual: "error: GET /v1/events -> 404" }]);
 });

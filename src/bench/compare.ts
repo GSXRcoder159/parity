@@ -17,7 +17,11 @@ export interface SeqResult {
   steps: StepResult[];
   L4: boolean;
   eventsMatch: boolean;
-  /** Event check not run: either side's event collection failed (`eventsError`); eventsMatch is then true. */
+  /**
+   * Event check not run: the oracle's event collection failed (`eventsError`); eventsMatch is then true. A target whose
+   * collection failed is compared as having no events (EVENT_SET_MISMATCH, actual "error: <message>"): a broken
+   * `/v1/events` must never score better than a working but imperfect one.
+   */
   eventsSkipped: boolean;
   divergences: Divergence[];
 }
@@ -64,10 +68,10 @@ export function compareRecordings(oracle: Recording, target: Recording, noise?: 
     return { i: o.i, L1, L2, L3 };
   });
 
-  const eventsSkipped = Boolean(oracle.eventsError || target.eventsError);
+  const eventsSkipped = Boolean(oracle.eventsError);
   const expected = types(oracle);
-  const actual = types(target);
-  const eventsMatch = eventsSkipped || isDeepStrictEqual(expected, actual);
+  const actual = target.eventsError ? `error: ${target.eventsError}` : types(target);
+  const eventsMatch = eventsSkipped || (!target.eventsError && isDeepStrictEqual(expected, actual));
   if (!eventsMatch) divergences.push({ seq: oracle.seq, step: -1, path: "$", cls: "EVENT_SET_MISMATCH", expected, actual });
 
   for (const d of divergences) if (noise?.has(`${oracle.template}|${d.step}|${d.path}`)) d.cls = "NONDETERMINISTIC";

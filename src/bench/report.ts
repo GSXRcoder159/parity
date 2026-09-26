@@ -35,7 +35,7 @@ export function renderMarkdown(input: ReportInput): string {
     "",
     `**Summary:** ${LEVELS.map((l) => `${l} ${cell(score.overall[l])}`).join(" · ")} — L1 status, L2 shape, L3 value (per step), L4 sequence pass; 95% Wilson intervals.`,
     "",
-    `Event check skipped for ${results.filter((r) => r.eventsSkipped).length} of ${results.length} sequences (event collection failed; their L4 rests on the steps alone).`,
+    `Event check skipped for ${results.filter((r) => r.eventsSkipped).length} of ${results.length} sequences (the oracle's event collection failed; their L4 rests on the steps alone. A target whose collection failed fails the event check instead).`,
     "",
     "## Noise floor and ceiling",
     "",
