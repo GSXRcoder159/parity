@@ -63,8 +63,10 @@ const USAGE = `usage:
     call's tokens and cost_usd go to budget/llm.jsonl; daily cap $15 (UTC), PARITY_LLM_CAP_USD may only lower it.
   align surface: log a surface-added twin change (decision 0002 §3; not counted as alignment): score-twin on the oracle for a
     temp checkout of <commit>^ (--commit default HEAD) and for the working tree, then a sealed-log patch entry
-    {class: "surface-added", note, commit, before, after}; prints the deltas. The next nightly point annotates it. Needs
-    src/twin/, templates/ and package.json committed.
+    {class: "surface-added", note, commit, normalization, before, after}; prints the deltas. The next nightly point
+    annotates it. Refused unless src/twin/, templates/ and package.json are committed, <commit> is an ancestor of HEAD,
+    the harness (src/bench/, src/cli.ts) is the same at <commit>^ and in the working tree, and the sealed log verifies.
+    Then commit and push the data repo: the nightly reads the log from there.
   nightly: record today's slice (--slice <UTC day of week>/7 of templates x seeds 1-20) on the sandbox at <=10 req/s, and on
     Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a
     sealed-log score entry) with the noise ceiling from the latest noise-a/noise-b pair; align --apply; align --assist;

@@ -9,6 +9,7 @@ import { TEMPLATES } from "../templates/index.ts";
 import { logPath, provenance, verifyLog, type LogEntry } from "../src/align/log.ts";
 import { surface, surfaceText } from "../src/align/surface.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
+import { NORMALIZATION_VERSION } from "../src/bench/normalize.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { createTwin } from "../src/twin/server.ts";
@@ -67,6 +68,22 @@ test("align surface: scores <commit>^ and the working tree on the oracle, logs o
   assert.throws(() => surface({ repo, dataDir: data, runId: "dirty", note: "x", commit }), /^Error: refusing align surface: uncommitted changes in src\/twin\/, templates\/ or package\.json:\nM src\/twin\/billing\.ts$/);
   git("checkout", "--", "src/twin/billing.ts");
 
+  // Refused before any scoring: a commit off HEAD's history, and a harness change inside the range.
+  git("branch", "-q", "side", `${commit}^`);
+  git("checkout", "-q", "side");
+  writeFileSync(join(repo, "OTHER.md"), "x\n");
+  git("add", "OTHER.md");
+  git("commit", "-q", "-m", "other branch");
+  const other = git("rev-parse", "HEAD");
+  git("checkout", "-q", "-");
+  assert.throws(() => surface({ repo, dataDir: data, runId: "x", note: "x", commit: other }), /is not an ancestor of HEAD/);
+  const norm = join(repo, "src/bench/normalize.ts");
+  const kept = readFileSync(norm, "utf8");
+  writeFileSync(norm, kept + "\n");
+  assert.throws(() => surface({ repo, dataDir: data, runId: "x", note: "x", commit }), /the harness \(src\/bench, src\/cli\.ts\) differs .*\nsrc\/bench\/normalize\.ts/s);
+  writeFileSync(norm, kept);
+  assert.equal(verifyLog(logPath(data)).entries, 0, "nothing logged");
+
   const s = surface({ repo, dataDir: data, runId: "run-surface", note: "customer tax_exempt", commit });
   assert.deepEqual([s.commit, s.head], [commit, head]);
   assert.ok(s.before.trainDivergences > 0 && s.after.trainDivergences < s.before.trainDivergences, `train divergences ${s.before.trainDivergences} -> ${s.after.trainDivergences}`);
@@ -77,7 +94,7 @@ test("align surface: scores <commit>^ and the working tree on the oracle, logs o
   assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 1 });
   const [e] = readJsonl<LogEntry>(logPath(data));
   assert.deepEqual([e!.kind, e!.runId], ["patch", "run-surface"]);
-  assert.deepEqual(e!.data, { class: "surface-added", status: "applied", note: "customer tax_exempt", commit, head, before: s.before, after: s.after, oracle: provenance(join(data, "oracle.jsonl")) });
+  assert.deepEqual(e!.data, { class: "surface-added", status: "applied", note: "customer tax_exempt", commit, head, normalization: NORMALIZATION_VERSION, before: s.before, after: s.after, oracle: provenance(join(data, "oracle.jsonl")) });
   assert.deepEqual(Object.keys(s.before), ["train", "heldOut", "trainDivergences"]);
 
   const text = surfaceText(s);
