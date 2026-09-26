@@ -28,6 +28,12 @@ node evals/h4/run.ts --agent llm --out reports/h4-<date>   # the H4 number: twin
 - **Scripted agent on the twin: 19/20 pass.** `switch-to-annual` fails because the twin answers `not_implemented` to a
   price with a different interval (`src/twin/resources/subscriptions.ts`). This is a twin surface gap, and the task stays
   in the suite: removing it would tune H4 to the twin.
+- **Known twin gap the scripted calls miss: booleans.** stripe-python 11.6 sends Python booleans as `True`/`False`
+  (e.g. `items[0][deleted]=True`), and the twin accepts only `true`/`false` (`src/twin/validate.ts`), so it answers
+  `parameter_invalid`. `update_subscription`'s own description tells the model to delete the old item and add the new
+  one when it changes a price, so LLM runs of the price-change tasks will likely hit this. The scripted calls swap the
+  price in place, so they do not. The real API is expected to accept `True`, since the official Python library sends
+  it; that is unverified until B1. The fix belongs in the twin. The bridge keeps sending what the toolkit sends.
 - **LLM agent: not run.** There is no `ANTHROPIC_API_KEY` in the environment or `.env`. The tool-use loop, the ledger and
   the caps are tested against a fake Messages API only.
 - **Sandbox half: waits for B1.** The claimable key is refused, so there is no H4 number yet. The sandbox path is tested
@@ -68,6 +74,7 @@ node evals/h4/run.ts --agent llm --out reports/h4-<date>   # the H4 number: twin
 
 ## Credits
 
-The agent toolkit is MIT, Copyright (c) 2024 Stripe (`stripe/ai`, formerly `stripe/agent-toolkit`). The task themes
+The agent toolkit is MIT, Copyright (c) 2024 Stripe (`stripe/ai`, formerly `stripe/agent-toolkit`); its notice is in
+`LICENSE-agent-toolkit`, which covers the three tool definitions ported into `toolkit.py`. The task themes
 (cancel, upgrade with immediate billing, downgrade, preview) follow the task names in its `benchmarks/subscription-gym`.
 The task texts, setups and predicates here are our own. The refund tasks are new, because that repository has none.

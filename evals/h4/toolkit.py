@@ -9,7 +9,8 @@ stdout line 1: {"tools": [{name, description, input_schema}]}; then one reply pe
 {"name": ..., "input": {...}} -> {"ok": bool, "content": str}. A failing call is a result (ok false), never a crash.
 
 0.6.1 has no subscription tools, so list_subscriptions, cancel_subscription and update_subscription are ported here
-from @stripe/agent-toolkit 0.7.12 (MIT, Copyright (c) 2024 Stripe): same names, descriptions and parameters.
+from @stripe/agent-toolkit 0.7.12 (MIT, Copyright (c) 2024 Stripe; notice in LICENSE-agent-toolkit): same names,
+descriptions and parameters.
 
 0.6.1 declares no dependencies. stripe==11.6.0 is the stripe-python release current when 0.6.1 shipped (2025-03-24);
 the toolkit json.dumps API objects, which works only while StripeObject is a dict (11.x yes, 15.x no).
