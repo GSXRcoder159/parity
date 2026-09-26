@@ -208,7 +208,8 @@ test("constant only in this oracle: a message quoting the request, an account- o
     new Set(),
     { ...data, catalog: cat },
   );
-  // The declined message quotes no request value (short and boolean leaves never count); the address is API semantics.
+  // The declined message quotes no request value (short and boolean leaves never count; its twin body renders no
+  // sub-code, so the one-binding rule does not apply); the address is API semantics.
   assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
     ["/card_declined/message", "Your card was declined."],
     ["/address", { country: null }],
@@ -251,8 +252,39 @@ test("constant only for what the corpus covers: free text in a field, a generic 
     ["/level", { kind: "basic", n: 2 }],
   ]);
   assert.deepEqual(notMechanical.map((n) => n.reason), [
-    "one binding: every occurrence renders the same {param}, so the message is shown for one use of the key only",
+    "one binding: every occurrence renders the same {param} or sub-code, so the message is shown for one use of the key only",
     "context text: only enum-like tokens are type defaults", // prose
     "context text: only enum-like tokens are type defaults", // an uppercase code inside a seeded parent
+  ]);
+});
+
+test("one binding by sub-code: a key's message seen with one decline-code-like extra is held; two are seeded; ids never count", () => {
+  const oracle = [1, 2].map((n) =>
+    rec(`s#${n}`, false, [0, 1].map((i) => st(i, 402, { error: { type: "card_error", message: "Declined." } }))),
+  );
+  // No {param} on either key. The first renders one sub-code, next to renderError's own fields (a per-request log url),
+  // a per-sequence id and an object; the second renders two sub-codes.
+  const rendered = (n: number) => ({ type: "card_error", code: "x", message: "parity: declined_one", request_log_url: `https://example.test/req_${n}` });
+  const twin = [1, 2].map((n) =>
+    rec(`s#${n}`, false, [
+      st(0, 402, { error: { ...rendered(n), charge: `ch_${n}234567890AbC`, reason: "reason_a", payment_method: { id: "pm_x" } } }, "declined_one"),
+      st(1, 402, { error: { reason: n === 1 ? "reason_a" : "reason_b" } }, "declined_two"),
+    ]),
+  );
+  const plain = (key: string) => ({ status: 402, type: "card_error", code: "x", message: `parity: ${key}` });
+  const seqs = ["s#1", "s#2"];
+  const { candidates, notMechanical } = propose(
+    [
+      ...seqs.map((s) => div(s, 0, "$.error.message", "VALUE_MISMATCH", error("declined_one", "message"))),
+      ...seqs.map((s) => div(s, 1, "$.error.message", "VALUE_MISMATCH", error("declined_two", "message"))),
+    ],
+    oracle,
+    twin,
+    new Set(),
+    { ...data, catalog: { ...catalog, declined_one: plain("declined_one"), declined_two: plain("declined_two") } },
+  );
+  assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [["/declined_two/message", "Declined."]]);
+  assert.deepEqual(notMechanical.map((n) => [n.locus, n.reason]), [
+    [error("declined_one", "message"), "one binding: every occurrence renders the same {param} or sub-code, so the message is shown for one use of the key only"],
   ]);
 });

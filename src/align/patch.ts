@@ -1,8 +1,8 @@
 // Mechanical candidates (decision 0002 §3), from train sequences only: data-file edits whose value the oracle shows
 // deterministically — the same normalized value at every train occurrence, none of them in the noise set — and that
 // holds beyond this oracle: no account- or date-derived field, no free text, no message quoting the request or seen for
-// one use of a generic error key only. Every other train locus is returned as not mechanical, with the reason (input to
-// the assisted pass).
+// one use of a generic error key (one parameter or one decline code) only. Every other train locus is returned as not
+// mechanical, with the reason (input to the assisted pass).
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
 import type { Recording, StepRecord } from "../types.ts";
@@ -38,6 +38,8 @@ const PLACEHOLDER = /<(?:id:[^>]*|t:[^>]*|number:[^>]*|url:[^>]*|run|opaque|secr
 const computed = (v: unknown): boolean => PLACEHOLDER.test(JSON.stringify(v) ?? "");
 const pointer = (keys: (string | number)[]): string => keys.map((k) => `/${String(k).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
 const ERROR_FIELDS = new Set(["status", "type", "code", "param", "message"]);
+/** What renderError always writes; any other key in the twin's `error` is an extra passed by the raising call site. */
+const RENDERED = new Set([...ERROR_FIELDS, "doc_url", "request_log_url"]);
 /**
  * Fields set by the sandbox account (country, name, statement descriptor) or by the recording date (a test card's
  * expiry), not by API semantics: constant within one oracle, wrong for another account or month. Never automatic.
@@ -107,6 +109,13 @@ function twinVars(entry: Obj, step: StepRecord | undefined): Record<string, stri
   const re = entry.param.split(/\{(\w+)\}/).map((part, i) => (i % 2 ? (names.push(part), "(.*)") : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   const m = new RegExp(`^${re.join("")}$`).exec(rendered);
   return m ? Object.fromEntries(names.map((n, i) => [n, m[i + 1]!])) : {};
+}
+
+/** A call site's sub-codes in the twin's rendered error (e.g. a decline code): string extras that are not ids or placeholders. */
+function subCodes(step: StepRecord | undefined): Record<string, string> {
+  const error = isObj(step?.body) && isObj(step.body.error) ? step.body.error : {};
+  const out = Object.entries(error).filter(([k, v]) => !RENDERED.has(k) && typeof v === "string" && !ID.test(v) && !computed(v));
+  return Object.fromEntries(out) as Record<string, string>;
 }
 
 /**
@@ -195,12 +204,17 @@ export function propose(
       else {
         const vars = occ.map((x) => twinVars(entry, x.t));
         const tpl = values.map((m, i) => messageTemplate(m as string, vars[i]!));
+        const bindings = occ.map((x, i) => ({ ...vars[i], ...subCodes(x.t) }));
         if (tpl.some((m) => m === undefined)) no("computed: the message holds placeholders no twin var renders");
         else if (tpl.some((m, i) => echoes(m!, occ[i]!.o.params))) no("request-derived: the message quotes a request parameter value");
         else if (!tpl.every((m) => m === tpl[0])) no("varies across sequences");
-        // A generic entry's message is shown to hold for its other uses only when the corpus renders 2+ bindings of its vars.
-        else if (VAR.test(String(entry.param)) && new Set(vars.map((v) => JSON.stringify(v))).size < 2)
-          no("one binding: every occurrence renders the same {param}, so the message is shown for one use of the key only");
+        // A generic entry (a {var} in param, or a sub-code such as a decline code) is shown to hold for its other uses
+        // only when the corpus renders 2+ bindings of its vars and sub-codes.
+        else if (
+          (VAR.test(String(entry.param)) || bindings.some((b) => Object.keys(b).length)) &&
+          new Set(bindings.map((b) => JSON.stringify(Object.entries(b).sort()))).size < 2
+        )
+          no("one binding: every occurrence renders the same {param} or sub-code, so the message is shown for one use of the key only");
         else candidates.push({ ...edit, op: "set", value: tpl[0], locus, ids });
       }
     }
