@@ -322,8 +322,34 @@ test("subscription create validation: nothing persists on a failed create", asyn
   assert.equal(await bad({ customer: other.id, items, payment_behavior: "error_if_incomplete" }), "400 resource_missing undefined"); // no payment method
   const bogus = { currency: "usd", product: "prod_Missing123456", recurring: { interval: "month" } };
   assert.equal(await bad({ customer: c.id, items: [{ price_data: bogus }] }), "400 resource_missing items[0][price_data][product]");
+  // Spec-valid params the create does not implement (W4) fail instead of being dropped into a wrong state.
+  const w4 = async (params: Obj) => (await call(t, "POST", "/v1/subscriptions", { customer: c.id, items, ...params })).body.error?.message;
+  const inline = { currency: "usd", product: price.product, unit_amount: 700, recurring: { interval: "month" } };
+  for (const params of [
+    { trial_period_days: 14 },
+    { cancel_at: 1900000000 },
+    { billing_mode: { type: "classic" } },
+    { proration_behavior: "none" },
+    { items: [{ price: price.id, tax_rates: ["txr_Missing123456"] }] },
+    { items: [{ price_data: { ...inline, tax_behavior: "exclusive" } }] },
+    { items: [{ price_data: { ...inline, unit_amount: undefined, unit_amount_decimal: "700" } }] },
+  ])
+    assert.equal(await w4(params), "parity: not_implemented", JSON.stringify(params));
   const types = [...t.store.objects.values()].map((o) => o.object);
   assert.deepEqual([types.includes("subscription"), types.includes("invoice"), types.includes("payment_intent")], [false, false, false]);
+});
+
+test("error_if_incomplete with expand[]: still 402 card_declined, and the payment events persist", async () => {
+  const t = createTwin();
+  const { c, price } = await setup(t);
+  const sub = (await call(t, "POST", "/v1/subscriptions", { customer: c.id, items: [{ price: price.id }], expand: ["latest_invoice"] })).body;
+  assert.equal(sub.latest_invoice.status, "paid"); // expand is allowed on create
+  const fails = (await call(t, "POST", "/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: c.id })).body;
+  const j = t.store.events.length;
+  const params = { customer: c.id, items: [{ price: price.id }], default_payment_method: fails.id, payment_behavior: "error_if_incomplete", expand: ["latest_invoice"] };
+  const r = await call(t, "POST", "/v1/subscriptions", params);
+  assert.equal(cell(r), "402 card_declined");
+  assert.deepEqual(since(t, j), ["charge.failed", "payment_intent.canceled", "payment_intent.created", "payment_intent.payment_failed"]);
 });
 
 test("price_data items, subscription and invoice list filters, W4 endpoints answer not_implemented", async () => {

@@ -145,8 +145,9 @@ export function createTwin(opts: { routes?: Route[] } = {}) {
         const ctx: Ctx = { now: () => now, id: newId, get, all, requestId, fail, build };
         const r = match.handler(ctx, { method, path: req.path, pathParams: match.pathParams, params, headers });
         // Expand before applying so an invalid path leaves no state behind; ids created by this request resolve too.
+        // A returned error (a 402 that still persists its payment events) is never expanded.
         const pending = new Map([...(r.puts ?? []), ...(r.emits ?? []).map((e) => e.object)].map((o) => [o.id as string, o]));
-        const body = expand(r.body, params.expand, (id) => pending.get(id) ?? get(id));
+        const body = (r.status ?? 200) >= 400 ? r.body : expand(r.body, params.expand, (id) => pending.get(id) ?? get(id));
         store.apply(r, { now, requestId, idempotencyKey: idemKey ?? null });
         res = respond(r.status ?? 200, body);
       } catch (e) {

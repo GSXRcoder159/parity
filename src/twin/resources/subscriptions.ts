@@ -12,6 +12,12 @@ const isHash = (v: unknown): v is Obj => v !== null && typeof v === "object" && 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "subscription") ?? ctx.fail("resource_missing", { param: "id" });
 const cancellation = (reason: string | null): Obj => ({ comment: null, feedback: null, feedback_option: null, reason });
 const UPDATABLE = ["cancel_at_period_end", "default_payment_method", "description", "metadata"];
+const CREATABLE = ["cancel_at_period_end", "collection_method", "customer", "days_until_due", "default_payment_method", "description", "items", "metadata", "payment_behavior"];
+
+/** A spec-valid param the handler does not implement (trials, anchors, discounts, ...: W4) fails instead of being dropped. */
+function only(ctx: Ctx, o: Obj, keys: string[]): void {
+  if (Object.entries(o).some(([k, v]) => v !== "" && !keys.includes(k))) ctx.fail("not_implemented");
+}
 
 /** A `default_payment_method` param must name a payment method attached to `customer`. */
 function checkPm(ctx: Ctx, pm: unknown, customer: unknown): void {
@@ -32,10 +38,12 @@ function periodEndCancel(sub: Obj, on: boolean, now: number): Obj {
 function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
   const param = `items[${i}][price]`;
   let price: Obj;
+  only(ctx, item, ["metadata", "price", "price_data", "quantity"]);
   if (item.price) price = live(ctx, item.price, "price") ?? ctx.fail("resource_missing_400", { param });
   else if (isHash(item.price_data)) {
     const pd = item.price_data;
     const p = `items[${i}][price_data]`;
+    only(ctx, pd, ["currency", "product", "recurring", "unit_amount"]);
     for (const k of ["currency", "product", "recurring"]) if (!pd[k]) ctx.fail("parameter_missing", { param: `${p}[${k}]` });
     if (!live(ctx, pd.product, "product")) ctx.fail("resource_missing_400", { param: `${p}[product]` });
     const r = pd.recurring as Obj;
@@ -66,6 +74,7 @@ export const routes: Route[] = [
     "POST",
     /^\/v1\/subscriptions$/,
     (ctx, { params }) => {
+      only(ctx, params, ["expand", ...CREATABLE]);
       if (!params.customer) ctx.fail("parameter_missing", { param: "customer" });
       const rawItems = Array.isArray(params.items) ? (params.items as Obj[]) : [];
       if (rawItems.length === 0) ctx.fail("parameter_missing", { param: "items" });
@@ -169,7 +178,7 @@ export const routes: Route[] = [
     ID,
     (ctx, { pathParams, params }) => {
       const before = find(ctx, pathParams.id);
-      if (Object.keys(params).some((k) => k !== "expand" && !UPDATABLE.includes(k))) ctx.fail("not_implemented");
+      only(ctx, params, ["expand", ...UPDATABLE]);
       checkPm(ctx, params.default_payment_method, before.customer);
       let after = assign(structuredClone(before), params, ["default_payment_method", "description", "metadata"]);
       const cape = params.cancel_at_period_end;
