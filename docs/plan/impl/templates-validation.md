@@ -337,9 +337,12 @@ Seeds 1 and 2 ran through `runCorpus` against a listening twin, with the templat
 - `score-twin` strips `waitMs`, so twin recordings of #27–#30 show `advancing` on every clock retrieve. The oracle will likely show `ready` there, which is a divergence the twin cannot fix. The runner or `score-twin` (`src/cli.ts`) must keep clock waits for these templates to compare, or the twin needs an injectable delay.
 - Not built (each is a `ponytail:` or refusal in the twin): `incomplete` → `incomplete_expired` after 23 h; `trial_will_end` for trials of 3 days or less; `trial_end` at create; attaching an existing customer to a new clock (the `customer` param answers `not_implemented`); the 3-subscriptions-per-customer cap; item changes during a trial; `invoice.upcoming`.
 
-### Held-out exposure during W4 Task 4: pending a human ruling
+### Held-out exposure during W4 Task 4 (ruled 2026-09-26)
 
 While writing this section, the Task 4 implementer ran a `grep` over this file's table lines. It printed the rows of held-out templates #7, #9 and #12 (intended steps and results, cut at 160 characters) into the implementer's context. This breaks the W4 plan's held-out rule ("never read their rows in `templates-validation.md` while implementing"). The rows of #18 and #21 and all held-out recordings were not opened.
 
 - What suggests the rows were not used (circumstantial only): Task 4 changes no code path of those templates. The held-out score is the same before and after Task 4 (L1 94.7 / L2 30.1 / L3 8.8 / L4 0.0; sealed-log entry `20260926T133009-sx3t`, data repo 580be4b), and the same again after fix round 1.
-- **Open:** a human or ledger ruling (decision 0002 §4.5) on whether #7, #9 and #12 stay valid held-out templates. The Task 4 gate stays open until it is recorded. This note does not make that ruling.
+- **Orchestrator ruling (2026-09-26, decision 0002 §4.5):** #7, #9 and #12 stay held out, and the exposure is disclosed.
+  - Reason: rotating the held-out set now would reset the held-out baseline. The exposure reached an implementer, not patch synthesis (the align loop never saw these rows). The held-out score did not move across the task.
+  - Cost: held-out generalization on #7 (cancel at period end) may read slightly optimistic once clock-driven period ends are scored.
+  - Records: the sealed log has a `note` entry for this, and the day-0 report's limitations list carries it.
