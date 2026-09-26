@@ -1,10 +1,10 @@
-// Normalization v1.2: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
+// Normalization v1.3: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
 // per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
 // faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.2";
+export const NORMALIZATION_VERSION = "v1.3";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -15,7 +15,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "timestamps",
     rationale:
-      "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `*_at`, `*_start`, `*_end`, `*_date`, …) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset.",
+      "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset.",
   },
   {
     name: "run-nonce",
@@ -79,8 +79,9 @@ const TS_KEYS = new Set([
   "frozen_time",
   "next_payment_attempt",
   "effective_at",
+  "deletes_after",
 ]);
-const TS_SUFFIX = /(_at|_start|_end|_date)$/;
+const TS_SUFFIX = /(_at|_start|_end|_date|_time)$/;
 const STRIPE_HOST = /(^|\.)stripe\.(com|network)$/;
 const INVOICE_NUMBER = /^[A-Z0-9]+-(\d+)$/;
 const CARD_NETWORK = new Set(["authorization_code", "network_transaction_id", "transaction_link_id", "risk_score"]);

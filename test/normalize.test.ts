@@ -30,7 +30,7 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.2");
+  assert.equal(NORMALIZATION_VERSION, "v1.3");
   assert.equal(RULES.length, 11);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
@@ -192,6 +192,16 @@ test("v1.2: request_log_url dropped under error only; updated is a timestamp; ca
     outcome: { risk_level: "normal", risk_score: "<opaque>" },
     payment_method_details: { card: { authorization_code: "<opaque>", network_transaction_id: "<opaque>", transaction_link_id: null, brand: "visa" } },
   });
+});
+
+test("v1.3: a test clock's deletes_after and status_details.advancing.target_frozen_time are timestamps", () => {
+  // Two faithful runs three days apart: every clock timestamp moves with created, so they compare equal.
+  const clock = (t: number) =>
+    rec([step(0, { id: "clock_Abcdefghij12", object: "test_helpers.test_clock", created: t, deletes_after: t + 30 * 86400, frozen_time: t, status: "advancing", status_details: { advancing: { target_frozen_time: t + 86400 } } })]);
+  const [a, b] = [normalizeRecording(clock(T0)), normalizeRecording(clock(T0 + 3 * 86400))];
+  assert.deepEqual(body(a, 0), body(b, 0));
+  assert.equal(body(a, 0).deletes_after, "<t:+720h>");
+  assert.equal(body(a, 0).status_details.advancing.target_frozen_time, "<t:+24h>");
 });
 
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {

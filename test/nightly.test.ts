@@ -178,7 +178,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.equal(curve.length, 1);
     const pt = curve[0];
     // The failed night left a nightly score entry but never published: its surface-added entry is annotated here.
-    assert.deepEqual([pt.date, pt.normalization, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.2", false, 6, ["surface-added: test clocks"], { automatic: 0, assisted: 1 }, undefined]);
+    assert.deepEqual([pt.date, pt.normalization, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.3", false, 6, ["surface-added: test clocks"], { automatic: 0, assisted: 1 }, undefined]);
     assert.deepEqual(r.events, pt.events);
     assert.match(text, /^curve annotations: surface-added: test clocks$/m);
     assert.deepEqual(Object.keys(pt.noise.byStratum).sort(), ["errors", "lifecycle", "refunds"]);
