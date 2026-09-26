@@ -14,7 +14,7 @@ export const boundariesAmounts: Template = {
       params: { currency: cur, product_data: { name: `Parity boundaries ${n}` }, ...p },
     });
     const decimal = `${g.int(1, 999)}.${g.int(1, 9)}5`;
-    const intent = (amount: number): Step => ({ method: "POST", path: "/v1/payment_intents", params: { amount, currency: cur } });
+    const intent = (cents: number): Step => ({ method: "POST", path: "/v1/payment_intents", params: { amount: cents, currency: cur } });
     return [
       price({ unit_amount: 0 }),
       price({ unit_amount: 99_999_999_999_999 }), // the max (undocumented; found live)
