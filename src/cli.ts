@@ -190,9 +190,10 @@ interface RecordOpts {
  */
 export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Promise<Recording[]> {
   if (!seqs.length) throw new Error("no sequences to run");
-  const ledger = o.ledger ?? readsLedger(dataDir());
   // By host, not name: `--target https://api.stripe.com` or `--name sandbox` must not dodge (or fake) the budget.
   const sandbox = isSandbox(target);
+  // Only sandbox runs read or write the ledger: a URL-target run must not seed one into the data repo.
+  const ledger = o.ledger ?? (sandbox ? readsLedger(dataDir()) : LEDGER);
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
   if (sandbox) {
     const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
