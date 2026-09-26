@@ -4,7 +4,7 @@
 import { randomInt } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { TEMPLATES } from "../templates/index.ts";
 import { appendLedger, readLedger, rollingGets, type LedgerEntry } from "./bench/budget.ts";
@@ -25,7 +25,8 @@ const USAGE = `usage:
   paritybench bench <baseURL> --oracle A.jsonl [--noise C.jsonl] [--out recordings/<date>/bench-<name>-<runId>]
   paritybench oracle build [--max-age-days N]
   paritybench twin [--port 12111] [--host 127.0.0.1]
-  paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json]
+  paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
+  paritybench align [--apply] [--max-batches N]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
@@ -41,22 +42,28 @@ const USAGE = `usage:
   twin: serves the twin until SIGINT/SIGTERM (port also from env PORT).
   score-twin: the oracle's sequences (optionally only --templates) against a fresh in-process twin on an ephemeral port,
     with Parity-Now per sequence as in bench, step waits skipped and events read from the twin's store; the Markdown
-    report goes to stdout, --json writes the results and score.
+    report goes to stdout, --json writes the results and score, --recordings the twin's recordings.
+  align: score-twin on <dataDir>/oracle.jsonl, triage every divergence to a locus, propose mechanical data-file edits
+    (src/twin/shapes/*.json, src/twin/errors.json) from train sequences only, and gate them in a temp copy of the repo
+    (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, appends
+    them to the sealed log <dataDir>/align/log.jsonl and commits them. --max-batches: gate only the first N per-file batches.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
+const REPO_ROOT = resolve(import.meta.dirname, "..");
 const FLAGS: Record<string, string[]> = {
   record: ["target", "name", "templates", "seeds", "slice", "concurrency", "chunk", "chunk-wait", "out"],
   compare: ["oracle", "target", "noise", "raw", "out"],
   bench: ["oracle", "noise", "out"],
   oracle: ["max-age-days"],
   twin: ["port", "host"],
-  "score-twin": ["oracle", "templates", "noise", "json"],
+  "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
+  align: ["apply", "max-batches"],
 };
 
 class UsageError extends Error {}
 
-/** `--flag value` pairs (`--raw` takes none) and positionals; unknown flags and missing values are usage errors. */
+/** `--flag value` pairs (`--raw`, `--apply` take none) and positionals; unknown flags and missing values are usage errors. */
 function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -68,8 +75,8 @@ function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>
     }
     const name = a.slice(2);
     if (!FLAGS[cmd]!.includes(name)) throw new UsageError(`unknown flag ${a} for ${cmd}`);
-    if (name === "raw") {
-      flags.raw = "1";
+    if (name === "raw" || name === "apply") {
+      flags[name] = "1";
       continue;
     }
     const v = argv[++i];
@@ -287,7 +294,7 @@ function replay(oracle: Recording[]): { seqs: Sequence[]; headersFor: (s: Sequen
 }
 
 /** `score-twin`: the oracle's sequences against a fresh in-process twin; Markdown report to stdout, results + score to `jsonOut`. */
-async function scoreTwin(oraclePath: string, templates: Template[], noisePath: string | undefined, jsonOut: string | undefined): Promise<void> {
+async function scoreTwin(oraclePath: string, templates: Template[], noisePath: string | undefined, jsonOut: string | undefined, recOut: string | undefined): Promise<void> {
   const names = new Set(templates.map((t) => t.name));
   const oracle = readJsonl<Recording>(oraclePath).filter((r) => names.has(r.template));
   if (!oracle.length) throw new Error(`${oraclePath} has no sequence of ${[...names].join(", ")}`);
@@ -318,6 +325,7 @@ async function scoreTwin(oraclePath: string, templates: Template[], noisePath: s
     mkdirSync(dirname(jsonOut), { recursive: true });
     writeFileSync(jsonOut, JSON.stringify(toJson(input), null, 2) + "\n");
   }
+  if (recOut) writeJsonl(recOut, recordings);
   console.log(renderMarkdown(input));
   const s = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
   console.error(
@@ -345,7 +353,12 @@ export async function main(argv: string[]): Promise<number> {
 
     if (cmd === "twin") return (await import("./twin/main.ts")).main(rest);
     if (cmd === "score-twin") {
-      await scoreTwin(need(flags, "oracle"), pickTemplates(flags.templates), flags.noise, flags.json);
+      await scoreTwin(need(flags, "oracle"), pickTemplates(flags.templates), flags.noise, flags.json, flags.recordings);
+      return 0;
+    }
+    if (cmd === "align") {
+      const { align, planText } = await import("./align/index.ts");
+      console.log(planText(align({ repo: REPO_ROOT, dataDir: dataDir(), runId: newRunId(), apply: flags.apply === "1", maxBatches: num(flags, "max-batches", { integer: true }) })));
       return 0;
     }
 

@@ -16,7 +16,7 @@ const STRIPE_VERSION = "2026-08-26.dahlia";
 const REF = /\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)/g;
 const EXACT_REF = new RegExp(`^${REF.source}$`);
 // Stripe object id: lowercase prefix + mixed-case tail (the uppercase/digit lookahead excludes enums).
-const ID = /^[a-z]+(?:_[a-z]+)*_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}$/;
+export const ID = /^[a-z]+(?:_[a-z]+)*_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}$/;
 // parity-error-key: the twin's error catalog key (the real API never sends it; headers are never compared).
 const RES_HEADERS = ["request-id", "idempotent-replayed", "stripe-version", "stripe-rate-limited-reason", "retry-after", "parity-error-key"];
 /** Consecutive steps ending 429 after all retries that abort a corpus (W0: B and C sent 966 retries into a limited key). */

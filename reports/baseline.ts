@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
+import { endpoint } from "../src/align/triage.ts";
 import type { SeqResult } from "../src/bench/compare.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { NORMALIZATION_VERSION, RULES } from "../src/bench/normalize.ts";
@@ -17,17 +18,6 @@ import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import type { Recording, Step } from "../src/types.ts";
 
 const SEEDS = Array.from({ length: 20 }, (_, i) => i + 1);
-const NAMED = new Set(["search", "create_preview", "upcoming"]); // literal segments where an id could sit
-
-/** `POST /v1/payment_methods/{id}/attach`: ids, refs and route params become `{id}`. */
-export function endpoint(method: string, path: string): string {
-  const [, v, res, id, action, sub] = path.split("?")[0]!.split("/");
-  const parts = [v, res];
-  if (id !== undefined) parts.push(NAMED.has(id) ? id : "{id}");
-  if (action !== undefined) parts.push(action);
-  if (sub !== undefined) parts.push("{id}");
-  return `${method} /${parts.join("/")}`;
-}
 
 const stepsOf = (template: string, seed: number): Step[] =>
   buildCorpus([TEMPLATES.find((t) => t.name === template)!], [seed])[0]!.steps;
