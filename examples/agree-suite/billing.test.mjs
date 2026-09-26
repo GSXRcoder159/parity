@@ -6,7 +6,7 @@
 // and `protocol` options.
 //
 // Run it on the twin alone (the sandbox half needs a full sk_test_ key in .env):
-//   paritybench agree --cmd "node --test --test-reporter=tap examples/agree-suite/billing.test.mjs" --runs twin
+//   node src/cli.ts agree --cmd "node --test --test-reporter=tap examples/agree-suite/billing.test.mjs" --runs twin
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

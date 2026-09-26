@@ -3,9 +3,10 @@
 Parity measures how faithfully a Stripe-compatible server reproduces the real Stripe API, and ships an open-source twin of the Stripe Billing API that is measured the same way.
 
 - **ParityBench** replays a corpus of API sequences (customers, subscriptions, refunds, errors, idempotency, events, …) against any Stripe-compatible base URL. It compares every response with a recording of the same sequence on the real Stripe sandbox, and reports agreement at four levels, with 95% confidence intervals and the noise floor of the sandbox itself.
-- **The Parity twin** is a stateful Billing server in plain Node, with no dependencies, for fast and isolated tests. ParityBench scores it against the sandbox every night, and an alignment loop patches it toward the sandbox.
+- **The Parity twin** is a stateful Billing server in plain Node, with no dependencies, for fast and isolated tests. ParityBench scores it against sandbox recordings, and an alignment loop patches it toward them.
+- **`paritybench agree`** runs your own test suite twice, once against the twin and once against your sandbox, and reports which tests agree.
 
-**Status: pre-release.** The nightly pipeline and the alignment loop are being built, and no score is published yet. The numbers below are the ones measured so far; the rest are marked `{{TBD}}`.
+**Status: pre-release.** The alignment loop has run (174 automatic patches) and the nightly pipeline has published one point, on an oracle of 88 recorded sequences. The nightly does not run on a schedule yet: it needs a claimed sandbox key and repository secrets. Numbers not measured yet are marked `{{TBD}}`.
 
 ## Quickstart
 
@@ -34,7 +35,7 @@ With stripe-node, pass `new Stripe("sk_test_parity", { host: "127.0.0.1", port: 
 
 ### Use the twin from an agent (MCP)
 
-`node src/cli.ts mcp` serves an in-process twin over MCP on stdio (protocol `2025-11-25`, with the `initialize` handshake). Add it to an MCP client config:
+`node src/cli.ts mcp` serves an in-process twin over MCP on stdio. It speaks protocol `2025-11-25` and earlier, with the `initialize` handshake; the stateless `2026-07-28` handshake (no `initialize`) is not implemented. Add it to an MCP client config:
 
 ```json
 { "mcpServers": { "parity-twin": { "command": "node", "args": ["/path/to/parity/src/cli.ts", "mcp"] } } }
@@ -61,14 +62,39 @@ It sets up Node 22 for the rest of the job. `.github/workflows/action-selftest.y
 ### Score a server
 
 ```sh
-paritybench bench http://127.0.0.1:12111 --oracle oracle.jsonl --noise noise.jsonl
+node src/cli.ts bench http://127.0.0.1:12111 --oracle oracle.jsonl --noise noise.jsonl
 ```
 
-`--oracle` is a sandbox recording of the corpus, and `--noise` is a second one, for the noise floor. Recordings are not distributed: they are data from a Stripe account. Record your own with your own sandbox key (see [Reproduce](#reproduce-with-your-own-sandbox-key)).
+(`npx paritybench bench …` once the package is published; see "Run the twin".) `--oracle` is a sandbox recording of the corpus, and `--noise` is a second recording of some or all of the same sequences, for the noise floor. The floor is measured on the oracle sequences the noise recording covers, and the report says how many that is. Recordings are not distributed: they are data from a Stripe account. Record your own with your own sandbox key (see [Reproduce](#reproduce-with-your-own-sandbox-key)).
+
+### Check your own test suite: `agree`
+
+```sh
+node src/cli.ts agree --cmd "node --test --test-reporter=tap examples/agree-suite/billing.test.mjs" --runs twin,sandbox --out reports/agree
+```
+
+`agree` runs the command once per target, with `STRIPE_API_BASE` and `STRIPE_API_KEY` set, and pairs the outcomes by test name. The suite's only contract is to send its requests to `STRIPE_API_BASE`.
+- **twin:** an in-process twin on an ephemeral port, with the key `sk_test_parity`.
+- **sandbox:** your `STRIPE_API_KEY` from `.env`, through a local proxy to the real API. The proxy holds 20 requests per second and ledgers every request against the read budget. It halts the run (no report) when the rolling 30-day GETs reach the budget, or after 10 consecutive 429s.
+- **Outcomes:** from the JUnit XML the command writes to `--junit <path>`, else from `node --test` TAP on stdout. With TAP, a test inside a `describe` block or a subtest is named `block > test`.
+- **Report:** per-test outcomes, the agreement with a 95% Wilson interval, and the disagreeing tests. It holds test names and outcomes only, never the command's output.
+
+`examples/agree-suite/billing.test.mjs` is an 8-test example (customer, card, price, subscription, a previewed and applied price change, cancel, refund). The sandbox half needs a claimed sandbox's `sk_test_` key.
+
+### Train agents on the twin: `verifiers`
+
+`python/parity_verifiers` is a [`verifiers`](https://github.com/PrimeIntellect-ai/verifiers) `ToolEnv` of billing-support tasks (refunds, cancellations, plan changes) over a running twin. Each rollout seeds its own customer through the API, and the rubric checks the final state through `/_parity/state`.
+
+```sh
+node src/twin/main.ts &                         # the twin on 127.0.0.1:12111
+cd python/parity_verifiers && uv run --locked pytest -q
+```
+
+`load_environment(base_url="http://127.0.0.1:12111", tasks=None)` returns the environment; `tasks` picks a subset by name.
 
 ## Method
 
-**Corpus.** 26 templates in 9 strata: lifecycle, pagination, cancellation, refunds, errors, idempotency, events, proration and boundaries. The full corpus runs each template with seeds 1–20: 520 sequences. Five templates are **held out**: `subscription-cancel-at-period-end`, `refund-partial-then-rest`, `invalid-params`, `subscription-update-quantity` and `boundaries-list-limits`. They never feed the alignment loop; they only gate its patches. Test-clock templates wait for a claimed sandbox.
+**Corpus.** 30 templates in 10 strata: lifecycle, pagination, cancellation, refunds, errors, idempotency, events, proration, boundaries and clocks. The full corpus runs each template with seeds 1–20: 600 sequences. The recorded oracle holds 88 of them so far (templates #1–#26, seeds 1–4 or 1–2): the rest waits for a claimed sandbox. The four test-clock templates (#27–#30) are in the corpus, but no sandbox has recorded them, so they are not validated yet. Six templates are **held out**: `subscription-cancel-at-period-end`, `refund-partial-then-rest`, `invalid-params`, `subscription-update-quantity`, `boundaries-list-limits` and `clock-trial-end`. They never feed the alignment loop; they only gate its patches. (Disclosure: an implementer's context once contained the validation notes of held-out #7, #9 and #12; the align loop never saw them. See the [day-0 report](reports/2026-09-26-twin-day0.md) limitations.)
 
 **Four levels.**
 
@@ -83,7 +109,7 @@ paritybench bench http://127.0.0.1:12111 --oracle oracle.jsonl --noise noise.jso
 
 **Noise floor and ceiling.** Two real sandbox recordings of the same sequences are compared with the same harness. The noise floor is 1 − their agreement. The ceiling is their agreement: the best score any server can reach against that oracle. **Any score without the noise floor and ceiling is invalid.**
 
-**Normalization.** Versioned rules rewrite run-specific values so that two faithful runs compare equal: ids, timestamps, run nonces, secrets, hosted URLs, per-account and card-network opaques, dashboard links and the unclaimed-sandbox banner. List order is compared as returned. Each rule states what it can hide. The rules and their rationale are in [`src/bench/normalize.ts`](src/bench/normalize.ts) (currently v1.2), and every score carries its normalization version.
+**Normalization.** Versioned rules rewrite run-specific values so that two faithful runs compare equal: ids, timestamps, run nonces, secrets, hosted URLs, per-account and card-network opaques, dashboard links and the unclaimed-sandbox banner. List order is compared as returned. Each rule states what it can hide. The rules and their rationale are in [`src/bench/normalize.ts`](src/bench/normalize.ts) (currently v1.3), and every score carries its normalization version.
 
 **Rolling oracle.** The sandbox read allocation does not allow re-recording the whole corpus every night. Each night re-records a rotating seventh of the corpus and scores the twin on the whole corpus against the latest recording of each sequence. So the twin is scored nightly against an oracle that is at most 7 days old; drift on any sequence is detected within 7 days. Drift compares a night's slice with the previous recording of the same sequences, on paths outside the noise set.
 
@@ -92,7 +118,7 @@ paritybench bench http://127.0.0.1:12111 --oracle oracle.jsonl --noise noise.jso
 - **assisted:** a code change proposed by the loop and merged after review.
 - **surface added:** new scope, such as test clocks. It is annotated on the curve so that a coverage jump is never read as alignment.
 
-The automation ratio is automatic ÷ (automatic + assisted).
+The automation ratio is automatic ÷ (automatic + assisted), counted from the log since the freeze.
 
 ### Measured so far
 
@@ -105,15 +131,27 @@ The automation ratio is automatic ÷ (automatic + assisted).
 | L3 value | 92.4% [89.4–94.6] (420) | 7.6% |
 | L4 sequence | 65.0% [52.4–75.8] (60) | 35.0% |
 
-All 32 steps that disagree trace to 6 causes, and normalization v1.2 addresses them. v1.2 on a pair recorded after it: `{{TBD: v1.2 noise floor on an out-of-sample pair}}`.
+All 32 steps that disagree trace to 6 causes, and normalization v1.2 addresses them. On that same pair v1.2 agrees at every level (floor 0.0%; L3 [0.0–0.9], L4 [0.0–6.0]), but that is in-sample, because v1.2 was written from it ([baseline report](reports/2026-09-26-baseline.md)). On a pair recorded after it: `{{TBD: v1.2+ noise floor on an out-of-sample pair, after B1}}`.
 
 **Throughput, W0.** 3,950 and 4,436 sequences per hour (wall time, concurrency 8, no 429s).
 
-**The twin.** Day-0 scaffold score: `{{TBD: score-twin on oracle v1, L1–L4 per stratum, train vs held-out}}`. Nightly curve and automation ratio: `{{TBD: first nightly run}}`.
+**The twin**, on the 88-sequence oracle ([day 0](reports/2026-09-26-twin-day0.md), [first align run](reports/2026-09-26-align-first-run.md)):
+
+| Split | L3 at day 0 | L3 after 174 automatic patches | L4 after |
+|---|---|---|---|
+| train | 3.8% [2.5–5.9] (495) | 18.8% [15.6–22.5] (495) | 5.6% [2.2–13.4] (72) |
+| held-out | 0.0% [0.0–3.3] (113) | 8.8% [4.9–15.5] (113) | 0.0% [0.0–19.4] (16) |
+
+The noise pair covers templates #1–#15 only and is in-sample, so these scores have a floor and ceiling for part of the corpus only. Automation ratio so far: 174 automatic, 0 assisted (the assisted pass has not run live). The first nightly point is in `site/data/curve.json`; a scheduled nightly curve: `{{TBD: after B1 and B2}}`.
 
 ### Other servers
 
-stripe-mock, as documented. Its README says: "stripe-mock does not attempt to reproduce the behavior of the real Stripe API at all. It cannot reject all invalid requests, and its responses are completely hardcoded." ([github.com/stripe/stripe-mock](https://github.com/stripe/stripe-mock)). On stateful sequences its score measures that documented design, not a defect. Scores: `{{TBD: stripe-mock and localstripe from the final W1 baseline report}}`.
+stripe-mock, as documented. Its README says: "stripe-mock does not attempt to reproduce the behavior of the real Stripe API at all. It cannot reject all invalid requests, and its responses are completely hardcoded." ([github.com/stripe/stripe-mock](https://github.com/stripe/stripe-mock)). On stateful sequences its score measures that documented design, not a defect. From the [baseline report](reports/2026-09-26-baseline.md) (normalization v1.2):
+
+| Server | Sequences | L1 | L3 | L4 |
+|---|---|---|---|---|
+| stripe-mock (pinned digest, v0.205.0) | 88 | 80.9% | 1.3% | 0.0% [0.0–4.2] |
+| localstripe 1.15.10 (the 6 templates it serves) | 20 | 58.1% | 3.4% | 0.0% [0.0–16.1] |
 
 ## Why a twin
 
@@ -136,7 +174,7 @@ node src/cli.ts bench <baseURL> --oracle <oracle.jsonl> --noise <noise.jsonl>   
 ```
 
 - `record` prints where it wrote each recording: under `$PARITY_DATA_DIR`, else `../parity-data` if it exists, else `recordings/`.
-- The harness paces sandbox traffic at 20 requests per second or less. It counts every `GET` against `PARITY_READ_BUDGET` (default 10,000 per rolling 30 days, the minimum read allocation on the rate-limits page) in `budget/reads.jsonl`.
+- The harness paces sandbox traffic at 20 requests per second or less. It counts every `GET` against `PARITY_READ_BUDGET` (default 10,000 per rolling 30 days, the minimum read allocation on the rate-limits page) in `<data dir>/budget/reads.jsonl`, which names your account: keep it private.
 - On an unclaimed (claimable) sandbox key, leave about 20 minutes between the two runs: that key has an undocumented request quota.
 - `node src/cli.ts help` lists every flag.
 - The outputs of `record`, `compare`, `bench` and `score-twin` contain response values from your account. Keep them private.
@@ -147,15 +185,16 @@ API version `2026-08-26.dahlia`.
 
 | Resource | Supported |
 |---|---|
-| Customers | create, retrieve, update, delete, list, search; list a customer's payment methods |
-| Products, prices | create, retrieve, update, list |
-| Payment methods | retrieve, list, attach, detach; test ids such as `pm_card_visa` and `pm_card_chargeDeclined` |
-| Subscriptions | create (first invoice and synchronous payment), retrieve, list, cancel; update `cancel_at_period_end`, `default_payment_method`, `description`, `metadata` |
-| Invoices | retrieve, list (subscriptions create them) |
+| Customers | create (also on a test clock, at most 3 per clock), retrieve, update, delete (cancels the customer's subscriptions first), list, search (`field:'value'` and numeric `created>=<epoch>`-style clauses joined by `AND`); list a customer's payment methods |
+| Products, prices | create, retrieve, update, list; prices with `unit_amount` or `unit_amount_decimal`, one-time or recurring (recurring ones also emit `plan.*` events) |
+| Payment methods | retrieve, list, attach, detach; test ids such as `pm_card_visa` and `pm_card_chargeDeclined`. A detached payment method is never charged |
+| Subscriptions | create (first invoice and synchronous payment, `payment_behavior`, `collection_method=send_invoice` with a draft first invoice, `trial_period_days`), retrieve, list, cancel; update items (price swaps, quantities, additions, deletions) with `proration_behavior` (`create_prorations`, `always_invoice`, `none`), `proration_date` and `billing_cycle_anchor=now`, and `cancel_at_period_end`, `default_payment_method`, `description`, `metadata` |
+| Invoices | retrieve, list, update (`description`, `metadata`), finalize, pay (also `paid_out_of_band`), void, `create_preview` (the next invoice of a subscription, with or without changes, or the first invoice of a new one). Delete answers the API's error for subscription invoices |
 | Payment intents, charges | retrieve, list (payment attempts create them) |
 | Refunds | create, retrieve, list |
 | Events | retrieve, list |
 | Webhook endpoints | create, retrieve, update, delete, list; signed deliveries (`Stripe-Signature`) with 3 retries |
+| Test clocks | create, retrieve, list, delete (deletes its customers, canceling their subscriptions), advance: renewals counted from the billing anchor, trial end and the `trial_will_end` notice, cancel at period end, a renewal draft finalized and charged an hour later, and payment retries. A clock's objects live at its frozen time. **Built from the public docs: no sandbox has recorded a clock yet, so this is not validated** |
 
 Across every route:
 - Form-encoded parameters are validated against the OpenAPI spec, and unknown ones are rejected.
@@ -164,13 +203,15 @@ Across every route:
 - The `Parity-Now: <unix seconds>` header sets the clock for a request.
 - Control endpoints: `POST /_parity/reset`, `POST /_parity/seed`, `GET /_parity/state`.
 
-**Not yet:** these answer `400 not_implemented` rather than dropping a parameter silently.
-- Invoice update, delete, finalize, pay and void, and `create_preview`.
-- Subscription item, price and quantity changes, proration, trials, billing anchors and discounts: any create or update parameter outside the lists above.
+**Not yet:** these answer `400 not_implemented` rather than guessing at behavior no recording shows.
+- A subscription item on a price in another currency, a second item on a price the subscription already has, items on different billing intervals, and a change of billing interval (for example monthly to annual) without `billing_cycle_anchor=now`.
+- A `billing_cycle_anchor` timestamp, a `proration_date` outside the current period, deleting every item, discounts, and any other subscription parameter not listed above.
+- Changing a trialing or canceled subscription; previewing the renewal of a subscription set to cancel at period end.
 - Cancel with `invoice_now` or `prorate`.
-- Webhook endpoints with `connect`.
+- Finalizing, paying or voiding an invoice twice, and updating a paid or void one.
+- Webhook endpoints with `connect`, and a test clock created with `customer`.
 
-Test clocks are not in the twin yet: their routes answer `404 unrecognized_url`.
+Routes the twin does not serve at all, such as creating a payment intent directly, answer `404 unrecognized_url`.
 
 ## License and pledge
 
