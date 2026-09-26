@@ -16,9 +16,10 @@ plan §6.4, for use when no partner suite exists. It is an agent run, not a gym 
   - per-task pass, fail or error on each target;
   - the agreement, with a Wilson 95% CI, and the verdict;
   - the model and the LLM cost.
-- **Errors are not outcomes.** A task is `error` when its setup failed or the harness or an LLM call threw (a 529, a
-  dead bridge): the agent's result is unknown. Such a task is listed under "Not measured" and left out of the agreement's
-  k/n, and while any task errored there is no verdict, because H4 is defined over the whole suite. Re-run for the number.
+- **Errors are not outcomes.** A task is `error` when its setup failed or the harness or an LLM call threw (a 529 after
+  two retries, a dead bridge): the agent's result is unknown. Such a task is listed under "Not measured" and left out of
+  the agreement's k/n, and while any task errored there is no verdict, because H4 is defined over the whole suite.
+  Re-run for the number.
 - **Early stop.** An LLM cap refusal or a dead toolkit bridge stops the run; the tasks not reached are `error`
   ("not run"), the partial report is still printed and written, and the exit code is 1.
 - **Preflight.** When the sandbox is in `--runs`, one authenticated `GET /v1/customers?limit=1` goes through the metered
@@ -64,8 +65,9 @@ cap ($15 per UTC day, shared with other LLM spend) can still stop it; the result
   `PRICES` marks it `temperature0`, so temperature 0 is sent. That lowers the variance but does not remove it, since
   the API does not guarantee identical outputs at temperature 0. There is no noise-floor control run (`--runs` takes
   each target once). Which model the H4 number uses is the plan owner's call.
-- **Spend.** Every call is written to `budget/llm.jsonl` (purpose `h4`), using `src/align/llm.ts`'s prices, entry shape and
-  daily cap. A call is refused before it is sent if it would pass any of three caps:
+- **Spend.** Every call goes through `src/align/llm.ts`'s `complete()` and is written to `budget/llm.jsonl` (purpose `h4`).
+  A 429 or 529 is retried twice there; a third one errors that task. A call is refused before it is sent if it would
+  pass any of three caps:
   - the daily cap;
   - $50 for all of H4;
   - `--cap-usd` for this run (default $10).

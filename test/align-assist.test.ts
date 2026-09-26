@@ -75,10 +75,10 @@ test("llm: cost from usage, one ledger line per call, text blocks only, temperat
   }
 });
 
-test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday does not count; HTTP errors are redacted and not ledgered", async () => {
+test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday does not count; a 529 is retried twice, then errors redacted and not ledgered", async () => {
   assert.deepEqual([capUsd({}), capUsd({ PARITY_LLM_CAP_USD: "3" }), capUsd({ PARITY_LLM_CAP_USD: "40" })], [15, 3, 15]);
   assert.throws(() => capUsd({ PARITY_LLM_CAP_USD: "lots" }), /non-negative number/);
-  const api = await fakeApi((n) => (n === 1 ? { status: 529, json: { error: { message: "overloaded for key sk-ant-secret" } } } : message("ok")));
+  const api = await fakeApi((n) => (n >= 1 && n <= 3 ? { status: 529, json: { error: { message: "overloaded for key sk-ant-secret" } } } : message("ok")));
   try {
     const ledger = join(mkdtempSync(join(tmpdir(), "pb-llm-cap-")), "llm.jsonl");
     const entry = (date: string, cost_usd: number): LlmEntry => ({
@@ -103,7 +103,7 @@ test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday d
     await call({ PARITY_LLM_CAP_USD: "3" }); // yesterday's $100 does not count against today
     await assert.rejects(call({ PARITY_LLM_CAP_USD: "0.05" }), CapRefused);
     await assert.rejects(call({}), (e: unknown) => /LLM HTTP 529: .*overloaded for key \[REDACTED\]/.test((e as Error).message) && !(e as Error).message.includes("sk-ant-secret"));
-    assert.equal(api.requests.length, 2);
+    assert.equal(api.requests.length, 4); // the 529 was sent three times
     assert.deepEqual(readLlmLedger(ledger).map((e) => e.date.slice(0, 10)), ["2026-09-25", "2026-09-26"], "only the call that returned usage is ledgered");
   } finally {
     api.close();

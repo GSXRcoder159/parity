@@ -70,8 +70,12 @@ export const readLlmLedger = (path: string): LlmEntry[] => (existsSync(path) ? r
 export const spentToday = (entries: LlmEntry[], now: Date): number =>
   entries.filter((e) => e.date.slice(0, 10) === now.toISOString().slice(0, 10)).reduce((s, e) => s + e.cost_usd, 0);
 
+/** A content block of a reply: text, tool_use (id, name, input), thinking... */
+export type Block = { type: string; id?: string; name?: string; input?: unknown; text?: string };
 export interface Reply {
   text: string;
+  /** Every content block, for tool use; `text` joins the text blocks. */
+  content: Block[];
   model: string;
   stop_reason: string | null;
   usage: Usage;
@@ -79,13 +83,14 @@ export interface Reply {
 }
 
 /**
- * One Messages API call (max_tokens 8192; temperature 0 where the model accepts it). Refused with CapRefused when
- * today's spend + a worst-case estimate (prompt chars / 2 input tokens, max_tokens output) would pass the cap. The
- * reply is ledgered whatever its stop_reason; only the text blocks are returned.
+ * One Messages API call (max_tokens 8192; temperature 0 where the model accepts it): one `user` prompt, or a whole
+ * `messages` list (a tool-use loop), with optional `tools`. Refused with CapRefused when today's spend, or any of
+ * `extraCaps` (a caller's own budgets), plus a worst-case estimate (prompt chars / 2 input tokens, max_tokens output)
+ * would pass its cap. A 429 or 529 is retried twice. The reply is ledgered whatever its stop_reason.
  */
 export async function complete(
-  req: { system: string; user: string; runId: string; purpose: string },
-  o: { ledger: string; env?: Env; now?: () => Date },
+  req: { system: string; tools?: unknown[]; runId: string; purpose: string } & ({ user: string } | { messages: unknown[] }),
+  o: { ledger: string; env?: Env; now?: () => Date; extraCaps?: { spent: number; cap: number; name: string }[] },
 ): Promise<Reply> {
   const env = o.env ?? process.env;
   const now = o.now ?? (() => new Date());
@@ -95,32 +100,39 @@ export async function complete(
   const cap = capUsd(env);
   const spent = spentToday(readLlmLedger(o.ledger), now());
   // ponytail: chars/2 over-estimates input tokens for code and JSON; /v1/messages/count_tokens would make it exact.
-  const estimate = costUsd(model, { input_tokens: Math.ceil((req.system.length + req.user.length) / 2), output_tokens: MAX_TOKENS });
+  const messages = "user" in req ? [{ role: "user", content: req.user }] : req.messages;
+  const chars = req.system.length + ("user" in req ? req.user.length : JSON.stringify(messages).length) + (req.tools ? JSON.stringify(req.tools).length : 0);
+  const estimate = costUsd(model, { input_tokens: Math.ceil(chars / 2), output_tokens: MAX_TOKENS });
   if (spent + estimate > cap) {
     throw new CapRefused(`LLM cap: $${spent.toFixed(4)} spent today (UTC) + $${estimate.toFixed(4)} estimated for this call > cap $${cap} (${o.ledger}; PARITY_LLM_CAP_USD)`);
   }
+  for (const c of o.extraCaps ?? []) {
+    if (c.spent + estimate > c.cap) throw new CapRefused(`LLM ${c.name}: $${c.spent.toFixed(4)} spent + $${estimate.toFixed(4)} estimated for this call > $${c.cap} (${o.ledger})`);
+  }
   const redact = (s: string) => s.split(apiKey).join("[REDACTED]");
   const url = `${(env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "")}/v1/messages`;
+  const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, ...(p.temperature0 ? { temperature: 0 } : {}), system: req.system, ...(req.tools ? { tools: req.tools } : {}), messages });
   let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model,
-        max_tokens: MAX_TOKENS,
-        ...(p.temperature0 ? { temperature: 0 } : {}),
-        system: req.system,
-        messages: [{ role: "user", content: req.user }],
-      }),
-      signal: AbortSignal.timeout(300_000),
-    });
-  } catch (e) {
-    throw new Error(`LLM network error: ${redact(String(e))}`);
+  let raw: string;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+        body,
+        signal: AbortSignal.timeout(300_000),
+      });
+    } catch (e) {
+      throw new Error(`LLM network error: ${redact(String(e))}`);
+    }
+    raw = await res.text();
+    if ((res.status !== 429 && res.status !== 529) || attempt === 3) break;
+    // Rate limited or overloaded: not billed, so the caps checked above still hold. retry-after (seconds) when sent.
+    const after = Number(res.headers.get("retry-after"));
+    await new Promise((r) => setTimeout(r, after > 0 ? Math.min(after, 60) * 1000 : 500 * attempt));
   }
-  const raw = await res.text();
   if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${redact(raw.slice(0, 400))}`);
-  const json = JSON.parse(raw) as { content?: { type: string; text?: string }[]; stop_reason?: string | null; usage?: Usage };
+  const json = JSON.parse(raw) as { content?: Block[]; stop_reason?: string | null; usage?: Usage };
   if (!json.usage) throw new Error(`LLM reply without usage: ${redact(raw.slice(0, 400))}`);
   const u = json.usage;
   const cost_usd = costUsd(model, u);
@@ -138,6 +150,7 @@ export async function complete(
   };
   mkdirSync(dirname(o.ledger), { recursive: true });
   appendFileSync(o.ledger, JSON.stringify(entry) + "\n");
-  const text = (json.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-  return { text, model, stop_reason: entry.stop_reason, usage: u, cost_usd };
+  const content = json.content ?? [];
+  const text = content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
+  return { text, content, model, stop_reason: entry.stop_reason, usage: u, cost_usd };
 }

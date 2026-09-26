@@ -163,15 +163,16 @@ test("llm agent: refused before any call without a key; a cap refusal stops the 
   }
 });
 
-test("llm agent: an API error (529) errors that task only; the run goes on and reports it as not measured", async () => {
-  const fake = await fakeAnthropic((_, n) => (n === 1 ? { status: 529 } : { content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" }));
+test("llm agent: a 529 is retried twice; a third errors that task only; the run goes on and reports it as not measured", async () => {
+  // Calls 1-3: refund-full's first model call and its two retries. Call 4: cancel-now's, whose retry (5) answers.
+  const fake = await fakeAnthropic((_, n) => (n <= 4 ? { status: 529 } : { content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" }));
   const restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined });
   const lines: string[] = [];
   try {
     const r = await runH4({ tasks: [task("refund-full"), task("cancel-now")], runs: ["twin"], agent: "llm", ledger: join(tmp(), "llm.jsonl"), log: (l) => lines.push(l) });
     assert.deepEqual(r.tasks.map((t) => t.outcomes.twin), ["error", "fail"]); // the do-nothing reply fails cancel-now
     assert.equal(r.stopped, undefined);
-    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls.length, 5);
     assert.ok(lines.includes("h4: twin: refund-full: error: LLM HTTP 529: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"));
     assert.match(h4Text(r), /## Not measured: an error on some target \(1\)\n\n- refund-full: twin error/);
   } finally {

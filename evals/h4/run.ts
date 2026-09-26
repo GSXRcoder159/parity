@@ -6,13 +6,13 @@
 // ponytail: an agent run, not a gym framework: tasks run one after another, one attempt each, no retries or best-of-3.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { meteredProxy } from "../../src/agree.ts";
-import { CapRefused, capUsd, costUsd, DEFAULT_MODEL, MAX_TOKENS, PRICES, readLlmLedger, spentToday, type LlmEntry, type Usage } from "../../src/align/llm.ts";
+import { CapRefused, complete, DEFAULT_MODEL, readLlmLedger } from "../../src/align/llm.ts";
 import { readLedger } from "../../src/bench/budget.ts";
 import { dataDir } from "../../src/bench/oracle.ts";
 import { createLimiter, resolveRefs, runNonce, runSequence, sandboxTarget, type Target } from "../../src/bench/run.ts";
@@ -133,71 +133,17 @@ interface LlmOpts {
   capUsd: number;
   spent: { usd: number };
 }
-type Block = { type: string; id?: string; name?: string; input?: unknown; text?: string };
-
-/**
- * One Messages API call with tools. src/align/llm.ts's complete() takes a single user string and returns text only,
- * so this is its tool-use twin: same model default, price table, max_tokens, temperature rule, ledger entry and
- * daily cap, plus the H4 total cap and this run's cap. Refused (CapRefused) before sending when any cap would pass.
- */
-async function messages(req: { tools: ToolDef[]; messages: unknown[] }, o: LlmOpts): Promise<Block[]> {
-  const env = process.env;
-  const apiKey = env.ANTHROPIC_API_KEY || fail("ANTHROPIC_API_KEY is not set");
-  const model = env.PARITY_LLM_MODEL || DEFAULT_MODEL;
-  const p = PRICES[model] ?? fail(`no price for model "${model}" (PARITY_LLM_MODEL): add it to PRICES in src/align/llm.ts`);
-  const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, ...(p.temperature0 ? { temperature: 0 } : {}), system: SYSTEM, tools: req.tools, messages: req.messages });
-  const now = new Date();
-  const ledger = readLlmLedger(o.ledger);
-  // ponytail: chars/2 over-estimates input tokens, as complete() does; count_tokens would make it exact.
-  const estimate = costUsd(model, { input_tokens: Math.ceil(body.length / 2), output_tokens: MAX_TOKENS });
-  const h4 = ledger.filter((e) => e.purpose === "h4").reduce((s, e) => s + e.cost_usd, 0);
-  const caps: [number, number, string][] = [
-    [spentToday(ledger, now), capUsd(env), "daily cap (UTC; PARITY_LLM_CAP_USD)"],
-    [h4, H4_CAP_USD, "H4 total cap"],
-    [o.spent.usd, o.capUsd, "this run's cap (--cap-usd)"],
-  ];
-  for (const [spent, cap, name] of caps) {
-    if (spent + estimate > cap) throw new CapRefused(`LLM ${name}: $${spent.toFixed(4)} spent + $${estimate.toFixed(4)} estimated for this call > $${cap} (${o.ledger})`);
-  }
-  const redact = (s: string) => s.split(apiKey).join("[REDACTED]");
-  let res: Response;
-  try {
-    res = await fetch(`${(env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "")}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body,
-      signal: AbortSignal.timeout(300_000),
-    });
-  } catch (e) {
-    throw new Error(`LLM network error: ${redact(String(e))}`);
-  }
-  const raw = await res.text();
-  if (!res.ok) throw new Error(`LLM HTTP ${res.status}: ${redact(raw.slice(0, 400))}`);
-  const json = JSON.parse(raw) as { content?: Block[]; stop_reason?: string | null; usage?: Usage };
-  const u = json.usage ?? fail(`LLM reply without usage: ${redact(raw.slice(0, 400))}`);
-  const entry: LlmEntry = {
-    date: new Date().toISOString(),
-    runId: o.runId,
-    purpose: "h4",
-    model,
-    input_tokens: u.input_tokens,
-    output_tokens: u.output_tokens,
-    cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
-    cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-    cost_usd: costUsd(model, u),
-    stop_reason: json.stop_reason ?? null,
-  };
-  mkdirSync(dirname(o.ledger), { recursive: true });
-  appendFileSync(o.ledger, JSON.stringify(entry) + "\n");
-  o.spent.usd += entry.cost_usd;
-  return json.content ?? [];
-}
-
 /** The minimal tool-use loop: at most MAX_TURNS model calls; every tool_use in a reply runs; a reply without one ends it. */
 async function llmAgent(instruction: string, bridge: Bridge, o: LlmOpts): Promise<number> {
   const msgs: unknown[] = [{ role: "user", content: instruction }];
   for (let turn = 1; ; turn++) {
-    const content = await messages({ tools: bridge.tools, messages: msgs }, o);
+    const h4 = readLlmLedger(o.ledger).filter((e) => e.purpose === "h4").reduce((s, e) => s + e.cost_usd, 0);
+    const extraCaps = [
+      { spent: h4, cap: H4_CAP_USD, name: "H4 total cap" },
+      { spent: o.spent.usd, cap: o.capUsd, name: "this run's cap (--cap-usd)" },
+    ];
+    const { content, cost_usd } = await complete({ system: SYSTEM, tools: bridge.tools, messages: msgs, runId: o.runId, purpose: "h4" }, { ledger: o.ledger, extraCaps });
+    o.spent.usd += cost_usd;
     msgs.push({ role: "assistant", content });
     const uses = content.filter((b) => b.type === "tool_use");
     if (!uses.length) return turn;
