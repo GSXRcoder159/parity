@@ -366,9 +366,15 @@ function compareFiles(oraclePath: string, targetPath: string, noisePath: string 
   console.log(`wrote ${out}.md and ${out}.json`);
 }
 
-/** The oracle's exact (template, seed) sequences, and headers pinning each one's clock to its oracle recording's start. */
+/**
+ * The oracle's exact (template, seed) sequences, and headers pinning each one's clock to its oracle recording's start.
+ * Steps are compared by index, so a template edited since its recording (another step count or method) is refused:
+ * scoring it would compare different requests. ponytail: paths and params are not compared (they hold resolved ids).
+ */
 function replay(oracle: Recording[]): { seqs: Sequence[]; headersFor: (s: Sequence) => Record<string, string> } {
   const seqs = oracle.map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
+  const stale = oracle.filter((r, i) => seqs[i]!.steps.length !== r.steps.length || seqs[i]!.steps.some((s, j) => s.method !== r.steps[j]!.method)).map((r) => r.seq);
+  if (stale.length) throw new Error(`${stale.length} oracle sequences were recorded from a different version of their template (step count or methods differ): ${stale.slice(0, 5).join(", ")}${stale.length > 5 ? ", …" : ""}; re-record them`);
   // The oracle's clock: a twin answers as of the day the oracle was recorded (decision 0002 §4.4); other targets ignore it.
   const now = new Map(oracle.map((r) => [r.seq, String(Math.floor(Date.parse(r.startedAt) / 1000))]));
   return { seqs, headersFor: (s) => ({ "Parity-Now": now.get(s.id)! }) };
@@ -508,13 +514,13 @@ export async function main(argv: string[]): Promise<number> {
     const url = positional[0]!;
     const oraclePath = need(flags, "oracle");
     const oracleRecs = readJsonl<Recording>(oraclePath);
-    const { seqs, headersFor } = replay(oracleRecs);
-    const target = resolveTarget(url);
     // Before recording (against the sandbox that spends the read budget): a noise file that covers none of the oracle fails now.
     if (flags.noise !== undefined) {
       const c = noiseCovered(oracleRecs, side(flags.noise)).coverage;
       console.log(`noise floor: ${flags.noise} covers ${c.seqs} of ${c.oracleSeqs} oracle sequences (${c.templates} of ${c.oracleTemplates} templates)`);
     }
+    const { seqs, headersFor } = replay(oracleRecs);
+    const target = resolveTarget(url);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
     // The sandbox ignores Parity-Now; sending it would also move the event sweep back to the oracle's day (outside the budget's projection).

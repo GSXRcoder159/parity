@@ -102,6 +102,10 @@ test("--noise covering part of the oracle: the floor is measured on the covered 
   assert.equal(bench.status, 1);
   assert.match(bench.stderr, /no clean recording of any oracle sequence/);
   assert.doesNotMatch(bench.stdout, /run \d{8}T/, "nothing was recorded");
+  // These one-step recordings of customer-crud do not match its current six steps: bench refuses before recording.
+  const stale = cli(["bench", "http://127.0.0.1:9", "--oracle", "a.jsonl"], dir);
+  assert.equal(stale.status, 1);
+  assert.match(stale.stderr, /2 oracle sequences were recorded from a different version of their template \(step count or methods differ\): customer-crud#1, customer-crud#2; re-record them/);
 });
 
 test("resolveTarget: the fully qualified api.stripe.com. is the sandbox too", () => {
