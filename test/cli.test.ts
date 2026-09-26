@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { budgetRefusal, newRunId } from "../src/cli.ts";
+import { budgetRefusal, newRunId, resolveTarget } from "../src/cli.ts";
 import type { LedgerEntry } from "../src/bench/budget.ts";
 import { writeJsonl } from "../src/jsonl.ts";
 import type { Recording } from "../src/types.ts";
@@ -100,6 +100,24 @@ test("budget: refuses only when rolling 30-day GETs + projected exceed the budge
   const msg = budgetRefusal(ledger, 201, now, 10_000);
   assert.match(msg ?? "", /refusing to run: 9800 sandbox GETs in the last 30 days \+ 201 projected .* = 10001 > read budget 10000/);
   assert.notEqual(budgetRefusal([], 10_001, now, 10_000), null);
+});
+
+test("targets: a URL on api.stripe.com gets the sandbox's 20 req/s cap and key; other URLs do not", () => {
+  const saved = process.env.STRIPE_API_KEY;
+  try {
+    process.env.STRIPE_API_KEY = "sk_test_x";
+    for (const spec of ["sandbox", "https://api.stripe.com", "https://API.stripe.com/v1/", "http://api.stripe.com:443"]) {
+      assert.deepEqual(resolveTarget(spec, "n"), { name: "sandbox", baseUrl: "https://api.stripe.com", apiKey: "sk_test_x", rps: 20, eventWaitMs: 3000 }, spec);
+    }
+    const local = resolveTarget("http://127.0.0.1:9/");
+    assert.equal(local.rps, undefined);
+    assert.equal(local.baseUrl, "http://127.0.0.1:9");
+    delete process.env.STRIPE_API_KEY;
+    assert.throws(() => resolveTarget("https://api.stripe.com"), /STRIPE_API_KEY is not set/);
+  } finally {
+    if (saved === undefined) delete process.env.STRIPE_API_KEY;
+    else process.env.STRIPE_API_KEY = saved;
+  }
 });
 
 test("runId: UTC YYYYMMDDTHHMMSS plus 4 random base36 chars", () => {

@@ -75,13 +75,14 @@ export function budgetRefusal(ledger: LedgerEntry[], projected: number, nowIso: 
   return `refusing to run: ${rolling} sandbox GETs in the last 30 days + ${projected} projected for this run = ${rolling + projected} > read budget ${budget} (${LEDGER}; PARITY_READ_BUDGET; decision 0001 C2)`;
 }
 
-function resolveTarget(spec: string, name?: string): Target {
-  if (spec === "sandbox") {
+export function resolveTarget(spec: string, name?: string): Target {
+  if (spec !== "sandbox" && !URL.canParse(spec)) throw new UsageError(`target must be "sandbox" or a URL, got "${spec}"`);
+  // By host: a URL naming api.stripe.com is the sandbox and gets its 20 req/s bucket and event wait, never a URL target's unthrottled defaults.
+  if (spec === "sandbox" || new URL(spec).hostname === "api.stripe.com") {
     const key = process.env.STRIPE_API_KEY;
     if (!key) throw new Error("STRIPE_API_KEY is not set (put it in .env)");
     return sandboxTarget(key);
   }
-  if (!URL.canParse(spec)) throw new UsageError(`target must be "sandbox" or a URL, got "${spec}"`);
   return { name: name ?? spec, baseUrl: spec.replace(/\/+$/, ""), apiKey: process.env.PARITY_TARGET_KEY ?? "sk_test_parity" };
 }
 
