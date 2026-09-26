@@ -1,16 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { budgetRefusal, newRunId, resolveTarget, slice } from "../src/cli.ts";
 import type { LedgerEntry } from "../src/bench/budget.ts";
+import { buildCorpus } from "../src/bench/corpus.ts";
+import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
+import { createTwin } from "../src/twin/server.ts";
 import type { Recording } from "../src/types.ts";
+import { TEMPLATES } from "../templates/index.ts";
 
 const CLI = join(import.meta.dirname, "../src/cli.ts");
 // A fresh cwd and data dir per call: no .env is loaded and nothing lands in the repo or ../parity-data.
@@ -99,6 +105,10 @@ test("argv errors exit 2 with a usage line", () => {
     ["oracle", "rebuild"],
     ["oracle", "build", "--max-age-days", "0"],
     ["oracle", "build", "--oracle", "x"],
+    ["twin", "--bogus", "1"],
+    ["twin", "extra"],
+    ["score-twin"], // missing --oracle
+    ["score-twin", "--oracle", "a.jsonl", "--templates", "no-such-template"],
   ]) {
     const r = cli(args);
     assert.equal(r.status, 2, `${args.join(" ")}: ${r.stderr}`);
@@ -107,6 +117,69 @@ test("argv errors exit 2 with a usage line", () => {
   const help = cli(["help"]);
   assert.equal(help.status, 0);
   assert.match(help.stdout, /^usage:$/m);
+  assert.match(help.stdout, /^  paritybench twin \[--port 12111\] \[--host 127\.0\.0\.1\]$/m);
+  assert.match(help.stdout, /^  paritybench score-twin --oracle A\.jsonl /m);
+});
+
+test("twin: serves the twin until SIGTERM, then exits 0; error responses carry Parity-Error-Key", { timeout: 10_000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pb-twin-"));
+  const child = spawn(process.execPath, [CLI, "twin", "--port", "0"], { cwd: dir, env: env(dir), stdio: ["ignore", "pipe", "inherit"] });
+  t.after(() => child.kill("SIGKILL"));
+  const [line] = (await once(createInterface({ input: child.stdout }), "line")) as [string];
+  const url = /^parity twin listening on (http:\/\/127\.0\.0\.1:\d+) /.exec(line)?.[1];
+  assert.ok(url, `unexpected first line: ${line}`);
+  const res = await fetch(`${url}/v1/customers/cus_Missing1234567`, { headers: { Authorization: "Bearer sk_test_parity" } });
+  assert.deepEqual([res.status, res.headers.get("parity-error-key")], [404, "resource_missing"]);
+  await res.arrayBuffer();
+  child.kill("SIGTERM");
+  assert.deepEqual(await once(child, "exit"), [0, null]);
+});
+
+test("score-twin: replays the oracle against an in-process twin at each sequence's oracle clock; --templates, --json", { timeout: 30_000 }, async () => {
+  // The oracle is the twin's own recording. subscription-create#1 bills monthly: its period is 28 days from Feb 1 and 31
+  // from Mar 1, so a replay at another month's clock diverges (the control below). customer-search waits 60 s before
+  // its search on the sandbox: the timeout fails the test unless the wait is skipped.
+  const FEB = "2026-02-01T00:00:00.000Z";
+  const MAR = "2026-03-01T00:00:00.000Z";
+  const clock = (seq: string) => (seq === "subscription-create#1" ? FEB : MAR);
+  const seqs = buildCorpus(TEMPLATES.filter((x) => ["customer-crud", "customer-search", "subscription-create"].includes(x.name)), [1, 2]).map((q) => ({
+    ...q,
+    steps: q.steps.map(({ waitMs: _, ...step }) => step),
+  }));
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const headersFor = (s: { id: string }) => ({ "Parity-Now": String(Date.parse(clock(s.id)) / 1000) });
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "oracle", headersFor }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const oracle = recordings.map((r) => ({ ...r, startedAt: clock(r.seq), events: touching(idsIn(r.steps), twin.store.events) }));
+  assert.ok(oracle.every((r) => r.events.length > 0));
+  const dir = mkdtempSync(join(tmpdir(), "pb-score-"));
+  writeJsonl(join(dir, "oracle.jsonl"), oracle);
+
+  const r = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--json", "out/score.json"], dir);
+  assert.match(r.stdout, /^# ParityBench: twin vs oracle\.jsonl$/m);
+  assert.match(r.stdout, /^\*\*Summary:\*\* L1 100\.0% .* L4 100\.0% \[[\d.–]+\] \(6\)/m);
+  assert.match(r.stderr, /^score-twin: 6 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s; wrote out\/score\.json$/m);
+  const j = JSON.parse(readFileSync(join(dir, "out/score.json"), "utf8"));
+  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.2", 6]);
+  assert.ok(j.results.every((x: { eventsMatch: boolean; eventsSkipped: boolean }) => x.eventsMatch && !x.eventsSkipped), "the twin's events are compared");
+
+  const only = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--templates", "subscription-create,customer-crud"], dir);
+  assert.match(only.stdout, /L4 100\.0% \[[\d.–]+\] \(4\)/);
+  assert.doesNotMatch(only.stdout, /customer-search/);
+  assert.match(only.stderr, /^score-twin: 4 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s$/m, "no --json, no file");
+  assert.deepEqual(readdirSync(dir).sort(), ["oracle.jsonl", "out"]);
+
+  // Control: the same oracle claiming a Mar 1 start for subscription-create#1 diverges on its period end.
+  writeJsonl(join(dir, "moved.jsonl"), oracle.map((o) => ({ ...o, startedAt: MAR })));
+  await cliAsync(["score-twin", "--oracle", "moved.jsonl", "--templates", "subscription-create", "--json", "moved.json"], dir);
+  const moved = JSON.parse(readFileSync(join(dir, "moved.json"), "utf8"));
+  assert.deepEqual(moved.results.map((x: { seq: string; L4: boolean }) => [x.seq, x.L4]), [["subscription-create#1", false], ["subscription-create#2", true]]);
+  assert.ok(moved.results[0].divergences.some((d: { path: string }) => d.path === "$.items.data[0].current_period_end"));
+  assert.equal(existsSync(join(dir, "recordings")), false, "score-twin writes no recordings");
 });
 
 test("budget: refuses only when rolling 30-day GETs + projected exceed the budget", () => {

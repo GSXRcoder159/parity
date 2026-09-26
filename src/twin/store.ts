@@ -37,7 +37,7 @@ export class Store {
   events: StripeEvent[] = [];
   objects = new Map<string, Obj>();
   deleted = new Map<string, Obj>();
-  idem = new Map<string, { hash: string; status: number; body: unknown; at: number }>();
+  idem = new Map<string, { hash: string; status: number; body: unknown; at: number; errorKey?: string }>();
 
   apply({ emits = [], puts = [], deletes = [] }: Changes, meta: Meta): StripeEvent[] {
     for (const o of puts) this.objects.set(o.id as string, o);

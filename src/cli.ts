@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle.
+// paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle,
+// serve the twin, score the twin against an oracle.
 import { randomInt } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { TEMPLATES } from "../templates/index.ts";
@@ -11,10 +13,10 @@ import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION, normalizeRaw, normalizeRecording } from "./bench/normalize.ts";
 import { buildOracle, dataDir } from "./bench/oracle.ts";
 import { renderMarkdown, toJson, type ReportInput } from "./bench/report.ts";
-import { runCorpus, sandboxTarget, type Target } from "./bench/run.ts";
+import { idsIn, runCorpus, sandboxTarget, touching, type Target } from "./bench/run.ts";
 import { score } from "./bench/score.ts";
 import { readJsonl, writeJsonl } from "./jsonl.ts";
-import type { Recording, Sequence } from "./types.ts";
+import type { Recording, Sequence, Template } from "./types.ts";
 
 const USAGE = `usage:
   paritybench record --target <sandbox|URL> [--name N] [--templates all|a,b] [--seeds 1-20] [--slice k/n] [--concurrency 8]
@@ -22,6 +24,8 @@ const USAGE = `usage:
   paritybench compare --oracle A.jsonl --target B.jsonl [--noise C.jsonl] [--raw] --out reports/<name>
   paritybench bench <baseURL> --oracle A.jsonl [--noise C.jsonl] [--out recordings/<date>/bench-<name>-<runId>]
   paritybench oracle build [--max-age-days N]
+  paritybench twin [--port 12111] [--host 127.0.0.1]
+  paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
@@ -33,7 +37,11 @@ const USAGE = `usage:
   bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence.
   oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
   --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
-  compare/bench outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
+  twin: serves the twin until SIGINT/SIGTERM (port also from env PORT).
+  score-twin: the oracle's sequences (optionally only --templates) against a fresh in-process twin on an ephemeral port,
+    with Parity-Now per sequence as in bench, step waits skipped and events read from the twin's store; the Markdown
+    report goes to stdout, --json writes the results and score.
+  compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 const LEDGER = "budget/reads.jsonl";
 const FLAGS: Record<string, string[]> = {
@@ -41,6 +49,8 @@ const FLAGS: Record<string, string[]> = {
   compare: ["oracle", "target", "noise", "raw", "out"],
   bench: ["oracle", "noise", "out"],
   oracle: ["max-age-days"],
+  twin: ["port", "host"],
+  "score-twin": ["oracle", "templates", "noise", "json"],
 };
 
 class UsageError extends Error {}
@@ -226,38 +236,93 @@ function oracleBuild(maxAgeDays: number | undefined): void {
   );
 }
 
-/** Pairs by `seq` (oracle order), normalizes (or not), scores, and writes `<out>.md` + `<out>.json`. */
-function compareFiles(oraclePath: string, targetPath: string, noisePath: string | undefined, raw: boolean, out: string): void {
+/** Recordings named for error messages (a file path). */
+type Side = [name: string, recordings: Recording[]];
+
+/** Normalizes (or not), pairs each side with the oracle by `seq` (oracle order), compares and scores; `noise` is the floor and marks NONDETERMINISTIC. */
+function compareSets(oracleRecs: Recording[], target: Side, noise: Side | undefined, raw: boolean): Pick<ReportInput, "score" | "noise" | "normalization" | "results"> {
   const norm = raw ? normalizeRaw : normalizeRecording;
-  const oracle = readJsonl<Recording>(oraclePath).map(norm);
-  const paired = (path: string): Recording[] => {
-    const bySeq = new Map(readJsonl<Recording>(path).map((r) => [r.seq, r]));
+  const oracle = oracleRecs.map(norm);
+  const paired = ([name, recs]: Side): Recording[] => {
+    const bySeq = new Map(recs.map((r) => [r.seq, r]));
     return oracle.map((o) => {
       const r = bySeq.get(o.seq);
-      if (!r) throw new Error(`${path} has no recording for oracle sequence ${o.seq}`);
+      if (!r) throw new Error(`${name} has no recording for oracle sequence ${o.seq}`);
       return norm(r);
     });
   };
-  const noise = noisePath === undefined ? undefined : paired(noisePath).map((c, i) => compareRecordings(oracle[i]!, c));
-  const keys = noise && noiseKeys(noise);
-  const results = paired(targetPath).map((t, i) => compareRecordings(oracle[i]!, t, keys));
+  const floor = noise && paired(noise).map((c, i) => compareRecordings(oracle[i]!, c));
+  const keys = floor && noiseKeys(floor);
+  const results = paired(target).map((t, i) => compareRecordings(oracle[i]!, t, keys));
+  return { score: score(results), noise: floor && score(floor), normalization: raw ? "raw" : NORMALIZATION_VERSION, results };
+}
+
+const side = (path: string): Side => [path, readJsonl<Recording>(path)];
+
+/** `compare`: writes `<out>.md` + `<out>.json`. */
+function compareFiles(oraclePath: string, targetPath: string, noisePath: string | undefined, raw: boolean, out: string): void {
   const input: ReportInput = {
     title: `ParityBench: ${basename(targetPath)} vs ${basename(oraclePath)}`,
     date: today(),
     target: basename(targetPath),
     oracle: basename(oraclePath),
-    score: score(results),
-    noise: noise && score(noise),
-    normalization: raw ? "raw" : NORMALIZATION_VERSION,
-    results,
+    ...compareSets(readJsonl<Recording>(oraclePath), side(targetPath), noisePath === undefined ? undefined : side(noisePath), raw),
   };
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(`${out}.md`, renderMarkdown(input));
   writeFileSync(`${out}.json`, JSON.stringify(toJson(input), null, 2) + "\n");
   const o = input.score.overall;
   const pct = (l: keyof typeof o): string => `${l} ${(o[l].p * 100).toFixed(1)}%`;
-  console.log(`${results.length} sequences · ${pct("L1")} · ${pct("L2")} · ${pct("L3")} · ${pct("L4")} (${input.normalization})`);
+  console.log(`${input.results.length} sequences · ${pct("L1")} · ${pct("L2")} · ${pct("L3")} · ${pct("L4")} (${input.normalization})`);
   console.log(`wrote ${out}.md and ${out}.json`);
+}
+
+/** The oracle's exact (template, seed) sequences, and headers pinning each one's clock to its oracle recording's start. */
+function replay(oracle: Recording[]): { seqs: Sequence[]; headersFor: (s: Sequence) => Record<string, string> } {
+  const seqs = oracle.map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
+  // The oracle's clock: a twin answers as of the day the oracle was recorded (decision 0002 §4.4); other targets ignore it.
+  const now = new Map(oracle.map((r) => [r.seq, String(Math.floor(Date.parse(r.startedAt) / 1000))]));
+  return { seqs, headersFor: (s) => ({ "Parity-Now": now.get(s.id)! }) };
+}
+
+/** `score-twin`: the oracle's sequences against a fresh in-process twin; Markdown report to stdout, results + score to `jsonOut`. */
+async function scoreTwin(oraclePath: string, templates: Template[], noisePath: string | undefined, jsonOut: string | undefined): Promise<void> {
+  const names = new Set(templates.map((t) => t.name));
+  const oracle = readJsonl<Recording>(oraclePath).filter((r) => names.has(r.template));
+  if (!oracle.length) throw new Error(`${oraclePath} has no sequence of ${[...names].join(", ")}`);
+  const { seqs, headersFor } = replay(oracle);
+  // The twin is consistent at once: waits for the sandbox's eventual consistency (customer-search: 60 s) are skipped.
+  const unwaited = seqs.map((s) => ({ ...s, steps: s.steps.map(({ waitMs: _, ...step }) => step) }));
+  const { createTwin } = await import("./twin/server.ts"); // loads every resource and the pruned spec: only for this command
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const t0 = performance.now();
+  const { recordings, summary } = await runCorpus(unwaited, { name: "twin", baseUrl, apiKey: "sk_test_parity", eventWaitMs: 0 }, { concurrency: 8, runId: newRunId(), headersFor }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  // Events from the twin's store, not a /v1/events sweep: the sweep asks for created >= wall-clock start, and the twin
+  // stamps events with Parity-Now (the oracle's day). The store is this run's alone, so it holds exactly the run's events.
+  for (const r of recordings) r.events = touching(idsIn(r.steps), twin.store.events);
+  const t1 = performance.now();
+  const input: ReportInput = {
+    title: `ParityBench: twin vs ${basename(oraclePath)}`,
+    date: today(),
+    target: "twin",
+    oracle: basename(oraclePath),
+    ...compareSets(oracle, ["twin", recordings], noisePath === undefined ? undefined : side(noisePath), false),
+  };
+  if (jsonOut) {
+    mkdirSync(dirname(jsonOut), { recursive: true });
+    writeFileSync(jsonOut, JSON.stringify(toJson(input), null, 2) + "\n");
+  }
+  console.log(renderMarkdown(input));
+  const s = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
+  console.error(
+    `score-twin: ${oracle.length} sequences, ${summary.requests} requests: twin ${s(t1 - t0)}, compare ${s(performance.now() - t1)}` +
+      (jsonOut ? `; wrote ${jsonOut}` : ""),
+  );
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -277,6 +342,12 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (positional.length !== (cmd === "bench" ? 1 : 0)) throw new UsageError(`unexpected arguments: ${positional.join(" ") || "(missing <baseURL>)"}`);
 
+    if (cmd === "twin") return (await import("./twin/main.ts")).main(rest);
+    if (cmd === "score-twin") {
+      await scoreTwin(need(flags, "oracle"), pickTemplates(flags.templates), flags.noise, flags.json);
+      return 0;
+    }
+
     if (cmd === "compare") {
       compareFiles(need(flags, "oracle"), need(flags, "target"), flags.noise, flags.raw === "1", need(flags, "out"));
       return 0;
@@ -286,8 +357,7 @@ export async function main(argv: string[]): Promise<number> {
     if (cmd === "record") {
       const spec = need(flags, "target");
       const target = resolveTarget(spec, flags.name);
-      const names = (flags.templates ?? "all").split(",");
-      const templates = names[0] === "all" ? TEMPLATES : names.map((n) => TEMPLATES.find((t) => t.name === n) ?? badTemplate(n));
+      const templates = pickTemplates(flags.templates);
       let seeds: number[];
       try {
         seeds = parseSeeds(flags.seeds ?? "1-20");
@@ -309,14 +379,11 @@ export async function main(argv: string[]): Promise<number> {
     // bench: re-record the oracle's exact (template, seed) pairs against the URL, then compare.
     const url = positional[0]!;
     const oraclePath = need(flags, "oracle");
-    const oracle = readJsonl<Recording>(oraclePath);
-    const seqs = oracle.map((r) => buildCorpus([TEMPLATES.find((t) => t.name === r.template) ?? badTemplate(r.template)], [r.seed])[0]!);
-    // The oracle's clock: a twin answers as of the day the oracle was recorded (decision 0002 §4.4); other targets ignore it.
-    const now = new Map(oracle.map((r) => [r.seq, String(Math.floor(Date.parse(r.startedAt) / 1000))]));
+    const { seqs, headersFor } = replay(readJsonl<Recording>(oraclePath));
     const target = resolveTarget(url);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
-    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor: (s) => ({ "Parity-Now": now.get(s.id)! }) });
+    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor });
     compareFiles(oraclePath, recPath, flags.noise, false, flags.out ?? `recordings/${today()}/bench-${name}-${runId}`);
     return 0;
   } catch (e) {
@@ -327,6 +394,12 @@ export async function main(argv: string[]): Promise<number> {
     console.error(`paritybench: ${(e as Error).message}`);
     return 1;
   }
+}
+
+/** `all` (the default) or comma-separated template names. */
+function pickTemplates(spec = "all"): Template[] {
+  const names = spec.split(",");
+  return names[0] === "all" ? TEMPLATES : names.map((n) => TEMPLATES.find((t) => t.name === n) ?? badTemplate(n));
 }
 
 function badTemplate(name: string): never {

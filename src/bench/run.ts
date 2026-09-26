@@ -17,7 +17,8 @@ const REF = /\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)/g;
 const EXACT_REF = new RegExp(`^${REF.source}$`);
 // Stripe object id: lowercase prefix + mixed-case tail (the uppercase/digit lookahead excludes enums).
 const ID = /^[a-z]+(?:_[a-z]+)*_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}$/;
-const RES_HEADERS = ["request-id", "idempotent-replayed", "stripe-version", "stripe-rate-limited-reason", "retry-after"];
+// parity-error-key: the twin's error catalog key (the real API never sends it; headers are never compared).
+const RES_HEADERS = ["request-id", "idempotent-replayed", "stripe-version", "stripe-rate-limited-reason", "retry-after", "parity-error-key"];
 /** Consecutive steps ending 429 after all retries that abort a corpus (W0: B and C sent 966 retries into a limited key). */
 const BREAKER = 10;
 
@@ -220,7 +221,7 @@ async function runSteps(io: Io, seq: Sequence, target: Target, runId: string, se
 }
 
 /** Every object id (whole-string match) in the step response bodies. */
-function idsIn(steps: StepRecord[]): Set<string> {
+export function idsIn(steps: StepRecord[]): Set<string> {
   const ids = new Set<string>();
   const walk = (v: unknown): void => {
     if (typeof v === "string") {
@@ -232,7 +233,7 @@ function idsIn(steps: StepRecord[]): Set<string> {
 }
 
 /** Events whose data.object.id or .customer is in `ids`, by created then type (code-point order). */
-function touching(ids: Set<string>, all: StripeEvent[]): StripeEvent[] {
+export function touching(ids: Set<string>, all: StripeEvent[]): StripeEvent[] {
   return all
     .filter((e) => ids.has(e.data.object.id as string) || ids.has(e.data.object.customer as string))
     .sort((a, b) => a.created - b.created || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));

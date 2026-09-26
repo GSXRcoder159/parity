@@ -17,6 +17,7 @@ import {
 } from "../src/bench/run.ts";
 import { compareRecordings } from "../src/bench/compare.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
+import { createTwin } from "../src/twin/server.ts";
 import type { Sequence, Step } from "../src/types.ts";
 
 const CUS = "cus_TestAbc12345";
@@ -400,6 +401,27 @@ test("runCorpus: circuit breaker aborts after 10 consecutive steps ending 429; r
   assert.ok(recordings.every((r) => r.eventsError === `not collected: ${reason}`));
   assert.equal(seen.filter((r) => r.url.startsWith("/v1/events")).length, 0, "no event sweep into a limited key");
   assert.deepEqual([summary.requests, summary.gets, summary.posts, summary.retries429], [40, 40, 0, 30]);
+});
+
+test("the twin's Parity-Error-Key is recorded as resHeaders parity-error-key and is never a divergence", async () => {
+  const server = await createTwin().listen(0);
+  try {
+    const twin: Target = { name: "twin", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+    const steps: Step[] = [
+      { method: "POST", path: "/v1/customers" },
+      { method: "GET", path: "/v1/customers/cus_Missing1234567" },
+    ];
+    const { recordings } = await runCorpus([seq(steps)], twin, { concurrency: 1, runId: "run1" });
+    const [ok, missing] = recordings[0]!.steps;
+    assert.deepEqual([ok!.status, ok!.resHeaders["parity-error-key"]], [200, undefined]);
+    assert.deepEqual([missing!.status, missing!.resHeaders["parity-error-key"]], [404, "resource_missing"]);
+    // An oracle (the real API) never sends the header: headers are not compared.
+    const oracle = { ...recordings[0]!, steps: recordings[0]!.steps.map((s) => ({ ...s, resHeaders: {} })) };
+    assert.deepEqual(compareRecordings(oracle, recordings[0]!).divergences, []);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 // ---- live sandbox smoke (PARITY_LIVE=1) ----

@@ -202,6 +202,40 @@ test("renderError: doc_url hyphenates the code; an unfilled placeholder is a bug
   assert.match(String(logged.mock.calls[0]?.arguments[0]), /no value for \{param\}/);
 });
 
+test("every error response carries Parity-Error-Key: <catalog key>, replays included; success responses do not", async (t) => {
+  const tw = twin();
+  const key = (r: { headers: Record<string, string> }) => r.headers["Parity-Error-Key"];
+  assert.equal(key(await tw.handle({ method: "GET", path: "/v1/events" })), "api_key_missing");
+  assert.equal(key(await call(tw, "GET", "/v1/nope")), "unrecognized_url");
+  assert.equal(key(await call(tw, "POST", "/v1/customers", { foo: "1" })), "parameter_unknown");
+  const ok = await call(tw, "POST", "/v1/customers", { email: "k@example.com" });
+  assert.equal(ok.status, 200);
+  assert.equal(key(ok), undefined);
+  const E = { "Idempotency-Key": "k-err" };
+  const thrown = await call(tw, "POST", "/v1/customers/cus_missing", {}, E);
+  const replayed = await call(tw, "POST", "/v1/customers/cus_missing", {}, E);
+  assert.deepEqual([thrown.status, key(thrown)], [404, "resource_missing"]);
+  assert.deepEqual([replayed.headers["Idempotent-Replayed"], key(replayed)], ["true", "resource_missing"]);
+  const S = { "Idempotency-Key": "k-ok" };
+  await call(tw, "POST", "/v1/customers", {}, S);
+  assert.equal(key(await call(tw, "POST", "/v1/customers", {}, S)), undefined, "a replayed success has no key");
+
+  t.mock.method(console, "error", () => {});
+  const bug = createTwin({ routes: [["GET", /^\/v1\/events$/, () => { throw new Error("boom"); }, "get /v1/events"]] });
+  const b = await call(bug, "GET", "/v1/events");
+  assert.deepEqual([b.status, key(b)], [500, "api_error"]);
+
+  // A handler that returns its error (the 402 whose payment events persist) instead of throwing it.
+  const real = createTwin();
+  const c = (await call(real, "POST", "/v1/customers", {})).body;
+  const pm = (await call(real, "POST", "/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: c.id })).body;
+  const recurring = { interval: "month" };
+  const price = (await call(real, "POST", "/v1/prices", { currency: "usd", unit_amount: 1500, recurring, product_data: { name: "P" } })).body;
+  const params = { customer: c.id, items: [{ price: price.id }], default_payment_method: pm.id, payment_behavior: "error_if_incomplete" };
+  const declined = await call(real, "POST", "/v1/subscriptions", params);
+  assert.deepEqual([declined.status, declined.body.error.code, key(declined)], [402, "card_declined", "card_declined"]);
+});
+
 test("form strings are coerced to the schema's types; bad integers, enums and booleans are 400", async () => {
   const t = twin();
   const ok = await call(t, "POST", "/v1/customers", { balance: -12, metadata: { 0: "zero" }, expand: [] });

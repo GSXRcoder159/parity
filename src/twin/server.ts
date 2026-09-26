@@ -37,6 +37,8 @@ export interface HandlerReq {
 export interface Result extends Changes {
   status?: number;
   body: unknown;
+  /** Catalog key of a returned error (a `renderError` result spread into the Result carries it). */
+  errorKey?: string;
 }
 export type Handler = (ctx: Ctx, req: HandlerReq) => Result;
 /** [method, path pattern, handler, spec operation ("get /v1/events/{id}")]. */
@@ -102,17 +104,24 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
     const requestId = newId("req");
     const pnow = headers["parity-now"];
     const now = pnow !== undefined && /^\d+$/.test(pnow) ? Number(pnow) : Math.floor(Date.now() / 1000);
-    const respond = (status: number, body: unknown, extra: Record<string, string> = {}): TwinResponse => ({
+    // Every error response names its catalog key in `Parity-Error-Key` (the real API never sends it; headers are not compared).
+    const respond = (status: number, body: unknown, errorKey?: string, extra: Record<string, string> = {}): TwinResponse => ({
       status,
-      headers: { "Request-Id": requestId, "Stripe-Version": headers["stripe-version"] ?? API_VERSION, "Content-Type": "application/json", ...extra },
+      headers: {
+        "Request-Id": requestId,
+        "Stripe-Version": headers["stripe-version"] ?? API_VERSION,
+        "Content-Type": "application/json",
+        ...(errorKey ? { "Parity-Error-Key": errorKey } : {}),
+        ...extra,
+      },
       body,
     });
     // A bug (a non-TwinError, or a catalog entry the call site cannot render) is logged and becomes a 500.
     const error = (e: unknown): TwinResponse => {
       if (!(e instanceof TwinError)) console.error(e);
       try {
-        const { status, body } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
-        return respond(status, body);
+        const { status, body, errorKey } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
+        return respond(status, body, errorKey);
       } catch (bug) {
         return error(bug);
       }
@@ -145,7 +154,7 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
         const hit = store.idem.get(idemKey);
         if (hit && now - hit.at < IDEMPOTENCY_TTL) {
           if (hit.hash !== hash) fail("idempotency_mismatch");
-          return respond(hit.status, hit.body, { "Idempotent-Replayed": "true" });
+          return respond(hit.status, hit.body, hit.errorKey, { "Idempotent-Replayed": "true" });
         }
       }
 
@@ -158,11 +167,11 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
         const pending = new Map([...(r.puts ?? []), ...(r.emits ?? []).map((e) => e.object)].map((o) => [o.id as string, o]));
         const body = (r.status ?? 200) >= 400 ? r.body : expand(r.body, params.expand, (id) => pending.get(id) ?? get(id));
         deliver(store, store.apply(r, { now, requestId, idempotencyKey: idemKey ?? null }), opts.webhookBackoffMs);
-        res = respond(r.status ?? 200, body);
+        res = respond(r.status ?? 200, body, r.errorKey);
       } catch (e) {
         res = error(e);
       }
-      if (idemKey) store.idem.set(idemKey, { hash, status: res.status, body: res.body, at: now });
+      if (idemKey) store.idem.set(idemKey, { hash, status: res.status, body: res.body, at: now, errorKey: res.headers["Parity-Error-Key"] });
       return res;
     } catch (e) {
       return error(e);

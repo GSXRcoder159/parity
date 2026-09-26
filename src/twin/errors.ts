@@ -36,8 +36,8 @@ const fill = (key: string, s: string, vars: Record<string, string>) =>
     return vars[k]!;
   });
 
-/** `{ error: { type, code?, param?, message, doc_url?, request_log_url } }` with the catalog entry's status. */
-export function renderError(e: TwinError, requestId: string): { status: number; body: { error: Record<string, unknown> } } {
+/** `{ error: { type, code?, param?, message, doc_url?, request_log_url } }` with the catalog entry's status, and its key (the `Parity-Error-Key` header). */
+export function renderError(e: TwinError, requestId: string): { status: number; body: { error: Record<string, unknown> }; errorKey: string } {
   const entry = CATALOG[e.key];
   if (!entry) throw new Error(`errors.json has no key "${e.key}"`);
   const { status, type, code, param, message } = entry;
@@ -47,5 +47,5 @@ export function renderError(e: TwinError, requestId: string): { status: number; 
   error.message = fill(e.key, message, e.vars);
   if (code) error.doc_url = `https://stripe.com/docs/error-codes/${code.replaceAll("_", "-")}`; // card_declined -> card-declined (observed)
   error.request_log_url = `https://dashboard.stripe.com/test/logs/${requestId}`;
-  return { status, body: { error: { ...error, ...e.extra } } };
+  return { status, body: { error: { ...error, ...e.extra } }, errorKey: e.key };
 }
