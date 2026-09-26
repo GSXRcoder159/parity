@@ -29,3 +29,16 @@ export const subscriptionCancelAtPeriodEnd: Template = {
     ];
   },
 };
+
+// #26
+export const customerDeleteCascade: Template = {
+  name: "customer-delete-cascade",
+  stratum: "cancellation",
+  build(g) {
+    return [
+      ...subscribed(g, "customer-delete-cascade").steps,
+      { method: "DELETE", path: "/v1/customers/$c1.id" },
+      { method: "GET", path: "/v1/subscriptions/$s1.id" },
+    ];
+  },
+};

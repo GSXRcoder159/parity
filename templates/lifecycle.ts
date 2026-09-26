@@ -104,3 +104,72 @@ export const subscriptionCreate: Template = {
     ];
   },
 };
+
+// #19: the first invoice of a send_invoice subscription is paid out of band or voided, then the other action is refused.
+export const invoiceSendInvoice: Template = {
+  name: "invoice-send-invoice",
+  stratum: "lifecycle",
+  build(g) {
+    const n = tag(g);
+    const pay: Step = { method: "POST", path: "/v1/invoices/$s1.latest_invoice/pay", params: { paid_out_of_band: true } };
+    const voidIt: Step = { method: "POST", path: "/v1/invoices/$s1.latest_invoice/void" };
+    const [first, second] = g.bool() ? [pay, voidIt] : [voidIt, pay];
+    return [
+      customer("invoice-send-invoice", n),
+      {
+        ref: "pr1",
+        method: "POST",
+        path: "/v1/prices",
+        params: { currency: currency(g), unit_amount: amount(g), recurring: { interval: g.pick(["month", "year"]) }, product_data: { name: `Parity plan ${n}` } },
+      },
+      {
+        ref: "s1",
+        method: "POST",
+        path: "/v1/subscriptions",
+        params: { customer: "$c1.id", items: [{ price: "$pr1.id" }], collection_method: "send_invoice", days_until_due: g.int(7, 30) },
+      },
+      // A send_invoice subscription's first invoice is left as a draft; void refuses drafts (pay would finalize it).
+      { method: "POST", path: "/v1/invoices/$s1.latest_invoice/finalize" },
+      first,
+      { method: "GET", path: "/v1/invoices/$s1.latest_invoice" },
+      second,
+    ];
+  },
+};
+
+// #22
+export const expandPaths: Template = {
+  name: "expand-paths",
+  stratum: "lifecycle",
+  build(g) {
+    const sub = (expand: string[]): Step => ({ method: "GET", path: "/v1/subscriptions/$s1.id", params: { expand } });
+    return [
+      ...subscribed(g, "expand-paths").steps,
+      sub(["customer", "latest_invoice", "items.data.price.product"]),
+      { method: "GET", path: "/v1/payment_intents", params: { customer: "$c1.id", expand: ["data.latest_charge", "data.payment_method"] } },
+      sub(["latest_invoice.customer.invoice_settings.default_payment_method.customer"]),
+      // Not `latest_invoice.payment_intent`: expanding that removed field is silently ignored (200), not an error.
+      sub([g.pick(["status", "plan_details", "latest_invoice.plan_details"])]),
+    ];
+  },
+};
+
+// #23: search is eventually consistent (expect noise): new customers stayed invisible for 15 s and one was still
+// missing at 30 s (templates-validation.md); Stripe documents "less than a minute". created>= keeps earlier runs'
+// same-email customers out.
+export const customerSearch: Template = {
+  name: "customer-search",
+  stratum: "lifecycle",
+  build(g) {
+    const n = tag(g);
+    return [
+      customer("customer-search", n),
+      {
+        method: "GET",
+        path: "/v1/customers/search",
+        params: { query: `email:'${email("customer-search", n)}' AND created>=$c1.created` },
+        waitMs: 60_000,
+      },
+    ];
+  },
+};

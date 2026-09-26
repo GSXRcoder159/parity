@@ -6,12 +6,12 @@ import { TEMPLATES } from "../templates/index.ts";
 const SEEDS = [1, 2, 3, 4, 5];
 const corpus = buildCorpus(TEMPLATES, SEEDS);
 
-test("catalog: 15 unique names, #7/#9/#12 held out", () => {
-  assert.equal(TEMPLATES.length, 15);
-  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 15);
+test("catalog: 26 unique names, #7/#9/#12/#18/#21 held out", () => {
+  assert.equal(TEMPLATES.length, 26);
+  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 26);
   assert.deepEqual(
     TEMPLATES.filter((t) => t.heldOut).map((t) => t.name),
-    ["subscription-cancel-at-period-end", "refund-partial-then-rest", "invalid-params"],
+    ["subscription-cancel-at-period-end", "refund-partial-then-rest", "invalid-params", "subscription-update-quantity", "boundaries-list-limits"],
   );
 });
 
@@ -31,7 +31,7 @@ test("every sequence has >= 2 steps", () => {
   for (const s of corpus) assert.ok(s.steps.length >= 2, s.id);
 });
 
-test("refs are bound earlier, $run only in headers, list calls are scoped", () => {
+test("refs are bound earlier, $run only in headers, list calls are scoped, email lists guarded by created[gte]", () => {
   const REF = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
   const refsIn = (v: unknown): string[] =>
     typeof v === "string"
@@ -52,6 +52,10 @@ test("refs are bound earlier, $run only in headers, list calls are scoped", () =
       if (step.method === "GET" && /^\/v1\/[a-z_]+$/.test(step.path)) {
         assert.ok(SCOPES.some((k) => step.params?.[k] !== undefined), `${where}: unscoped list ${step.path}`);
       }
+      // Deterministic emails recur across runs of a seed: an email-scoped list or search must also filter on creation time.
+      if (step.method === "GET" && step.params?.email !== undefined) assert.deepEqual(step.params.created, { gte: "$c1.created" }, `${where}: email list without created[gte]`);
+      const query = step.params?.query;
+      if (typeof query === "string" && query.includes("email:")) assert.match(query, / AND created>=\$c1\.created$/, `${where}: email search without created>=`);
       if (step.ref) bound.add(step.ref);
     }
   }
