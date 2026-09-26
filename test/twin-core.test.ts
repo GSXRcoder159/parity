@@ -87,6 +87,19 @@ test("build copies the template and lets fields win", () => {
   assert.throws(() => build("nope"), /no template/);
 });
 
+test("build deep-merges plain objects: a computed nested object keeps the template's nested defaults; arrays and null replace", () => {
+  const tmpl = build("subscription");
+  const fields = { invoice_settings: { issuer: { type: "self" } }, billing_mode: { type: "flexible" }, items: { data: [{ id: "si_1" }] } };
+  const s = build("subscription", fields);
+  assert.deepEqual(s.invoice_settings, { ...(tmpl.invoice_settings as Obj), issuer: { ...(tmpl.invoice_settings as Obj).issuer, type: "self" } });
+  assert.deepEqual(s.billing_mode, { ...(tmpl.billing_mode as Obj), type: "flexible" });
+  assert.deepEqual(s.items, { ...(tmpl.items as Obj), data: [{ id: "si_1" }] }, "an array replaces, the list's other keys stay");
+  assert.deepEqual(fields.invoice_settings, { issuer: { type: "self" } }, "fields are not mutated");
+  assert.equal(build("subscription", { invoice_settings: null }).invoice_settings, null, "null replaces a nested object");
+  assert.deepEqual(build("customer", { preferred_locales: ["en"] }).preferred_locales, ["en"]);
+  assert.deepEqual(build("subscription").invoice_settings, tmpl.invoice_settings, "the template itself is untouched");
+});
+
 test("auth: missing and invalid keys are 401; Bearer and Basic keys pass", async () => {
   const t = twin();
   const missing = await t.handle({ method: "GET", path: "/v1/events" });

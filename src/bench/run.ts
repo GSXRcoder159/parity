@@ -280,7 +280,8 @@ async function sweepEvents(io: Io, target: Target, sinceSec: number, capMs: numb
  * Runs the corpus, then ONE event sweep for all of it (events are attached after every sequence has
  * finished). `onRecord` fires as each sequence's steps finish, BEFORE its events are attached: use it
  * for progress, and write the returned `recordings` (the same objects, completed by the sweep).
- * `headersFor(seq)` headers go on every step of that sequence. If the circuit breaker trips, the rest of the
+ * `headersFor(seq)` headers go on every step of that sequence; when they set `Parity-Now`, the sweep covers events
+ * created since min(Parity-Now) − 60 s instead of the wall-clock start − 60 s. If the circuit breaker trips, the rest of the
  * corpus is recorded as not sent (status 0), the sweep is skipped, and every recording gets `eventsError`.
  */
 export async function runCorpus(
@@ -289,7 +290,9 @@ export async function runCorpus(
   opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void; headersFor?: (seq: Sequence) => Record<string, string> },
 ): Promise<{ recordings: Recording[]; summary: RunSummary }> {
   const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary(), streak429: 0 };
-  const startSec = Math.floor(Date.now() / 1000);
+  // A target answering as of Parity-Now (the twin) stamps events with it: the sweep starts at the earliest one, not wall clock.
+  const nows = seqs.map((s) => Number(opts.headersFor?.(s)["Parity-Now"])).filter(Number.isFinite);
+  const startSec = nows.length ? Math.min(...nows) : Math.floor(Date.now() / 1000);
   const out: Recording[] = new Array(seqs.length);
   let next = 0;
   const worker = async (): Promise<void> => {

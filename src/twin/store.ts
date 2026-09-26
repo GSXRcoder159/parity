@@ -51,6 +51,8 @@ export class Store {
         request: { id: meta.requestId, idempotency_key: meta.idempotencyKey },
         type,
       }) as StripeEvent;
+      // build() deep-merges: drop the template's `previous_attributes: {}`, which only update events carry (observed).
+      if (!previous_attributes) delete evt.data.previous_attributes;
       this.objects.set(object.id as string, object);
       this.events.push(evt);
       return evt;

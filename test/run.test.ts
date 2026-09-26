@@ -424,6 +424,25 @@ test("the twin's Parity-Error-Key is recorded as resHeaders parity-error-key and
   }
 });
 
+test("runCorpus: with Parity-Now from headersFor, the sweep starts at min(Parity-Now) − 60, so the twin's back-dated events are collected", async () => {
+  const now: Record<string, string> = { "a#1": "1790000000", "b#2": "1789990000" }; // days before the wall clock
+  const steps: Step[] = [{ method: "POST", path: "/v1/customers" }];
+  seen.length = 0;
+  await runCorpus([seq(steps, "a#1"), seq(steps, "b#2")], local, { concurrency: 2, runId: "r", headersFor: (s) => ({ "Parity-Now": now[s.id]! }) });
+  const gte = seen.filter((r) => r.url.startsWith("/v1/events")).map((r) => new URL(r.url, "http://x").searchParams.get("created[gte]"));
+  assert.ok(gte.length > 0 && gte.every((g) => g === String(1789990000 - 60)), `created[gte] ${gte.join(",")}`);
+
+  const server = await createTwin().listen(0);
+  try {
+    const twin: Target = { name: "twin", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 10 };
+    const { recordings } = await runCorpus([seq(steps, "a#1"), seq(steps, "b#2")], twin, { concurrency: 2, runId: "r", headersFor: (s) => ({ "Parity-Now": now[s.id]! }) });
+    for (const r of recordings) assert.deepEqual(r.events.map((e) => [e.type, e.created]), [["customer.created", Number(now[r.seq])]], r.seq);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 // ---- live sandbox smoke (PARITY_LIVE=1) ----
 test("live: two create/retrieve/delete sequences, one corpus event sweep", { skip: process.env.PARITY_LIVE !== "1", timeout: 90_000 }, async () => {
   const env = new URL("../.env", import.meta.url);

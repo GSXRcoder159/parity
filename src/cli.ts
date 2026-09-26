@@ -34,7 +34,8 @@ const USAGE = `usage:
   record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
   --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
   --chunk n --chunk-wait m: run n sequences at a time, m minutes apart (each chunk ledgered and written as it ends).
-  bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence.
+  bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence (not to the sandbox),
+    and its event sweep starts at the earliest Parity-Now − 60 s.
   oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
   --noise C.jsonl: a second sandbox recording of the oracle's corpus; oracle-vs-C is the noise floor.
   twin: serves the twin until SIGINT/SIGTERM (port also from env PORT).
@@ -383,7 +384,8 @@ export async function main(argv: string[]): Promise<number> {
     const target = resolveTarget(url);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
-    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor });
+    // The sandbox ignores Parity-Now; sending it would also move the event sweep back to the oracle's day (outside the budget's projection).
+    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor: isSandbox(target) ? undefined : headersFor });
     compareFiles(oraclePath, recPath, flags.noise, false, flags.out ?? `recordings/${today()}/bench-${name}-${runId}`);
     return 0;
   } catch (e) {
