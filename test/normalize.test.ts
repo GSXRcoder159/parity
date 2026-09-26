@@ -138,7 +138,7 @@ test("run nonce, secrets, hosted urls, per-account opaques", () => {
         hosted_invoice_url: "https://invoice.stripe.com/i/acct_1Abc/test_YWNjdF8x",
         receipt_url: "https://pay.stripe.network/receipts/x",
         other_url: "https://notstripe.com/x",
-        card: { fingerprint: "Xt5EWLLDS7FJjR1c" },
+        card: { fingerprint: "FpAaaaaaaaaaaaaa" }, // made up: any value normalizes
         invoice_prefix: "A1B2C3D4",
         lines: { object: "list", data: [] },
       }),

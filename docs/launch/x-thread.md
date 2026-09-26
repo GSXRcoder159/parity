@@ -44,7 +44,7 @@ Every twin change after the scaffold freeze is logged. Automatic: a data-only fi
 Automation ratio: {{TBD: automatic ÷ (automatic + assisted)}}.
 
 **7/**
-Try it: npx paritybench twin serves on 127.0.0.1:12111 and boots in about 0.2 s. There is a GitHub Action for CI.
+Try it: npx paritybench twin serves on 127.0.0.1:12111 and boots in about 0.1 s. There is a GitHub Action for CI.
 
 Apache-2.0. The alignment loop and the score stay open.
 

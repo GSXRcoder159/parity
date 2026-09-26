@@ -105,7 +105,7 @@ cd python/parity_verifiers && uv run --locked pytest -q
 | L3 value | same normalized body | step |
 | L4 sequence | every step agrees at L3, and the same multiset of event types | sequence |
 
-**Confidence intervals.** Every number is a 95% Wilson interval, reported with its n.
+**Confidence intervals.** Every number is a 95% Wilson interval, reported with its n. L1–L3 pool steps across sequences as if they were independent; steps of one sequence are correlated (one wrong state affects later steps), so those intervals are narrower than they should be. L4 counts whole sequences and has no such bias.
 
 **Noise floor and ceiling.** Two real sandbox recordings of the same sequences are compared with the same harness. The noise floor is 1 − their agreement. The ceiling is their agreement: the best score any server can reach against that oracle. **Any score without the noise floor and ceiling is invalid.**
 

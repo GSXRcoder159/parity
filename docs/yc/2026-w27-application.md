@@ -34,9 +34,9 @@ Parity. The CLI and npm package are `paritybench` (`docs/plan/STATUS.md`, kickof
 
 ### 4. Describe what your company does in 50 characters or less.
 
-Stripe Billing mock, scored against the real API
+A Billing API mock scored against the Stripe API
 
-(48 characters.)
+(48 characters. Decision 0001 (f): no "Stripe"+word lockup in a tagline; "the Stripe API" is nominative use.)
 
 ### 5. Company URL, if any
 

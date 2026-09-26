@@ -1,7 +1,7 @@
 {
   "name": "paritybench",
   "version": "0.0.1",
-  "description": "Measure how faithfully a Stripe-compatible server reproduces the real Stripe sandbox, and a Stripe Billing twin that is scored nightly.",
+  "description": "Measure how faithfully a Stripe-compatible server reproduces the real Stripe sandbox, and a twin of the Stripe Billing API scored the same way.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": { "node": ">=22.18.0" },
