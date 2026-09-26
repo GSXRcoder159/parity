@@ -278,7 +278,7 @@ test("a credit balance from a downgrade is consumed by the customer's next invoi
   assert.deepEqual([(cu.data.object as Obj).balance, cu.data.previous_attributes], [0, { balance: -500 }]);
 });
 
-test("billing_cycle_anchor=now: the period restarts now, unused time is credited and the new period invoiced in full", async () => {
+test("billing_cycle_anchor=now: with item changes, unused time is credited and the new period invoiced in full now", async () => {
   const t = createTwin();
   const { B, sub, si } = await subscribed(t);
   const up = (await update(t, sub, { items: [{ id: si, price: B.id }], billing_cycle_anchor: "now" })).body;
@@ -287,9 +287,29 @@ test("billing_cycle_anchor=now: the period restarts now, unused time is credited
   const inv = (await call(t, "GET", `/v1/invoices/${up.latest_invoice}`)).body;
   assert.deepEqual(lineAmounts(inv), [[-500, true], [2000, false]]);
   assert.deepEqual([inv.lines.data[1].period, inv.status, inv.amount_paid, inv.billing_reason], [{ end: newEnd, start: HALF }, "paid", 1500, "subscription_update"]);
-  // With proration_behavior=none there is no credit, only the full new period.
-  const u2 = (await update(t, sub, { billing_cycle_anchor: "now", proration_behavior: "none" }, HALF + 86400)).body;
-  assert.deepEqual(lineAmounts((await call(t, "GET", `/v1/invoices/${u2.latest_invoice}`)).body), [[2000, false]]);
+  // Without item changes, flexible mode nets the credit and the debit (docs: billing-mode/compare). With none: no
+  // invoice items and no invoice, only the new period.
+  const day2 = HALF + 86400;
+  const from = t.store.events.length;
+  const u2 = (await update(t, sub, { billing_cycle_anchor: "now", proration_behavior: "none" }, day2)).body;
+  const [item] = u2.items.data;
+  assert.deepEqual([u2.latest_invoice, u2.billing_cycle_anchor, item.current_period_start, item.current_period_end], [up.latest_invoice, day2, day2, addInterval(day2, "month")]);
+  assert.deepEqual(types(t, from), ["customer.subscription.updated"]);
+  // Its preview is the renewal at the new period end, not an immediate invoice.
+  const day3 = day2 + 86400;
+  const preview = (sd: Obj) => call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: sd }, at(day3));
+  const p = (await preview({ billing_cycle_anchor: "now", proration_behavior: "none" })).body;
+  assert.deepEqual([p.created, lineAmounts(p)], [addInterval(day3, "month"), [[2000, false]]]);
+  // The netted proration's amount is unobserved: create_prorations and always_invoice are refused (a metadata-only item
+  // edit is no item change), in a preview too.
+  const refused = [
+    await update(t, sub, { billing_cycle_anchor: "now" }, day3),
+    await update(t, sub, { billing_cycle_anchor: "now", items: [{ id: si, metadata: { k: "v" } }], proration_behavior: "always_invoice" }, day3),
+    await preview({ billing_cycle_anchor: "now" }),
+  ];
+  assert.deepEqual(refused.map(cell), Array(3).fill("400 invalid_request_error"));
+  assert.deepEqual(refused.map((r) => r.body.error.message), Array(3).fill("parity: not_implemented"));
+  assert.equal(t.store.events.length, from + 1);
 });
 
 test("create_preview: a new subscription's first invoice, validation, and GET /v1/invoices/upcoming", async () => {

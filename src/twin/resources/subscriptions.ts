@@ -101,10 +101,13 @@ const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.re
  * new item), `proration_behavior` (`none`: no prorations), `proration_date` (default now), `billing_cycle_anchor=now`.
  * Per changed item: a credit for the unused time of its last debit (flexible mode credits what was billed) and a
  * debit for the rest of its period at the new price and quantity, by the second over the item's current period,
- * each rounded to the nearest minor unit. `billing_cycle_anchor=now` restarts every item's period now: each item is
- * credited, and the new period is billed in full, so there are no debit prorations.
+ * each rounded to the nearest minor unit. `billing_cycle_anchor=now` restarts every item's period now. With item
+ * changes, whatever `proration_behavior`, each item is credited (unless `none`) and the new period billed in full on
+ * an immediate invoice (`reset`), so there are no debit prorations. Without item changes, flexible mode nets the credit
+ * and debit (docs: billing-mode/compare): `none` creates nothing, the other behaviors are refused (below).
+ * `immediate`: the change is invoiced now (an item-changing reset, or always_invoice with prorations).
  */
-export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; prorations: Proration[]; reset: boolean; date: number } {
+export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; prorations: Proration[]; reset: boolean; immediate: boolean; date: number } {
   const now = ctx.now();
   const before = (sub.items as Obj).data as Obj[];
   const items = structuredClone(before);
@@ -138,6 +141,10 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     else items.push(next);
   });
   if (items.length === 0) ctx.fail("not_implemented"); // ponytail: deleting every item (the real API's error is unobserved)
+  // ponytail: an anchor reset without item changes nets the credit for [now, old end] against the new period's debit
+  // into one proration=true item for [old end, new end] (pending, or invoiced now with always_invoice). Its amount is
+  // unobserved when the old and new periods differ in length (the docs' example has equal ones): refused until B1.
+  if (reset && changed.length === 0 && p.proration_behavior !== "none") ctx.fail("not_implemented");
 
   const date = typeof p.proration_date === "number" ? p.proration_date : now;
   const prorations: Proration[] = [];
@@ -171,7 +178,8 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     }
   const after: Obj = { ...structuredClone(sub), items: { ...(sub.items as Obj), data: items }, quantity: legacyQuantity(items) };
   if (reset) after.billing_cycle_anchor = now;
-  return { after, prorations, reset, date };
+  const billed = reset && changed.length > 0;
+  return { after, prorations, reset: billed, immediate: billed || (p.proration_behavior === "always_invoice" && prorations.length > 0), date };
 }
 
 const ID = /^\/v1\/subscriptions\/(?<id>[^/]+)$/;
@@ -283,15 +291,14 @@ export const routes: Route[] = [
       checkAttached(ctx, params.default_payment_method, before.customer);
       const now = ctx.now();
       const puts: Obj[] = [];
-      const { after: changed, prorations, reset } = change(ctx, before, params, puts);
+      const { after: changed, prorations, reset, immediate } = change(ctx, before, params, puts);
       let after = assign(changed, params, ["default_payment_method", "description", "metadata"]);
       const cape = params.cancel_at_period_end;
       if (typeof cape === "boolean" && cape !== before.cancel_at_period_end) after = { ...after, ...periodEndCancel(after, cape, now) };
 
       // create_prorations leaves the prorations pending for the next invoice; always_invoice (with prorations) and an
-      // anchor reset invoice now, sweeping in the subscription's pending items, and collect that invoice.
-      const invoiceNow = reset || (params.proration_behavior === "always_invoice" && prorations.length > 0);
-      const inId = invoiceNow ? ctx.id("in") : null;
+      // item-changing anchor reset invoice now, sweeping in the subscription's pending items, and collect that invoice.
+      const inId = immediate ? ctx.id("in") : null;
       const iis = prorations.map((p) => invoiceItem(ctx, after, p, inId));
       const tail: Emit[] = [];
       if (inId) {

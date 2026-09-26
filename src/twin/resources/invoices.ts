@@ -20,8 +20,8 @@ const ID = /^\/v1\/invoices\/(?<invoice>[^/]+)$/;
  * The next invoice of a subscription (`subscription`, optionally with `subscription_details` changes applied as an
  * update would), or the first invoice of a new one (`customer` + `subscription_details[items]`). A preview is a draft
  * that is never stored: id `upcoming_in_…`, line ids `il_tmp_…`, `billing_reason: upcoming`. The next invoice is the
- * one the change creates now (always_invoice with prorations, `billing_cycle_anchor=now`), else the renewal at the
- * current period end: pending invoice items, the change's prorations, and every item's next period.
+ * one the change creates now (always_invoice with prorations, `billing_cycle_anchor=now` with item changes), else the
+ * renewal at the current period end: pending invoice items, the change's prorations, and every item's next period.
  */
 const preview: Handler = (ctx, { params }) => {
   only(ctx, params, ["customer", "expand", "subscription", "subscription_details"]);
@@ -49,8 +49,7 @@ const preview: Handler = (ctx, { params }) => {
   }
 
   const sub = live(ctx, params.subscription, "subscription") ?? ctx.fail("resource_missing_400", { param: "subscription" });
-  const { after, prorations, reset, date } = change(ctx, sub, sd, []);
-  const immediate = reset || (sd.proration_behavior === "always_invoice" && prorations.length > 0);
+  const { after, prorations, reset, immediate, date } = change(ctx, sub, sd, []);
   // ponytail: a canceled subscription, or a renewal preview of one that ends at the period end, is refused (no
   // upcoming invoice; the real API's error is unobserved).
   if (sub.status === "canceled" || (!immediate && after.cancel_at_period_end)) ctx.fail("not_implemented");
