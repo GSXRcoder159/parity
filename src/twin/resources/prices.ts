@@ -8,33 +8,24 @@ import { newProduct } from "./products.ts";
 
 type Obj = Record<string, unknown>;
 
-/**
- * The legacy plan view of a recurring price. There is no plan template: the pruned spec has no plan schema
- * (no in-scope operation references it), so this is a computed projection of the price.
- */
-const plan = (p: Obj): Obj => {
+/** The legacy plan view of a recurring price: the plan template plus the price's computed fields. */
+const plan = (ctx: Ctx, p: Obj): Obj => {
   const r = p.recurring as Obj;
-  return {
+  return ctx.build("plan", {
     id: p.id,
-    object: "plan",
     active: p.active,
     amount: p.unit_amount,
     amount_decimal: p.unit_amount_decimal,
-    billing_scheme: p.billing_scheme,
     created: p.created,
     currency: p.currency,
     interval: r.interval,
     interval_count: r.interval_count,
-    livemode: p.livemode,
     metadata: p.metadata,
     meter: r.meter,
     nickname: p.nickname,
     product: p.product,
-    tiers_mode: p.tiers_mode,
-    transform_usage: p.transform_quantity,
-    trial_period_days: r.trial_period_days,
     usage_type: r.usage_type,
-  };
+  });
 };
 
 /**
@@ -42,8 +33,8 @@ const plan = (p: Obj): Obj => {
  * ponytail: the plan shares the price's id and store.apply projects every emit by id, so plan.* goes FIRST
  * and the price event overwrites it; a per-type projection would lift that ordering constraint.
  */
-const priceEvents = (verb: string, p: Obj, previous_attributes?: Obj): Emit[] => [
-  ...(p.type === "recurring" ? [{ type: `plan.${verb}`, object: plan(p), previous_attributes }] : []),
+const priceEvents = (ctx: Ctx, verb: string, p: Obj, previous_attributes?: Obj): Emit[] => [
+  ...(p.type === "recurring" ? [{ type: `plan.${verb}`, object: plan(ctx, p), previous_attributes }] : []),
   { type: `price.${verb}`, object: p, previous_attributes },
 ];
 
@@ -84,7 +75,7 @@ export const routes: Route[] = [
         unit_amount_decimal: unit === undefined ? null : String(unit),
       });
       assign(price, params, ["active", "lookup_key", "metadata", "nickname", "tax_behavior"]);
-      return { body: price, emits: [...emits, ...priceEvents("created", price)] };
+      return { body: price, emits: [...emits, ...priceEvents(ctx, "created", price)] };
     },
     "post /v1/prices",
   ],
@@ -107,7 +98,7 @@ export const routes: Route[] = [
       const before = find(ctx, pathParams.price);
       const after = assign(structuredClone(before), params, ["active", "lookup_key", "metadata", "nickname"]);
       const prev = diff(before, after);
-      return { body: after, emits: Object.keys(prev).length > 0 ? priceEvents("updated", after, prev) : [] };
+      return { body: after, emits: Object.keys(prev).length > 0 ? priceEvents(ctx, "updated", after, prev) : [] };
     },
     "post /v1/prices/{price}",
   ],

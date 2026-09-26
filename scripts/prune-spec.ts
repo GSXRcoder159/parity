@@ -37,6 +37,8 @@ post /v1/subscriptions/{subscription_exposed_id}
 delete /v1/subscriptions/{subscription_exposed_id}
 get /v1/invoices
 get /v1/invoices/{invoice}
+post /v1/invoices/{invoice}
+delete /v1/invoices/{invoice}
 post /v1/invoices/create_preview
 post /v1/invoices/{invoice}/pay
 post /v1/invoices/{invoice}/void
@@ -101,6 +103,9 @@ const walk = (v: unknown): void => {
   }
 };
 walk(paths);
+// Extra roots: schemas no in-scope operation references but the twin still builds (legacy plan.* event payloads).
+const EXTRA_SCHEMAS = ["plan"];
+walk(EXTRA_SCHEMAS.map((n) => ({ $ref: `#/components/schemas/${n}` })));
 
 const pruned = { ...spec, paths, components: { ...spec.components, schemas: kept } };
 mkdirSync(OUT, { recursive: true });
@@ -114,7 +119,7 @@ writeFileSync(join(OUT, "README.md"), `# Pruned OpenAPI spec
 - Commit: ${SHA}
 - API version: ${spec.info.version}
 
-It keeps the twin's ${OPERATIONS.length} in-scope operations and the ${Object.keys(kept).length} component schemas they reference transitively. Everything kept is unmodified except that object keys are sorted.
+It keeps the twin's ${OPERATIONS.length} in-scope operations and the ${Object.keys(kept).length} component schemas reachable from them or from the extra roots ${EXTRA_SCHEMAS.join(", ")} (legacy \`plan.*\` event payloads). Everything kept is unmodified except that object keys are sorted.
 
 Regenerate this directory and the object templates in \`src/twin/shapes/\` with \`node scripts/prune-spec.ts && node scripts/gen-shapes.ts\`.
 `);

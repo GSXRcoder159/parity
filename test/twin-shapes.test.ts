@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,6 +40,8 @@ post /v1/subscriptions/{subscription_exposed_id}
 delete /v1/subscriptions/{subscription_exposed_id}
 get /v1/invoices
 get /v1/invoices/{invoice}
+post /v1/invoices/{invoice}
+delete /v1/invoices/{invoice}
 post /v1/invoices/create_preview
 post /v1/invoices/{invoice}/pay
 post /v1/invoices/{invoice}/void
@@ -105,7 +107,11 @@ test("expandable fields take the string form", () => {
 test("generator is deterministic and the committed templates are current", () => {
   const dirs = [0, 1].map(() => mkdtempSync(join(tmpdir(), "parity-shapes-")));
   try {
+    const sentinel = join(dirs[0]!, "keep.json"); // a dir passed on the command line is never cleared
+    writeFileSync(sentinel, "{}");
     for (const d of dirs) execFileSync(process.execPath, [join(root, "scripts/gen-shapes.ts"), d]);
+    assert.equal(readFileSync(sentinel, "utf8"), "{}");
+    rmSync(sentinel);
     const [a, b] = dirs.map(readDir);
     assert.deepEqual(a, b);
     assert.deepEqual(a, readDir(shapesDir));

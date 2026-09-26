@@ -6,6 +6,6 @@
 - Commit: 2bab97685e29abae0c241680c2257153e259e50f
 - API version: 2026-08-26.dahlia
 
-It keeps the twin's 50 in-scope operations and the 879 component schemas they reference transitively. Everything kept is unmodified except that object keys are sorted.
+It keeps the twin's 52 in-scope operations and the 882 component schemas reachable from them or from the extra roots plan (legacy `plan.*` event payloads). Everything kept is unmodified except that object keys are sorted.
 
 Regenerate this directory and the object templates in `src/twin/shapes/` with `node scripts/prune-spec.ts && node scripts/gen-shapes.ts`.

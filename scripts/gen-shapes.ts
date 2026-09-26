@@ -1,6 +1,7 @@
 // Writes one object template per resource in the pruned spec, <x-resourceId>.json, using generic
 // defaults only (decision 0002 §4.1). Run: node scripts/gen-shapes.ts [outDir]
-// Default outDir is src/twin/shapes; its *.json files are replaced so no stale template survives.
+// Default outDir is src/twin/shapes; only there are existing *.json files deleted first, so no stale template
+// survives. A dir passed on the command line is never cleared.
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -17,10 +18,13 @@ type Schema = {
 const root = join(import.meta.dirname, "..");
 const spec = JSON.parse(readFileSync(join(root, "src/twin/spec/openapi.pruned.json"), "utf8"));
 const schemas: Record<string, Schema> = spec.components.schemas;
-const out = process.argv[2] ?? join(root, "src/twin/shapes");
+const cliOut = process.argv[2];
+const out = cliOut ?? join(root, "src/twin/shapes");
 
 // Nested objects are expanded 3 levels below the resource; deeper ones are {}. This also stops
 // recursion through self-referencing schemas.
+// ponytail: fixed depth cap, fields nested deeper than 3 start as {} and the align loop patches them;
+// per-schema cycle detection instead of a depth cap if those patches pile up.
 const MAX_DEPTH = 3;
 
 function value(s: Schema, depth: number): unknown {
@@ -42,7 +46,7 @@ function template(s: Schema, depth: number): Record<string, unknown> {
 }
 
 mkdirSync(out, { recursive: true });
-for (const f of readdirSync(out)) if (f.endsWith(".json")) rmSync(join(out, f));
+if (!cliOut) for (const f of readdirSync(out)) if (f.endsWith(".json")) rmSync(join(out, f));
 let n = 0;
 for (const s of Object.values(schemas)) {
   const id = s["x-resourceId"];
