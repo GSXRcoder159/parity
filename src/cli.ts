@@ -36,7 +36,7 @@ const USAGE = `usage:
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
   Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger <dataDir>/budget/reads.jsonl (private:
     it names the account).
-  Data dir: PARITY_DATA_DIR, else ../parity-data next to the repo if present, else recordings/.
+  Data dir: PARITY_DATA_DIR, else ../parity-data next to the repo if present, else recordings/ (npm package: PARITY_DATA_DIR only).
   record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
   --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
   --chunk n --chunk-wait m: run n sequences at a time, m minutes apart (each chunk ledgered and written as it ends).
@@ -436,6 +436,8 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (cmd === undefined || !FLAGS[cmd]) throw new UsageError(cmd === undefined ? "no command" : `unknown command "${cmd}"`);
     const { flags, positional } = parseArgs(cmd, rest);
+    // The npm package (dist/) is not a checkout, and align and nightly edit, commit and push the repo they run from.
+    if ((cmd === "align" || cmd === "nightly") && import.meta.url.endsWith(".js")) throw new Error(`${cmd} runs from a checkout (node src/cli.ts ${cmd}), not from the npm package`);
     if (cmd === "oracle") {
       if (positional.join(" ") !== "build") throw new UsageError(`expected "oracle build", got "oracle ${positional.join(" ")}"`);
       console.log(oracleBuild(num(flags, "max-age-days")));

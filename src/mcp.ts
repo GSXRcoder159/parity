@@ -3,10 +3,10 @@
 // pruned spec's request schema as input schema; plus parity_reset and parity_state. It speaks the initialize-handshake
 // revisions (2025-11-25 and earlier): the stateless 2026-07-28 revision has no initialize. A dual-era client's
 // server/discover probe gets -32601 and falls back to initialize.
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { encodeForm } from "./bench/run.ts";
-import { createTwin, type Route, type TwinRequest } from "./twin/server.ts";
+import { createTwin, RESOURCE_ROUTES, type TwinRequest } from "./twin/server.ts";
 
 type Obj = Record<string, unknown>;
 interface Param {
@@ -62,17 +62,8 @@ function opTool(spec: { paths: Record<string, Record<string, Obj>> }, op: string
 /** Serves MCP on stdin/stdout until stdin ends; resolves 0. Nothing but JSON-RPC messages goes to stdout. */
 export async function main(): Promise<number> {
   const spec = read("./twin/spec/openapi.pruned.json");
-  // The twin's route table, loaded as server.ts loads it (it does not export it).
-  // ponytail: duplicates server.ts's loader; export RESOURCE_ROUTES there and use it.
-  const dir = new URL("./twin/resources/", import.meta.url);
-  const modules = await Promise.all(
-    readdirSync(dir)
-      .filter((f) => f.endsWith(".ts"))
-      .sort()
-      .map((f) => import(new URL(f, dir).href) as Promise<{ routes?: Route[] }>),
-  );
   // One tool per operation: GET /v1/invoices/upcoming borrows the list's operation for validation and gets no tool.
-  const ops = new Set(modules.flatMap((m) => (m.routes ?? []).map((r) => r[3])));
+  const ops = new Set(RESOURCE_ROUTES.map((r) => r[3]));
   const tools = new Map<string, Tool>(
     [
       ...[...ops].map((op) => opTool(spec, op)),
@@ -81,7 +72,8 @@ export async function main(): Promise<number> {
     ].map((t) => [t.def.name, t]),
   );
   const twin = createTwin();
-  const version = read("../package.json").version as string;
+  // src/mcp.ts in a checkout, dist/src/mcp.js in the package: one level deeper.
+  const version = read(import.meta.url.endsWith(".js") ? "../../package.json" : "../package.json").version as string;
 
   const respond = async (id: unknown, method: string, params: Obj): Promise<Obj> => {
     const result = (result: Obj) => ({ jsonrpc: "2.0", id, result });

@@ -60,12 +60,12 @@ export interface TwinResponse {
 }
 
 // Every module in resources/ exporting `routes` is registered. Modules import this file with `import type` only:
-// a runtime import would deadlock on this top-level await.
+// a runtime import would deadlock on this top-level await. `.js` in the compiled package (dist/), `.ts` in a checkout.
 const resourcesDir = new URL("./resources/", import.meta.url);
-const RESOURCE_ROUTES: Route[] = (
+export const RESOURCE_ROUTES: Route[] = (
   await Promise.all(
     readdirSync(resourcesDir)
-      .filter((f) => f.endsWith(".ts"))
+      .filter((f) => /\.[tj]s$/.test(f))
       .sort()
       .map((f) => import(new URL(f, resourcesDir).href) as Promise<{ routes?: Route[] }>),
   )

@@ -7,9 +7,14 @@ import type { Recording } from "../types.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 
-/** PARITY_DATA_DIR, else `../parity-data` next to the repo root when it exists, else the repo's gitignored `recordings/`. */
+/**
+ * PARITY_DATA_DIR, else `../parity-data` next to the repo root when it exists, else the repo's gitignored `recordings/`.
+ * The npm package (dist/, in node_modules or the npx cache) has no repo root: a default there would put the read ledger in
+ * a cache that can vanish, so it throws instead.
+ */
 export function dataDir(env: NodeJS.ProcessEnv = process.env, root = REPO_ROOT): string {
   if (env.PARITY_DATA_DIR) return resolve(env.PARITY_DATA_DIR);
+  if (import.meta.url.endsWith(".js")) throw new Error("set PARITY_DATA_DIR: the npm package has no checkout to keep the data dir (and the read ledger) in");
   const sibling = resolve(root, "../parity-data");
   return existsSync(sibling) ? sibling : join(root, "recordings");
 }
