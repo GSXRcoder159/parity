@@ -1,0 +1,5 @@
+[
+  { "sample": true, "date": "2026-10-01", "class": "automatic", "file": "src/twin/shapes/customer.json", "pointers": ["/invoice_settings/rendering_options", "/tax_exempt"], "commit": "0000000000000000000000000000000000000001", "divergencesRemoved": 64 },
+  { "sample": true, "date": "2026-10-05", "class": "surface-added", "note": "proration (sample)", "commit": "0000000000000000000000000000000000000002", "divergencesRemoved": -18 },
+  { "sample": true, "date": "2026-10-07", "class": "assisted", "pr": 12, "file": "src/twin/resources/subscriptions.ts", "divergencesRemoved": 9 }
+]

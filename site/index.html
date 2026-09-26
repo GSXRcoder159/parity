@@ -77,6 +77,19 @@
         <div id="automation-chart" class="chart"></div>
       </section>
 
+      <section id="changes" hidden>
+        <h2>Changelog</h2>
+        <p class="muted">
+          Every change to the twin since the scaffold freeze, from the sealed log: automatic patches (JSON-pointer edits to the twin's data
+          files, one entry per held-out gate batch), merged assisted PRs, and surface-added scaffold work. Files, pointers, PR numbers and
+          notes only, never values. Train divergences removed = the gate's count before the change minus after it.
+        </p>
+        <details>
+          <summary id="changes-summary"></summary>
+          <ul id="changes-list" class="changes"></ul>
+        </details>
+      </section>
+
       <section id="drift">
         <h2>Drift feed</h2>
         <p class="muted">Sandbox behavior that changed between two recordings of the same sequence, outside the noise set. Paths and classes only.</p>

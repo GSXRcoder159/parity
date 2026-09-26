@@ -11,7 +11,7 @@ import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.t
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
-import { ceilingText, logMerged, nightly, nightlyText } from "../src/nightly.ts";
+import { ceilingText, changelog, logMerged, nightly, nightlyText } from "../src/nightly.ts";
 import { createTwin } from "../src/twin/server.ts";
 
 // site/app.js is browser JS with no build step; a computed specifier keeps tsc from asking for its types.
@@ -58,6 +58,27 @@ test("ceilingText: the public commit message names a pair's coverage, and a pair
   assert.equal(ceilingText({ ...noise, seqs: 88 }, 88, true), "noise ceiling L3 95.0%");
   assert.equal(ceilingText(noise, 88, true), "noise ceiling L3 95.0% (the pair covers 60 of 88 sequences)");
   assert.equal(ceilingText(noise, 88, false), "no whole-corpus noise ceiling (the pair covers 60 of 88 sequences: L3 95.0% on those)");
+});
+
+test("changelog: automatic patches per gate batch, merged PRs joined with their proposal, surface-added with its delta; fraud or risk pointers counted, never named", () => {
+  const log = join(mkdtempSync(join(tmpdir(), "pb-changelog-")), "align/log.jsonl");
+  const n = (d: number) => ({ trainDivergences: d });
+  const auto = (file: string, pointer: string, before: number, after: number) => ({ kind: "patch" as const, data: { class: "automatic", status: "applied", commit: "c1", edit: { file, pointer, op: "set", value: "SECRET_VALUE" }, gate: { before: n(before), after: n(after) }, oracle: ORACLE } });
+  appendLog(log, "run-1", [auto("a.json", "/x", 100, 90), auto("a.json", "/radar_options", 100, 90), auto("a.json", "/y", 100, 90), auto("a.json", "/z", 90, 88), auto("b.json", "/w", 88, 80), { kind: "gate", data: { oracle: ORACLE } }], "2026-10-01T07:00:00.000Z");
+  appendLog(log, "run-2", [{ kind: "patch", data: { class: "assisted", status: "proposed", branch: "align/assisted-2026-10-02-1", pr: "https://github.com/x/y/pull/7", file: "src/twin/resources/customers.ts", gate: { before: n(80), after: n(71) }, oracle: ORACLE } }], "2026-10-02T07:00:00.000Z");
+  appendLog(log, "run-3", [
+    { kind: "patch", data: { class: "assisted", status: "merged", pr: 7, branch: "align/assisted-2026-10-02-1", mergedAt: "2026-10-03T12:00:00Z", oracle: ORACLE } },
+    { kind: "patch", data: { class: "surface-added", status: "applied", note: "invoices", commit: "c2", before: n(71), after: n(75), oracle: ORACLE } },
+  ], "2026-10-04T07:00:00.000Z");
+  const rows = changelog(log);
+  assert.deepEqual(rows, [
+    { date: "2026-10-01", class: "automatic", file: "a.json", pointers: ["/x", "/y"], withheld: 1, commit: "c1", divergencesRemoved: 10 },
+    { date: "2026-10-01", class: "automatic", file: "a.json", pointers: ["/z"], commit: "c1", divergencesRemoved: 2 },
+    { date: "2026-10-01", class: "automatic", file: "b.json", pointers: ["/w"], commit: "c1", divergencesRemoved: 8 },
+    { date: "2026-10-03", class: "assisted", pr: 7, file: "src/twin/resources/customers.ts", divergencesRemoved: 9 },
+    { date: "2026-10-04", class: "surface-added", note: "invoices", commit: "c2", divergencesRemoved: -4 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(rows), /SECRET_VALUE|radar/);
 });
 
 test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits and pushes both repos (parity first); the next night annotates only what is new and replaces a same-date point", { timeout: 180_000 }, async () => {
@@ -219,8 +240,15 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     }
     assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 1, assisted: 1, share: 0.5 }]);
 
+    // The changelog: the sealed log's patch entries in log order, merged PRs by number, no values.
+    assert.deepEqual(site("changelog.json"), [
+      { date: new Date().toISOString().slice(0, 10), class: "automatic", pointers: [], commit: "0".repeat(40) },
+      { date: new Date().toISOString().slice(0, 10), class: "surface-added", note: "test clocks" },
+      { date: "2026-10-03", class: "assisted", pr: 7 },
+    ]);
+
     // Public-safe: no ids, no values' telltales, no fraud or risk fields.
-    for (const f of ["curve.json", "scores/2026-10-04.json"]) {
+    for (const f of ["curve.json", "scores/2026-10-04.json", "changelog.json"]) {
       const s = readFileSync(join(repo, "site/data", f), "utf8");
       assert.doesNotMatch(s, /\b[a-z]+_[A-Za-z0-9]{10,}\b|@example|outcome|risk_|sk_test/, f);
     }
@@ -231,7 +259,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.equal(git(tmp, "--git-dir", join(tmp, "origin.git"), "rev-parse", "main"), dataHead1, "the data repo was pushed");
     assert.equal(git(tmp, "--git-dir", join(tmp, "parity-origin.git"), "rev-parse", "main"), head1, "this repo was pushed");
     assert.deepEqual(r.commits, { data: dataHead1, parity: head1 });
-    assert.deepEqual(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n"), ["site/data/curve.json", "site/data/scores/2026-10-04.json"], "no ledger here: it names the account");
+    assert.deepEqual(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n"), ["site/data/changelog.json", "site/data/curve.json", "site/data/scores/2026-10-04.json"], "no ledger here: it names the account");
     assert.ok(git(data, "log", "--name-only", "--format=").split("\n").includes("budget/reads.jsonl"), "the read ledger is committed in the data repo");
     assert.match(git(repo, "log", "-1", "--format=%s"), /^nightly 2026-10-04: curve point and scores \(train L3 [\d.]+%, held-out L3 [\d.]+%; noise ceiling L3 [\d.]+%; oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);

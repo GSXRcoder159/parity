@@ -1,7 +1,7 @@
 // paritybench nightly (plan §3.3–§3.5; decision 0002 §1 rolling oracle, §3 what counts, §5 data locations): record
 // tonight's sandbox slice (and weekly the noise pair), rebuild the oracle, score the twin on the whole oracle with the
 // noise ceiling, align (mechanical, then assisted), log merged assisted PRs, publish the public-safe curve point and
-// scores file, run drift, commit and push both repos (this one first). A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2) is a
+// scores file and the changelog, run drift, commit and push both repos (this one first). A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2) is a
 // sealed-log note, not a failure: the night goes on with the existing oracle and the curve point says oracleRefreshed: false.
 // Any other error (a missing key, a bug) fails the night.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,6 +13,7 @@ import { scoreTwinIn } from "./align/gate.ts";
 import { align, noiseFromRuns, planText } from "./align/index.ts";
 import type { Env } from "./align/llm.ts";
 import { appendLog, logPath, provenance, type LogEntry, type Provenance } from "./align/log.ts";
+import { FRAUD_OR_RISK } from "./align/patch.ts";
 import { METHOD, type SeqResult } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
@@ -116,6 +117,63 @@ export function patchTotals(log: string): Patches {
   const entries = existsSync(log) ? readJsonl<LogEntry>(log) : [];
   const n = (cls: string, status: string) => entries.filter((e) => e.kind === "patch" && e.data.class === cls && e.data.status === status).length;
   return { automatic: n("automatic", "applied"), assisted: n("assisted", "merged") };
+}
+
+/** One row of the public changelog, site/data/changelog.json (the page's contract, site/app.js). No values (0001 C3). */
+export interface Change {
+  date: string;
+  class: "automatic" | "assisted" | "surface-added";
+  /** automatic: the data file of one held-out gate batch; assisted: the file the merged PR replaced (from its proposal). */
+  file?: string;
+  /** automatic: the batch's JSON pointers, one per patch, except `withheld` ones into fraud or risk fields (0001 R8). */
+  pointers?: string[];
+  withheld?: number;
+  /** assisted: the merged PR. */
+  pr?: number;
+  /** surface-added: what the scaffold work added. */
+  note?: string;
+  /** automatic, surface-added: the parity commit. */
+  commit?: string;
+  /** Train divergences removed: the gate's before minus after (surface-added: its before/after; negative = added). */
+  divergencesRemoved?: number;
+}
+
+type Counts = { before?: { trainDivergences: number }; after?: { trainDivergences: number } };
+const removed = (g: Counts | undefined): number | undefined => (g?.before && g.after ? g.before.trainDivergences - g.after.trainDivergences : undefined);
+
+/**
+ * The public changelog from the sealed log's patch entries, in log order: automatic patches per held-out gate batch
+ * (a batch's edits share its before and after, gate.ts, so the batch is the unit that removed divergences), merged
+ * assisted PRs (joined with their proposal by branch for the file and gate counts) and surface-added entries.
+ * Pointers into fraud or risk fields are withheld and counted, as drift does (0001 R8): the first align run (8bbf612)
+ * seeded two `radar_options` keys, before patch.ts refused fraud or risk loci.
+ */
+export function changelog(log: string): Change[] {
+  type Patch = { class?: string; status?: string; edit?: { file: string; pointer: string }; gate?: Counts; commit?: string; branch?: string; pr?: number; file?: string; mergedAt?: string; note?: string } & Counts;
+  const rows: Change[] = [];
+  const batches = new Map<string, Change>();
+  const proposed = new Map<string | undefined, Patch>();
+  for (const e of existsSync(log) ? readJsonl<LogEntry>(log) : []) {
+    if (e.kind !== "patch") continue;
+    const d = e.data as Patch;
+    const date = e.ts.slice(0, 10);
+    if (d.class === "automatic" && d.status === "applied") {
+      const key = [e.runId, d.edit?.file, d.gate?.before?.trainDivergences, d.gate?.after?.trainDivergences].join("|");
+      let row = batches.get(key);
+      if (!row) {
+        row = { date, class: "automatic", file: d.edit?.file, pointers: [], commit: d.commit, divergencesRemoved: removed(d.gate) };
+        batches.set(key, row);
+        rows.push(row);
+      }
+      if (d.edit?.pointer.split("/").some((s) => FRAUD_OR_RISK.has(s))) row.withheld = (row.withheld ?? 0) + 1;
+      else if (d.edit) row.pointers!.push(d.edit.pointer);
+    } else if (d.class === "assisted" && d.status === "proposed") proposed.set(d.branch, d);
+    else if (d.class === "assisted" && d.status === "merged") {
+      const p = proposed.get(d.branch); // ponytail: a merge whose proposal is not logged gets no file or count
+      rows.push({ date: (d.mergedAt ?? e.ts).slice(0, 10), class: "assisted", pr: d.pr, ...(p && { file: p.file, divergencesRemoved: removed(p.gate) }) });
+    } else if (d.class === "surface-added") rows.push({ date, class: "surface-added", note: d.note, commit: d.commit, divergencesRemoved: removed(d) });
+  }
+  return rows;
 }
 
 /**
@@ -346,8 +404,9 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
   writeJson(curveFile, [...curve, point]);
   writeJson(join(root, `site/data/scores/${date}.json`), scores);
+  writeJson(join(root, "site/data/changelog.json"), changelog(log));
   appendLog(log, runId, [{ kind: "publish", data: { label: "nightly", date, events, oracle } }]);
-  const published = ["site/data/curve.json", `site/data/scores/${date}.json`];
+  const published = ["site/data/curve.json", `site/data/scores/${date}.json`, "site/data/changelog.json"];
 
   // 7. Drift: tonight's slice against the previous recording of each sequence.
   const d = drift({ date, today, previous, noise: noiseFromRuns(data).keys, root, log, runId, oracle });

@@ -31,8 +31,8 @@ function site(files: Record<string, unknown>) {
 test("no data files: an empty curve, and no scores file is requested", async () => {
   const s = site({});
   const d = await app.load(s.get, "data/");
-  assert.deepEqual(d, { curve: [], drift: [], scores: null, sample: false });
-  assert.deepEqual(s.asked, ["data/curve.json", "data/drift.json"]);
+  assert.deepEqual(d, { curve: [], drift: [], changelog: [], scores: null, sample: false });
+  assert.deepEqual(s.asked, ["data/curve.json", "data/drift.json", "data/changelog.json"]);
   assert.deepEqual(app.strata(d.curve), []);
   assert.deepEqual(app.series(d.curve, "all"), []);
   assert.deepEqual(app.automation(d.curve), []);
@@ -40,7 +40,7 @@ test("no data files: an empty curve, and no scores file is requested", async () 
 
 test("curve.json holding [] is the same empty state", async () => {
   const d = await app.load(site({ "data/curve.json": [], "data/drift.json": [] }).get, "data/");
-  assert.deepEqual(d, { curve: [], drift: [], scores: null, sample: false });
+  assert.deepEqual(d, { curve: [], drift: [], changelog: [], scores: null, sample: false });
 });
 
 test("a one-point curve: the latest night's scores file, one row per series, finite chart geometry", async () => {
@@ -52,7 +52,7 @@ test("a one-point curve: the latest night's scores file, one row per series, fin
   const scores = { date: "2026-10-01", overall: { train: LEVELS, heldOut: LEVELS, noise: LEVELS }, byStratum: {} };
   const s = site({ "data/curve.json": [pt], "data/scores/2026-10-01.json": scores });
   const d = await app.load(s.get, "data/");
-  assert.deepEqual(s.asked, ["data/curve.json", "data/drift.json", "data/scores/2026-10-01.json"]);
+  assert.deepEqual(s.asked, ["data/curve.json", "data/drift.json", "data/changelog.json", "data/scores/2026-10-01.json"]);
   assert.deepEqual(d.scores, scores);
 
   assert.deepEqual(app.strata(d.curve), ["errors"]);
@@ -114,4 +114,21 @@ test("the pricing page exists, says it is only proposed, and the score page link
   assert.match(pricing, /<p class="banner"><strong>Proposed pricing\. Nothing is for sale yet\.<\/strong><\/p>/);
   assert.doesNotMatch(pricing.match(/<title>(.*)<\/title>/)![1]!, /stripe/i); // decision 0001 C4
   assert.match(read("index.html"), /<a href="pricing\.html">/);
+});
+
+test("changelog: newest first (later-logged first within a date), each with its unit, what changed and the divergences removed", async () => {
+  const log = [
+    { date: "2026-09-26", class: "automatic", file: "src/twin/shapes/customer.json", pointers: ["/tax_exempt", "/invoice_prefix"], withheld: 1, commit: "8bbf612c26a1", divergencesRemoved: 40 },
+    { date: "2026-09-26", class: "surface-added", note: "test clocks", commit: "d32db086175d", divergencesRemoved: -12 },
+    { date: "2026-10-03", class: "assisted", pr: 7, file: "src/twin/resources/customers.ts", divergencesRemoved: 5 },
+    { date: "2026-10-04", class: "assisted", pr: 9 },
+  ];
+  assert.deepEqual(app.changes(log), [
+    { date: "2026-10-04", class: "assisted", patches: 1, what: "PR #9", removed: null },
+    { date: "2026-10-03", class: "assisted", patches: 1, what: "PR #7: src/twin/resources/customers.ts", removed: 5 },
+    { date: "2026-09-26", class: "surface-added", patches: null, what: "test clocks (d32db08)", removed: -12 },
+    { date: "2026-09-26", class: "automatic", patches: 3, what: "src/twin/shapes/customer.json: /tax_exempt, /invoice_prefix, 1 fraud or risk pointer(s) withheld", removed: 40 },
+  ]);
+  const d = await app.load(site({ "data/curve.json": [point("2026-10-04")], "data/changelog.json": [{ ...log[0], sample: true }] }).get, "data/");
+  assert.deepEqual([d.changelog.length, d.sample], [1, true]);
 });

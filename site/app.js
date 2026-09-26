@@ -1,5 +1,5 @@
-// Score page (static, no build step). Reads data/curve.json, data/drift.json and data/scores/<date of the latest
-// curve point>.json; `?data=sample` reads the synthetic files in data/sample/ instead.
+// Score page (static, no build step). Reads data/curve.json, data/drift.json, data/changelog.json and
+// data/scores/<date of the latest curve point>.json; `?data=sample` reads the synthetic files in data/sample/ instead.
 //
 // Data contract. Public-safe only (decision 0001 C3): scores, counts, strata, templates, paths and classes; no values, no ids.
 //   Levels   {L1, L2, L3, L4}, each a 95% Wilson interval {p, lo, hi, n} (src/bench/score.ts).
@@ -19,16 +19,22 @@
 //   scores/<date>.json  {date, normalization, method?, overall: Split, byStratum: {name: Split}, noiseCoverage?: Coverage, sample?: true},
 //                Split = {train: Levels, heldOut: Levels, noise?: Levels}
 //   drift.json   [{date, endpoint, template, path, cls, sample?: true}]
+//   changelog.json  [{date, class: "automatic" | "assisted" | "surface-added", file?, pointers?, withheld?, pr?, note?, commit?,
+//                  divergencesRemoved?, sample?: true}] in sealed-log order (src/nightly.ts changelog()): automatic = one
+//                  held-out gate batch of JSON-pointer edits to one data file; assisted = one merged PR; surface-added = a
+//                  scaffold change and its note. divergencesRemoved = train divergences, gate before minus after.
+//                  withheld = pointers into fraud or risk fields, counted but not named (decision 0001 R8).
 // test/site.test.ts imports this module in Node, so everything above main() is DOM-free.
 
 /** Loads the page data through `get(url)`, which resolves to parsed JSON, or null when the file does not exist. */
 export async function load(get, base = "data/") {
   const curve = [...((await get(`${base}curve.json`)) ?? [])].sort((a, b) => a.date.localeCompare(b.date));
   const drift = (await get(`${base}drift.json`)) ?? [];
+  const changelog = (await get(`${base}changelog.json`)) ?? [];
   const last = curve.at(-1);
   const scores = last ? await get(`${base}scores/${last.date}.json`) : null;
-  const sample = [...curve, ...drift, scores].some((x) => x?.sample === true);
-  return { curve, drift, scores, sample };
+  const sample = [...curve, ...drift, ...changelog, scores].some((x) => x?.sample === true);
+  return { curve, drift, changelog, scores, sample };
 }
 
 /** Strata that appear on any night, sorted. */
@@ -56,6 +62,17 @@ export function automation(curve) {
   return curve
     .filter((pt) => pt.patches)
     .map(({ date, patches: { automatic = 0, assisted = 0 } }) => ({ date, events: [], automatic, assisted, share: automatic + assisted ? automatic / (automatic + assisted) : null }));
+}
+
+/** Changelog rows newest first (the file is oldest first): the date, class, patch count, what changed, and removals. */
+export function changes(changelog) {
+  const what = (c) =>
+    c.class === "automatic" ? `${c.file}: ${[...c.pointers, ...(c.withheld ? [`${c.withheld} fraud or risk pointer(s) withheld`] : [])].join(", ")}` : c.class === "assisted" ? `PR #${c.pr}${c.file ? `: ${c.file}` : ""}` : `${c.note}${c.commit ? ` (${c.commit.slice(0, 7)})` : ""}`;
+  const patches = (c) => (c.class === "automatic" ? c.pointers.length + (c.withheld ?? 0) : c.class === "assisted" ? 1 : null);
+  return [...changelog]
+    .reverse()
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map((c) => ({ date: c.date, class: c.class, patches: patches(c), what: what(c), removed: c.divergencesRemoved ?? null }));
 }
 
 /** What the latest night's noise pair covers, as a sentence; null without a pair. */
@@ -240,6 +257,17 @@ function renderAutomation(data) {
   }
 }
 
+function renderChanges(data) {
+  const rows = changes(data.changelog);
+  const n = (cls) => rows.filter((r) => r.class === cls).length;
+  $("changes-summary").textContent = rows.length
+    ? `${rows.length} entries: ${n("automatic")} automatic gate batches, ${n("assisted")} merged assisted PRs, ${n("surface-added")} surface-added`
+    : "No changes logged yet";
+  const unit = (r) => (r.patches === null ? "" : r.class === "automatic" ? ` · ${r.patches} JSON-pointer edits` : " · 1 merged PR");
+  const gone = (r) => (r.removed === null ? "" : ` · ${r.removed >= 0 ? r.removed : `${-r.removed} added`} train divergences${r.removed >= 0 ? " removed" : ""}`);
+  $("changes-list").replaceChildren(...rows.map((r) => h("li", {}, h("div", {}, h("b", {}, r.date), ` · ${r.class}${unit(r)}${gone(r)}`), h("code", {}, r.what))));
+}
+
 function renderScores(data) {
   const { scores } = data;
   const date = data.curve.at(-1).date;
@@ -296,7 +324,7 @@ async function main() {
     $("empty").hidden = false;
     return;
   }
-  for (const id of ["meta", "curve", "table", "automation"]) $(id).hidden = false;
+  for (const id of ["meta", "curve", "table", "automation", "changes"]) $(id).hidden = false;
   $("latest").textContent = last.date;
   $("norm").textContent = last.normalization;
   $("method").textContent = last.method ?? "m1";
@@ -307,6 +335,7 @@ async function main() {
   $("stratum").replaceChildren(h("option", { value: "all" }, "All strata"), ...strata(data.curve).map((k) => h("option", { value: k }, k)));
   $("stratum").addEventListener("change", () => renderCurve(data));
   renderScores(data);
+  renderChanges(data);
   const charts = () => {
     renderCurve(data);
     renderAutomation(data);

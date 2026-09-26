@@ -198,6 +198,13 @@ td {
 details {
   margin-top: 8px;
 }
+.changes {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.changes li {
+  margin-bottom: 8px;
+}
 .drift-day ul {
   margin: 0;
   padding-left: 18px;
