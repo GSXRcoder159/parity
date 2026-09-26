@@ -26,5 +26,6 @@
   "resource_missing": { "status": 404, "type": "invalid_request_error", "code": "resource_missing", "param": "{param}", "message": "parity: resource_missing" },
   "resource_missing_400": { "status": 400, "type": "invalid_request_error", "code": "resource_missing", "param": "{param}", "message": "parity: resource_missing_400" },
   "search_query_invalid": { "status": 400, "type": "invalid_request_error", "param": "query", "message": "parity: search_query_invalid" },
-  "unrecognized_url": { "status": 404, "type": "invalid_request_error", "message": "parity: unrecognized_url" }
+  "unrecognized_url": { "status": 404, "type": "invalid_request_error", "message": "parity: unrecognized_url" },
+  "url_invalid": { "status": 400, "type": "invalid_request_error", "code": "url_invalid", "param": "url", "message": "parity: url_invalid" }
 }

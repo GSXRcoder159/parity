@@ -8,6 +8,7 @@ import { expand } from "./expand.ts";
 import { parseForm } from "./form.ts";
 import { API_VERSION, type Changes, Store, newId } from "./store.ts";
 import { validate } from "./validate.ts";
+import { deliver } from "./webhooks.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -79,8 +80,11 @@ function apiKey(authorization: string | undefined): string {
   return "";
 }
 
-/** `opts.routes` are extra routes, matched before the resource modules' (tests use them for fake handlers). */
-export function createTwin(opts: { routes?: Route[] } = {}) {
+/**
+ * `opts.routes` are extra routes, matched before the resource modules' (tests use them for fake handlers).
+ * `opts.webhookBackoffMs`: delays before the webhook delivery retries (default 1 s, 5 s, 25 s).
+ */
+export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[] } = {}) {
   const store = new Store();
   const routes = [...(opts.routes ?? []), ...RESOURCE_ROUTES];
 
@@ -148,7 +152,7 @@ export function createTwin(opts: { routes?: Route[] } = {}) {
         // A returned error (a 402 that still persists its payment events) is never expanded.
         const pending = new Map([...(r.puts ?? []), ...(r.emits ?? []).map((e) => e.object)].map((o) => [o.id as string, o]));
         const body = (r.status ?? 200) >= 400 ? r.body : expand(r.body, params.expand, (id) => pending.get(id) ?? get(id));
-        store.apply(r, { now, requestId, idempotencyKey: idemKey ?? null });
+        deliver(store, store.apply(r, { now, requestId, idempotencyKey: idemKey ?? null }), opts.webhookBackoffMs);
         res = respond(r.status ?? 200, body);
       } catch (e) {
         res = error(e);
