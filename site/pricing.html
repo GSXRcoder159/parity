@@ -40,7 +40,7 @@
           <!-- $99–$299/month and the SKU: docs/plan/2026-09-25-parity-mvp-plan.md §6.3. Nov 2: plan §2.2 and §5. -->
           <p class="price">$99–$299/month</p>
           <ul>
-            <li>The twin aligned to your account config and your call shapes</li>
+            <li>The twin aligned to the call shapes your code makes, on the twin's current surface</li>
             <li><code>paritybench agree</code> runs your test or eval suite on the twin and on the sandbox and reports how often pass/fail agrees</li>
             <li>Runs use your own sandbox key</li>
           </ul>
@@ -67,18 +67,19 @@
         <h2>Questions</h2>
 
         <h3>What does “private alignment” mean?</h3>
-        <!-- Decision 0001 C8; account config examples: parity-research.md §5. -->
+        <!-- Scope: plan §6.3 SKU and docs/demand/loi-template.md §2–3. Own account and key: decision 0001 C8. Account config cut: plan §2.3. -->
         <p>
-          The public twin is aligned to our own sandbox and a public corpus of call sequences. Private alignment aligns it to your account config
-          (for example Connect, tax or custom billing settings) and to the call shapes your code actually makes. Every run for you uses your own
-          Stripe account and your own sandbox key, never ours.
+          The public twin is aligned to our own sandbox and a public corpus of call sequences. Private alignment aligns it to the call shapes your
+          code actually makes, on the twin's current surface. Every run for you uses your own Stripe account and your own sandbox key, never ours.
+          Aligning the twin to your account config is not offered yet: it is cut from the current plan and comes back when a letter of intent asks
+          for it.
         </p>
 
         <h3>Why is the open score free?</h3>
         <p>
           A fidelity score only means something if anyone can check it. The harness, the method and the numbers are public, so you can rerun the score
-          on your own account instead of trusting ours. What costs money is work on your account: its config and your call shapes, which the public
-          corpus does not cover.
+          on your own account instead of trusting ours. What costs money is work on your own calls: aligning the twin to your call shapes, which the
+          public corpus does not cover.
         </p>
 
         <h3>How does the rolling oracle work?</h3>
