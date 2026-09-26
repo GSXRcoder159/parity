@@ -119,7 +119,7 @@ test("applyEdits: JSON-pointer set/delete in shapes (2-space JSON) and errors.js
 
 test("align end to end: a value the oracle shows at every train occurrence is proposed, gated in a temp copy, applied, logged and committed", { timeout: 60_000 }, async () => {
   // Oracle: the twin's own recording of customer-crud (train) and subscription-cancel-at-period-end (held out), with
-  // every customer's tax_exempt changed from the template's null to "none".
+  // every customer's tax_exempt changed to "reverse", a value no template holds (so this stays true after align runs).
   const CLOCK = "2026-03-01T00:00:00.000Z";
   const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
   const twin = createTwin();
@@ -129,9 +129,14 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
     server.closeAllConnections();
     server.close();
   });
-  const none = (v: unknown): unknown =>
-    Array.isArray(v) ? v.map(none) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, (v as { object?: string }).object === "customer" && k === "tax_exempt" ? "none" : none(x)])) : v;
-  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: none(s.body) })) }));
+  const reverse = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(reverse)
+      : v && typeof v === "object"
+        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, (v as { object?: string }).object === "customer" && k === "tax_exempt" ? "reverse" : reverse(x)]))
+        : v;
+  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: reverse(s.body) })) }));
+  assert.notEqual(JSON.parse(readFileSync(join(REPO, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "reverse");
   assert.ok(oracle.some((r) => r.heldOut) && oracle.some((r) => !r.heldOut));
 
   const data = mkdtempSync(join(tmpdir(), "pb-align-data-"));
@@ -155,13 +160,13 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
 
   const plan = align({ repo, dataDir: data, runId: "run-plan" });
   const accepted = plan.gate.accepted.map((j) => [j.candidate.file, j.candidate.pointer, j.candidate.op, j.candidate.value]);
-  assert.deepEqual(accepted, [["src/twin/shapes/customer.json", "/tax_exempt", "set", "none"]]);
+  assert.deepEqual(accepted, [["src/twin/shapes/customer.json", "/tax_exempt", "set", "reverse"]]);
   assert.deepEqual([plan.gate.blocked, plan.gate.rejected], [[], []]);
   assert.equal(plan.gate.after.trainDivergences, 0);
   assert.ok(plan.gate.before.trainDivergences > 0);
   assert.ok(plan.gate.after.heldOut.L3.k > plan.gate.before.heldOut.L3.k, "the held-out customers match too");
   assert.equal(plan.applied, undefined);
-  assert.match(planText(plan), /^accepted:\n {2}src\/twin\/shapes\/customer\.json \/tax_exempt set "none" · /m);
+  assert.match(planText(plan), /^accepted:\n {2}src\/twin\/shapes\/customer\.json \/tax_exempt set "reverse" · /m);
   assert.equal(git("status", "--porcelain"), "", "the plan writes nothing");
 
   writeFileSync(join(repo, "src/twin/shapes/customer.json"), readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8") + " ");
@@ -169,13 +174,13 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   git("checkout", "--", "src/twin/shapes/customer.json");
 
   const done = align({ repo, dataDir: data, runId: "run-apply", apply: true });
-  assert.equal(JSON.parse(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "none");
+  assert.equal(JSON.parse(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "reverse");
   assert.match(git("log", "-1", "--format=%B"), /^align: 1 automatic patches \(train Δ -\d+ divergences, L3 \+[\d.]+ pts; held-out Δ L3 \+[\d.]+ pts\)\n\nSealed log run run-apply /);
   assert.equal(done.applied?.commit, git("rev-parse", "HEAD"));
   assert.equal(git("status", "--porcelain"), "");
   const log = readJsonl<LogEntry>(logPath(data));
   assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 2 });
   assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [["patch", "run-apply", "automatic", "applied"], ["gate", "run-apply", undefined, undefined]]);
-  assert.deepEqual(log[0]!.data.edit, { file: "src/twin/shapes/customer.json", pointer: "/tax_exempt", op: "set", value: "none" });
+  assert.deepEqual(log[0]!.data.edit, { file: "src/twin/shapes/customer.json", pointer: "/tax_exempt", op: "set", value: "reverse" });
   assert.equal(log[0]!.data.oracle.oracleSeqs, oracle.length);
 });
