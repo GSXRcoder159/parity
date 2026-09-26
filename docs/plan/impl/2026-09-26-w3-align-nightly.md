@@ -12,6 +12,21 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §3.3–§3.5, §5 W
 - **Sandbox (0001 C2).** Every sandbox traffic path uses the budget gate and the circuit breaker, and runs at ≤10 req/s on the nightly path.
 - Do not create public resources: no npm publish, no public Pages, no repo visibility changes. Everything public waits for counsel (B5).
 
+## Task 0: Scaffold cleanup batch (before freeze)
+
+**Paths:** `src/twin/errors.ts`, `src/twin/server.ts`, `src/twin/expand.ts`, `src/twin/list.ts`, `src/twin/webhooks.ts`, `src/twin/main.ts`, `src/twin/util.ts`, `src/twin/resources/*.ts`, `Dockerfile`, `test/twin-*.test.ts`
+
+These are bugs that the W2 reviews confirmed. Fixing them is scaffold work, allowed before the `twin-scaffold-v0` tag. Behavior guesses that no observation supports are **not** in this batch; the align loop settles them.
+1. `renderError`: `doc_url` uses hyphens (`https://stripe.com/docs/error-codes/card-declined` for code `card_declined`), as observed in the W0 recording. An unfilled `{placeholder}` in `param` or `message` throws a programming error instead of rendering literally. Add a test that renders every catalog key used by the resources with its vars.
+2. `server.ts`: skip `expand` when the result status is ≥400. `listen()` rejects on the server `error` event (port in use → `main` prints one line and exits 1).
+3. `expand.ts`: never expand `id`. A path whose value is not a string id that resolves to a stored object → `expand_invalid`. This covers nested hashes such as `invoice_settings`.
+4. `list.ts` search: a clause matches only when the field exists, and `'null'` is compared as the literal string, never matched against `null` or absent.
+5. `webhooks.ts`: each delivery attempt times out after 10 s (`AbortSignal.timeout`) and counts as a failed attempt. Endpoint matching lives in one function shared with `store.ts`.
+6. `main.ts`: on SIGTERM/SIGINT, stop accepting connections, close idle ones, and let in-flight requests finish (max 5 s) before exiting. Webhook retries never keep the process alive (`unref` timers).
+7. Move the shared helpers (`live`, `assign`, `diff`, `isHash`, `checkAttached`/`checkPm`) out of `resources/customers.ts` and `resources/subscriptions.ts` into `src/twin/util.ts`, with no behavior change.
+8. `Dockerfile`: pin `node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402`.
+All twin tests and `npx tsc` pass.
+
 ## Task 1: Integration: twin subcommand, error-key header, scaffold freeze
 
 **Paths:** `src/cli.ts`, `src/bench/run.ts`, `src/twin/server.ts`, `test/cli.test.ts`, `test/run.test.ts`, `test/twin-core.test.ts`, `docs/plan/STATUS.md`
@@ -19,12 +34,13 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §3.3–§3.5, §5 W
 1. Add a `paritybench twin [--port] [--host]` subcommand that calls `main` from `src/twin/main.ts`. Add a `README` usage line in `help`.
 2. The twin adds the response header `Parity-Error-Key: <catalog key>` on every error response. The runner adds `parity-error-key` to its recorded `resHeaders` subset. Real Stripe never sends it, so it can never be a divergence: headers are not compared.
 3. Add `paritybench score-twin --oracle <file> [--templates …] [--json out.json]`. It starts the twin in-process on an ephemeral port, runs the oracle's corpus against it with `Parity-Now` per sequence (the W1b `headersFor`), compares against the oracle (normalized, with `--noise` optional), and writes the SeqResults plus the Score as JSON (values kept, because this file is private working data) plus a Markdown summary to stdout. On the full ~520-sequence corpus it must finish in under 60 s on a laptop. Measure it and put the timing in the report.
-4. Run `score-twin` on oracle v1 and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Then tag `twin-scaffold-v0` with `git tag -a`.
+(The day-0 score and the scaffold freeze move to Task 2 step 0, because they need oracle v1 from the W1b plan.)
 
 ## Task 2: Align core: triage, localization, mechanical patches, held-out gate, sealed log
 
 **Paths:** `src/align/triage.ts`, `src/align/patch.ts`, `src/align/gate.ts`, `src/align/log.ts`, `src/align/index.ts`, `src/cli.ts`, `test/align-*.test.ts`
 
+- **Step 0: day-0 and freeze.** Once `<dataDir>/oracle.jsonl` holds oracle v1 (≥500 sequences, from the W1b plan), run `score-twin` on it and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Log it as the first `score` entry. Then tag `twin-scaffold-v0` with `git tag -a`.
 - **Triage** (deterministic, `triage.ts`). Input: SeqResults of twin vs oracle, plus noise keys. For each divergence, record its class (existing classes; `NONDETERMINISTIC` if in noise) and its **locus**:
   - **Object field:** walk the oracle body from the divergent path up to the nearest object with an `object` field. That gives `{objectType, fieldPath}`, e.g. `subscription` + `billing_mode.type`.
   - **Error field:** the twin's `parity-error-key` header plus the error field (`message`, `code`, `param`, `type`, status).
