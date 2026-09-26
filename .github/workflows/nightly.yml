@@ -24,6 +24,7 @@ jobs:
         with:
           path: parity
           persist-credentials: false
+          fetch-depth: 0 # the nightly relands a pending branch only when it finds the align commit it cites (src/nightly.ts reland())
       - uses: actions/checkout@v4
         with:
           repository: GSXRcoder159/parity-data

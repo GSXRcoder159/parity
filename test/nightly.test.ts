@@ -418,11 +418,27 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
     assert.deepEqual(waiting, [["patch", "automatic"], ["gate", undefined]], "the pending branch holds them");
     const held = originLog(pending).filter((e) => `nightly/pending-${e.runId}` === pending).map((e) => e.hash);
 
-    // (3) The next night runs on a fresh checkout (the runner that failed is gone): it relands them first.
+    // (3) The next night runs on a fresh checkout (the runner that failed is gone). First a shallow parity clone, after
+    // someone pushed on top of the align commit: it cannot tell whether the commit is on origin, so the branch (the only
+    // copy of the entries) is left in place.
     git(data, "fetch", "-q", "origin");
     git(data, "reset", "-q", "--hard", "origin/main");
     git(data, "clean", "-qfd");
-    const r = await nightly({ repo, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-07T07:00:00Z") });
+    const other = join(tmp, "other");
+    execFileSync("git", ["clone", "-q", parityOrigin, other]);
+    writeFileSync(join(other, "NOTES.md"), "later\n");
+    git(other, "add", "NOTES.md");
+    git(other, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "later");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    const shallow = join(tmp, "shallow");
+    execFileSync("git", ["clone", "-q", "--depth", "1", `file://${parityOrigin}`, shallow]);
+    git(shallow, "config", "user.email", "test@example.com");
+    git(shallow, "config", "user.name", "test");
+    await nightly({ repo: shallow, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-07T07:00:00Z") });
+    assert.equal(pendingRefs(), pending, "left for a full checkout");
+    assert.ok(!originLog().some((e) => e.data.relanded), "nothing relanded");
+    // Then a full clone: it relands them first.
+    const r = await nightly({ repo, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-08T07:00:00Z") });
     assert.equal(pendingRefs(), "", "the pending branch is deleted once landed");
     // Run (2)'s entries, all of them (its refusal note and score entry too), relanded with the branch and original hash.
     const relanded = originLog().filter((e) => e.data.relanded);

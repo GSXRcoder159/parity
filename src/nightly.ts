@@ -244,7 +244,8 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
  * The first step of a night: for each nightly/pending-<runId> branch on the data repo's origin (land()), re-append its
  * run's entries when they are missing from the log and its align commit is on this repo's origin (same data and ts, a
  * new place in the chain, `relanded` naming the branch and the original hash), commit and push; then delete the branch.
- * A branch whose align commit never reached origin is deleted unread: its entries never landed.
+ * A branch whose align commit never reached origin is deleted unread: its entries never landed. In a shallow clone a
+ * commit it does not have decides nothing: the branch, the only copy of its entries, is left for a full checkout.
  */
 export function reland(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run }): string[] {
   const { data, run } = o;
@@ -253,6 +254,7 @@ export function reland(o: { data: string; repo: string; branch: string; date: st
   if (!refs.length) return [];
   git(data, "pull", "-q", "--rebase", "--autostash");
   git(o.repo, "fetch", "-q", "origin", o.branch);
+  const shallow = git(o.repo, "rev-parse", "--is-shallow-repository") === "true";
   const log = logPath(data);
   const relanded: string[] = [];
   for (const ref of refs) {
@@ -261,6 +263,16 @@ export function reland(o: { data: string; repo: string; branch: string; date: st
     git(data, "fetch", "-q", "origin", ref);
     const theirs = git(data, "show", "FETCH_HEAD:align/log.jsonl").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as LogEntry).filter((e) => e.runId === r);
     const commit = theirs.find((e) => e.kind === "gate")?.data.commit;
+    let known = true;
+    try {
+      git(o.repo, "cat-file", "-e", `${String(commit)}^{commit}`);
+    } catch {
+      known = false;
+    }
+    if (!known && shallow) {
+      console.error(`nightly: ${ref} cites align commit ${String(commit)}, which this shallow clone of the parity repo does not have: left for a full checkout`);
+      continue;
+    }
     let onOrigin = false;
     try {
       git(o.repo, "merge-base", "--is-ancestor", String(commit), `origin/${o.branch}`);
