@@ -329,10 +329,13 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
 
   // 6. The public-safe curve point and scores file, then a `publish` entry: the next night's surface-added window starts here.
   const curveFile = join(root, "site/data/curve.json");
-  // A second run on the same date replaces that date's point (one point per night on the chart).
-  const curve = (existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number }[]) : []).filter((p) => p.date !== date);
+  // A second run on the same date replaces that date's point (one point per night on the chart) and keeps its
+  // annotations: the first run's surface-added entries precede its publish entry, so surfaceAdded() no longer returns them.
+  const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; events?: string[] }[]) : [];
+  const curve = points.filter((p) => p.date !== date);
   const last = curve.at(-1)?.oracleSeqs; // points before W4 do not carry it: no comparison
-  const events = [...surfaceAdded(log), ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : [])];
+  const fresh = [...surfaceAdded(log), ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : [])];
+  const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
   const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
   writeJson(curveFile, [...curve, point]);
   writeJson(join(root, `site/data/scores/${date}.json`), scores);

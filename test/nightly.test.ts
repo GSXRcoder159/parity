@@ -254,9 +254,18 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.match(git(repo, "log", "-1", "--format=%s"), /; noise ceiling L3 [\d.]+% \(the pair covers 6 of 9 sequences\); oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);
 
-    // A second run on the same date replaces that date's point.
-    await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T09:00:00Z") });
-    assert.deepEqual(site("curve.json").map((p: { date: string }) => p.date), ["2026-10-04", "2026-10-05"]);
+    // A second run on the same date replaces that date's point and keeps its annotations (deduplicated), adding the new ones.
+    appendLog(logPath(data), "manual", [{ kind: "patch", data: { class: "surface-added", status: "applied", note: "invoices", oracle: ORACLE } }]);
+    const r3 = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T09:00:00Z") });
+    assert.deepEqual(
+      site("curve.json").map((p: { date: string; events: string[] }) => [p.date, p.events]),
+      [
+        ["2026-10-04", ["surface-added: test clocks"]],
+        ["2026-10-05", ["surface-added: proration", "oracle expanded: 6→9", "surface-added: invoices"]],
+      ],
+    );
+    assert.deepEqual(r3.events, ["surface-added: proration", "oracle expanded: 6→9", "surface-added: invoices"]);
+    assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").at(-1)!.data.events, r3.events);
     assert.deepEqual(clean(), ["", ""]);
   } finally {
     for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
