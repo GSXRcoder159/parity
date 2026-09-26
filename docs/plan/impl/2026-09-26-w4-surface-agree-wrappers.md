@@ -67,7 +67,7 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §2.1, §3.1 (`parit
 - Validate on train #19 and #11. Log surface-added.
 - **Also (gaps found by H4, W4 Task 8):**
   - (a) Form booleans also accept `True`/`False`, which the official stripe-python 11.x sends (captured by H4). This change is in `src/twin/validate.ts`; add that file to your paths. Mark it "unvalidated until B1" in the report.
-  - (b) Subscription price swaps across billing intervals (e.g. monthly → annual) reset the billing cycle anchor to now and prorate per the docs. This is in `src/twin/resources/subscriptions.ts` and `src/twin/billing.ts`; add those paths.
+  - (b) Subscription price swaps across billing intervals (e.g. monthly → annual). **Ruled behavior (flexible billing mode, the mode the pinned version creates):** the swap is accepted only with an explicit `billing_cycle_anchor=now`, which restarts every item's period now on its own interval and prorates per the docs. Without the anchor the twin answers `not_implemented`: flexible mode never resets the anchor by itself (docs: billing-mode/compare) and how the new period then aligns is unobserved, so it stays refused until B1 lets us record it on the sandbox (STATUS W4: "Interval swap without anchor: verify on sandbox after B1"). This is in `src/twin/resources/subscriptions.ts` and `src/twin/billing.ts`; add those paths.
   - Log both in the same surface-added entry.
 
 ## Task 4 (surface-added): Test clocks and clock templates #27–#30
