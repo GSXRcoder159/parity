@@ -1,0 +1,48 @@
+name: nightly
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC
+  workflow_dispatch:
+permissions:
+  contents: write # align --apply commits and the public-safe files are pushed; align --assist pushes branches
+  pull-requests: write # align --assist opens draft PRs; merged ones are listed with gh
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: parity
+    steps:
+      # Siblings under the workspace: the raw data never sits inside this repo's working tree (decision 0001 C3).
+      - uses: actions/checkout@v4
+        with:
+          path: parity
+      - uses: actions/checkout@v4
+        with:
+          repository: GSXRcoder159/parity-data
+          token: ${{ secrets.PARITY_DATA_TOKEN }}
+          path: parity-data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: parity/package-lock.json
+      - run: npm ci
+      - name: Bot identity for commits in both repos
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: paritybench nightly
+        env:
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # optional: without it the assisted pass is skipped and logged
+          PARITY_DATA_DIR: ${{ github.workspace }}/parity-data
+          GH_TOKEN: ${{ github.token }}
+        # Commits and pushes the data repo itself; commits the public-safe files (and the budget ledgers) here.
+        run: node src/cli.ts nightly
+      - name: Push this repo
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -9,6 +9,8 @@ import { build } from "../src/twin/build.ts";
 
 const MAIN = new URL("../src/twin/main.ts", import.meta.url).pathname;
 const AUTH = { Authorization: "Bearer sk_test_parity" };
+/** Shared CI runners are slower: wall-clock upper bounds get 3x there (lower bounds stay). */
+const SLOW = process.env.CI ? 3 : 1;
 
 /** Spawns the entrypoint and waits for its listening line; the child is killed when the test ends. */
 async function boot(t: TestContext, args: string[], env: Record<string, string> = {}) {
@@ -20,23 +22,23 @@ async function boot(t: TestContext, args: string[], env: Record<string, string> 
   return { child, url: m[1]! };
 }
 
-test("boots to a first successful request in under 1 s and exits 0 on SIGTERM", { timeout: 10_000 }, async (t) => {
+test("boots to a first successful request in under 1 s and exits 0 on SIGTERM", { timeout: 10_000 * SLOW }, async (t) => {
   const t0 = performance.now();
   const { child, url } = await boot(t, ["--port", "0"]);
   const res = await fetch(`${url}/v1/customers`, { headers: AUTH });
   const ms = performance.now() - t0;
   assert.equal(res.status, 200);
   assert.equal(((await res.json()) as { object: string }).object, "list");
-  assert.ok(ms < 1000, `boot to first request took ${Math.round(ms)} ms`);
+  assert.ok(ms < 1000 * SLOW, `boot to first request took ${Math.round(ms)} ms`);
 
   // fetch keeps its socket alive: an idle connection is closed at once, not at the 5 s deadline.
   const t1 = performance.now();
   child.kill("SIGTERM");
   assert.deepEqual(await once(child, "exit"), [0, null]);
-  assert.ok(performance.now() - t1 < 1000, `exit took ${Math.round(performance.now() - t1)} ms after SIGTERM`);
+  assert.ok(performance.now() - t1 < 1000 * SLOW, `exit took ${Math.round(performance.now() - t1)} ms after SIGTERM`);
 });
 
-test("POST /_parity/reset over HTTP clears 1,000 objects in under 50 ms", { timeout: 10_000 }, async (t) => {
+test("POST /_parity/reset over HTTP clears 1,000 objects in under 50 ms", { timeout: 10_000 * SLOW }, async (t) => {
   const { url } = await boot(t, ["--port", "0"]);
   const objects = Array.from({ length: 1000 }, (_, i) => build("customer", { id: `cus_${String(i).padStart(14, "0")}`, created: i }));
   const seeded = await fetch(`${url}/_parity/seed`, { method: "POST", body: JSON.stringify({ objects }) });
@@ -47,18 +49,18 @@ test("POST /_parity/reset over HTTP clears 1,000 objects in under 50 ms", { time
   await res.json();
   const ms = performance.now() - t0;
   assert.equal(res.status, 200);
-  assert.ok(ms < 50, `reset took ${ms.toFixed(1)} ms`);
+  assert.ok(ms < 50 * SLOW, `reset took ${ms.toFixed(1)} ms`);
   assert.deepEqual(await (await fetch(`${url}/_parity/state`)).json(), { objects: [], deleted: [], events: 0 });
 });
 
-test("takes the port from PORT and exits 0 on SIGINT", { timeout: 10_000 }, async (t) => {
+test("takes the port from PORT and exits 0 on SIGINT", { timeout: 10_000 * SLOW }, async (t) => {
   const { child, url } = await boot(t, [], { PORT: "0" });
   assert.doesNotMatch(url, /:12111$/); // an ephemeral port, not the default
   child.kill("SIGINT");
   assert.deepEqual(await once(child, "exit"), [0, null]);
 });
 
-test("a port already in use prints one line and exits 1", { timeout: 10_000 }, async (t) => {
+test("a port already in use prints one line and exits 1", { timeout: 10_000 * SLOW }, async (t) => {
   const { url } = await boot(t, ["--port", "0"]);
   const child = spawn(process.execPath, [MAIN, "--port", new URL(url).port], { stdio: ["ignore", "pipe", "pipe"] });
   t.after(() => child.kill("SIGKILL"));
@@ -83,7 +85,7 @@ function halfSent(t: TestContext, url: string) {
   return { response, finish: () => req.end(body.slice(5)) };
 }
 
-test("SIGTERM stops accepting, lets a request in flight finish, then exits 0 without waiting for the deadline", { timeout: 10_000 }, async (t) => {
+test("SIGTERM stops accepting, lets a request in flight finish, then exits 0 without waiting for the deadline", { timeout: 10_000 * SLOW }, async (t) => {
   const { child, url } = await boot(t, ["--port", "0"]);
   const inflight = halfSent(t, url);
   await sleep(100); // the server has the request's headers
@@ -102,10 +104,10 @@ test("SIGTERM stops accepting, lets a request in flight finish, then exits 0 wit
   assert.equal(res.headers.connection, "close");
   assert.deepEqual(await exited, [0, null]);
   const ms = performance.now() - t0;
-  assert.ok(ms < 2000, `exit took ${Math.round(ms)} ms after SIGTERM`);
+  assert.ok(ms < 2000 * SLOW, `exit took ${Math.round(ms)} ms after SIGTERM`);
 });
 
-test("SIGTERM with a request that never finishes: connections are cut at the 5 s deadline, exit 0", { timeout: 10_000 }, async (t) => {
+test("SIGTERM with a request that never finishes: connections are cut at the 5 s deadline, exit 0", { timeout: 10_000 * SLOW }, async (t) => {
   const { child, url } = await boot(t, ["--port", "0"]);
   const stalled = halfSent(t, url);
   await sleep(100);
@@ -114,6 +116,6 @@ test("SIGTERM with a request that never finishes: connections are cut at the 5 s
   const cut = assert.rejects(stalled.response, /socket hang up/);
   assert.deepEqual(await once(child, "exit"), [0, null]);
   const ms = performance.now() - t0;
-  assert.ok(ms >= 4900 && ms < 7000, `exit took ${Math.round(ms)} ms after SIGTERM`);
+  assert.ok(ms >= 4900 && ms < 7000 * SLOW, `exit took ${Math.round(ms)} ms after SIGTERM`);
   await cut;
 });

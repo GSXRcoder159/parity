@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: test/twin-shapes.test.ts runs `git archive twin-scaffold-v0`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # engines >=22.18: type stripping
+          cache: npm
+      - run: npm ci
+      - run: npx tsc -p tsconfig.json
+      # Actions sets CI=true: wall-clock upper bounds in the tests get 3x slack.
+      - run: node --test test/*.test.ts

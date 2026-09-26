@@ -27,6 +27,7 @@ const USAGE = `usage:
   paritybench twin [--port 12111] [--host 127.0.0.1]
   paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
   paritybench align [--apply | --assist] [--max-batches N]
+  paritybench nightly [--dry-run]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
@@ -51,9 +52,18 @@ const USAGE = `usage:
     locus (top 3); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
     merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
     call's tokens and cost_usd go to budget/llm.jsonl; daily cap $15 (UTC), PARITY_LLM_CAP_USD may only lower it.
+  nightly: record today's slice (--slice <UTC day of week>/7 of templates x seeds 1-20) on the sandbox at <=10 req/s, and on
+    Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a
+    sealed-log score entry) with the noise ceiling from the latest noise-a/noise-b pair; align --apply; align --assist;
+    log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json; drift
+    (drift/<date>.md + site/data/drift.json, or a note); commit and push the data repo, commit the public-safe files here
+    (the workflow pushes). A refused or aborted recording (budget gate, circuit breaker) is noted and the night goes on
+    with the existing oracle (curve point oracleRefreshed: false). Run from the repo root.
+    --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
+    and writes the public files to a temp dir.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
-const LEDGER = "budget/reads.jsonl";
+export const LEDGER = "budget/reads.jsonl";
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const FLAGS: Record<string, string[]> = {
   record: ["target", "name", "templates", "seeds", "slice", "concurrency", "chunk", "chunk-wait", "out"],
@@ -63,11 +73,12 @@ const FLAGS: Record<string, string[]> = {
   twin: ["port", "host"],
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
   align: ["apply", "assist", "max-batches"],
+  nightly: ["dry-run"],
 };
 
 class UsageError extends Error {}
 
-/** `--flag value` pairs (`--raw`, `--apply`, `--assist` take none) and positionals; unknown flags and missing values are usage errors. */
+/** `--flag value` pairs (`--raw`, `--apply`, `--assist`, `--dry-run` take none) and positionals; unknown flags and missing values are usage errors. */
 function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -79,7 +90,7 @@ function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>
     }
     const name = a.slice(2);
     if (!FLAGS[cmd]!.includes(name)) throw new UsageError(`unknown flag ${a} for ${cmd}`);
-    if (name === "raw" || name === "apply" || name === "assist") {
+    if (name === "raw" || name === "apply" || name === "assist" || name === "dry-run") {
       flags[name] = "1";
       continue;
     }
@@ -148,6 +159,8 @@ const isSandbox = (t: Target): boolean => new URL(t.baseUrl).hostname === "api.s
 
 interface RecordOpts {
   concurrency: number;
+  /** Read ledger (default LEDGER, relative to the cwd). */
+  ledger?: string;
   runId: string;
   out: string;
   headersFor?: (seq: Sequence) => Record<string, string>;
@@ -160,15 +173,16 @@ interface RecordOpts {
  * Runs `seqs` against `target` (budget-gated and ledgered on the sandbox), writes the recordings, prints a summary.
  * Chunked runs ledger and rewrite `out` after every chunk. A circuit-breaker abort is ledgered and written, then thrown.
  */
-async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Promise<Recording[]> {
+export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Promise<Recording[]> {
   if (!seqs.length) throw new Error("no sequences to run");
+  const ledger = o.ledger ?? LEDGER;
   // By host, not name: `--target https://api.stripe.com` or `--name sandbox` must not dodge (or fake) the budget.
   const sandbox = isSandbox(target);
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
   if (sandbox) {
     const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
     const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep;
-    const refusal = budgetRefusal(readLedger(LEDGER), projected, new Date().toISOString(), budget);
+    const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget);
     if (refusal) throw new Error(refusal);
     console.log(`projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes)`);
   }
@@ -216,8 +230,8 @@ async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Pr
     if (sandbox) {
       const date = new Date().toISOString();
       const account = process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown";
-      appendLedger(LEDGER, { date, account, target: target.name, runId: o.runId, gets: summary.gets, posts: summary.posts, deletes: summary.deletes, charges });
-      console.log(`rolling 30-day sandbox GETs: ${rollingGets(readLedger(LEDGER), date)} / ${budget} (ledger ${LEDGER})`);
+      appendLedger(ledger, { date, account, target: target.name, runId: o.runId, gets: summary.gets, posts: summary.posts, deletes: summary.deletes, charges });
+      console.log(`rolling 30-day sandbox GETs: ${rollingGets(readLedger(ledger), date)} / ${budget} (ledger ${ledger})`);
     }
     if (summary.aborted) {
       throw new Error(`${summary.aborted}; ${seqs.length - recordings.length} sequences not run; recordings flagged (status 0, eventsError) in ${o.out}`);
@@ -227,9 +241,8 @@ async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Pr
   return recordings;
 }
 
-/** `oracle build`: writes <dataDir>/oracle.jsonl and prints counts per template and the date range. */
-function oracleBuild(maxAgeDays: number | undefined): void {
-  const dir = dataDir();
+/** `oracle build`: writes <dir>/oracle.jsonl; returns counts per template and the date range. */
+export function oracleBuild(maxAgeDays: number | undefined, dir = dataDir()): string {
   const b = buildOracle(dir, maxAgeDays === undefined ? -Infinity : Date.now() - maxAgeDays * 86_400_000);
   const excluded = `${b.contaminated} contaminated (a step with status 0 or 429, or eventsError)${maxAgeDays === undefined ? "" : `, ${b.tooOld} older than ${maxAgeDays} days`}`;
   if (!b.oracle.length) throw new Error(`no eligible sandbox recordings under ${join(dir, "runs")} (${b.sandbox} scanned; excluded ${excluded})`);
@@ -238,21 +251,19 @@ function oracleBuild(maxAgeDays: number | undefined): void {
   const perTemplate = new Map<string, number>();
   for (const r of b.oracle) perTemplate.set(r.template, (perTemplate.get(r.template) ?? 0) + 1);
   const started = b.oracle.map((r) => r.startedAt).sort();
-  console.log(
-    [
-      `oracle: ${b.oracle.length} sequences, newest clean per sequence, from ${b.sandbox} sandbox recordings in ${b.files} files; excluded ${excluded}`,
-      ...[...perTemplate].map(([t, n]) => `  ${t} ${n}`),
-      `oldest ${started[0]} · newest ${started.at(-1)}`,
-      `wrote ${out}`,
-    ].join("\n"),
-  );
+  return [
+    `oracle: ${b.oracle.length} sequences, newest clean per sequence, from ${b.sandbox} sandbox recordings in ${b.files} files; excluded ${excluded}`,
+    ...[...perTemplate].map(([t, n]) => `  ${t} ${n}`),
+    `oldest ${started[0]} · newest ${started.at(-1)}`,
+    `wrote ${out}`,
+  ].join("\n");
 }
 
 /** Recordings named for error messages (a file path). */
-type Side = [name: string, recordings: Recording[]];
+export type Side = [name: string, recordings: Recording[]];
 
 /** Normalizes (or not), pairs each side with the oracle by `seq` (oracle order), compares and scores; `noise` is the floor and marks NONDETERMINISTIC. */
-function compareSets(oracleRecs: Recording[], target: Side, noise: Side | undefined, raw: boolean): Pick<ReportInput, "score" | "noise" | "normalization" | "results"> {
+export function compareSets(oracleRecs: Recording[], target: Side, noise: Side | undefined, raw: boolean): Pick<ReportInput, "score" | "noise" | "normalization" | "results"> {
   const norm = raw ? normalizeRaw : normalizeRecording;
   const oracle = oracleRecs.map(norm);
   const paired = ([name, recs]: Side): Recording[] => {
@@ -350,7 +361,7 @@ export async function main(argv: string[]): Promise<number> {
     const { flags, positional } = parseArgs(cmd, rest);
     if (cmd === "oracle") {
       if (positional.join(" ") !== "build") throw new UsageError(`expected "oracle build", got "oracle ${positional.join(" ")}"`);
-      oracleBuild(num(flags, "max-age-days"));
+      console.log(oracleBuild(num(flags, "max-age-days")));
       return 0;
     }
     if (positional.length !== (cmd === "bench" ? 1 : 0)) throw new UsageError(`unexpected arguments: ${positional.join(" ") || "(missing <baseURL>)"}`);
@@ -370,6 +381,12 @@ export async function main(argv: string[]): Promise<number> {
         const { assist, assistText } = await import("./align/assist.ts");
         console.log(assistText(await assist(r, { repo: REPO_ROOT, dataDir: dataDir(), runId: r.runId })));
       }
+      return 0;
+    }
+
+    if (cmd === "nightly") {
+      const { nightly, nightlyText } = await import("./nightly.ts");
+      console.log(nightlyText(await nightly({ repo: REPO_ROOT, dataDir: dataDir(), dryRun: flags["dry-run"] === "1" })));
       return 0;
     }
 
@@ -432,4 +449,5 @@ function badTemplate(name: string): never {
   throw new UsageError(`unknown template "${name}"; known: ${TEMPLATES.map((t) => t.name).join(", ")}`);
 }
 
-if (import.meta.main) process.exitCode = await main(process.argv.slice(2));
+// No top-level await: nightly.ts imports this module, and a pending await here would deadlock that import.
+if (import.meta.main) void main(process.argv.slice(2)).then((code) => (process.exitCode = code));
