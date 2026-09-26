@@ -122,11 +122,12 @@ test("nightly on a refusing sandbox: --dry-run writes nothing; the real run scor
 
     // Step 1 refused at the budget gate: noted, the noise pair not attempted, the oracle not refreshed.
     assert.match(r.slice.refused ?? "", /^refusing to run: 0 sandbox GETs in the last 30 days \+ \d+ projected for this run = \d+ > read budget 0/);
-    assert.deepEqual([r.slice.spec, r.slice.seqs, r.slice.recorded], ["0/7", 75, 0]);
-    assert.deepEqual(r.noisePair, { seqs: 52, recorded: false });
+    const corpus = TEMPLATES.length * 20; // slice 0/7: indices 0, 7, 14, …
+    assert.deepEqual([r.slice.spec, r.slice.seqs, r.slice.recorded], ["0/7", Math.ceil(corpus / 7), 0]);
+    assert.deepEqual(r.noisePair, { seqs: TEMPLATES.length * 2, recorded: false });
     assert.equal(r.oracleRefreshed, false);
     assert.equal(r.oracle.oracleSeqs, 6);
-    assert.match(text, /^slice 0\/7: 75 sequences · NOT RECORDED: refusing to run/m);
+    assert.match(text, /^slice 0\/7: \d+ sequences · NOT RECORDED: refusing to run/m);
     assert.match(text, /NOT refreshed tonight \(curve point oracleRefreshed: false\)/);
 
     // The sealed log: the refusal, the score (with the noise floor), align's gate, assist skipped, one merged PR, drift.
