@@ -2,7 +2,7 @@
 // blocked-by-code candidates), the LLM sees the behavior module owning the route, a normalized counterexample from the
 // smallest train sequence showing the locus, and the divergences; it returns one replaced file under src/twin/. The
 // reply is gated in a temp copy (held-out L3 must not drop, train divergences must fall, one of the locus's own must
-// go). A pass becomes a branch align/assisted-<date>-<n> built in a separate worktree, pushed, and a draft PR; the
+// go) inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no pass. A pass becomes a branch align/assisted-<date>-<n> built in a separate worktree, pushed, and a draft PR; the
 // sealed log gets a `patch` entry {class: "assisted", status: "proposed"}. Nothing here merges: merging is a review
 // step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM.
 import { execFileSync } from "node:child_process";
@@ -15,15 +15,15 @@ import { normalizeRecording } from "../bench/normalize.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
 import type { Route } from "../twin/server.ts";
-import { evalOf, scores, scoreTwinIn, type Eval, type Scores } from "./gate.ts";
+import { dockerCheck, evalOf, scores, scoreTwinIn, type Eval, type Run, type Scores } from "./gate.ts";
 import { split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
 import { FRAUD_OR_RISK, locusKey } from "./patch.ts";
 import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
 
+export type { Run } from "./gate.ts";
 /** Runs a command in `cwd` and returns its trimmed stdout (injectable: tests fake `gh`, `docker` and failing pushes). */
-export type Run = (cmd: string, args: string[], cwd: string) => string;
 // maxBuffer: `git show` of the sealed log (reland) outgrows the 1 MB default.
 export const sh: Run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 }).trim();
 
@@ -140,13 +140,13 @@ export function parseReply(text: string, allowed: string[]): { file: string; con
 const passes = (before: Eval, after: Eval, ids: string[]): boolean =>
   ids.some((id) => !after.ids.has(id)) && after.heldOut.L3.k >= before.heldOut.L3.k && after.trainDivergences < before.trainDivergences;
 
-/** score-twin with `file` replaced, in a temp copy of the repo. */
-function scoreWith(repo: string, oraclePath: string, file: string, content: string): Eval {
+/** score-twin with `file` replaced, in a temp copy of the repo, in the container (`run` runs docker). */
+function scoreWith(repo: string, oraclePath: string, file: string, content: string, run: Run): Eval {
   const tmp = mkdtempSync(join(tmpdir(), "parity-assist-"));
   try {
     for (const p of ["src", "templates", "package.json"]) cpSync(join(repo, p), join(tmp, p), { recursive: true });
     writeFileSync(join(tmp, file), content);
-    return evalOf(scoreTwinIn(tmp, oraclePath, []).json);
+    return evalOf(scoreTwinIn(tmp, oraclePath, [], false, run).json);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -218,7 +218,9 @@ const PR_BODY_MAX = 60_000;
 
 /**
  * The assisted pass on the plan `r` (whose baseline is the repo's HEAD). Without ANTHROPIC_API_KEY it only logs that it
- * was skipped. Stops at the LLM cost cap. Appends a `patch` entry per draft PR and one `note` entry for the run.
+ * was skipped; without docker running the pinned image it refuses, logged the same way, before any LLM call (LLM-written
+ * code never runs outside the container). Stops at the LLM cost cap. Appends a `patch` entry per draft PR and one `note`
+ * entry for the run.
  */
 export async function assist(
   r: AlignResult,
@@ -240,6 +242,14 @@ export async function assist(
   if (dirty) throw new Error(`refusing --assist: uncommitted changes the gate would score but the branch would not carry:\n${dirty}`);
   const v = verifyLog(log);
   if (!v.ok) throw new Error(`refusing --assist: the sealed log is broken: ${v.error}`);
+  try {
+    dockerCheck(run, o.repo);
+  } catch (e) {
+    const detail = String((e as { stderr?: string }).stderr || (e as Error).message).trim().split("\n")[0];
+    const res: AssistResult = { skipped: `refused: docker cannot run the pinned node image (${detail}); LLM-written code never runs outside its container`, clusters: all.length, cost_usd: 0, outcomes: [] };
+    note(res);
+    return res;
+  }
 
   const oraclePath = join(o.dataDir, "oracle.jsonl");
   const oracle = new Map(readJsonl<Recording>(oraclePath).filter((x) => !x.heldOut).map((x) => [x.seq, x]));
@@ -279,7 +289,7 @@ export async function assist(
     out.file = parsed.file;
     let after: Eval;
     try {
-      after = scoreWith(o.repo, oraclePath, parsed.file, parsed.content);
+      after = scoreWith(o.repo, oraclePath, parsed.file, parsed.content, run);
     } catch (e) {
       Object.assign(out, { result: "gate-failed", detail: (e as Error).message.slice(0, 400) });
       continue;

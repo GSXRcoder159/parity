@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { assist, assistText, parseReply, sh, type Run } from "../src/align/assist.ts";
+import { nodeImage } from "../src/align/gate.ts";
 import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
@@ -15,6 +16,7 @@ import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { createTwin } from "../src/twin/server.ts";
+import { fakeDocker } from "./fake-docker.ts";
 
 const REPO = resolve(import.meta.dirname, "..");
 const NOW = () => new Date("2026-09-26T12:00:00.000Z");
@@ -178,7 +180,10 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
   const replies = [`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${original}// a comment changes nothing\n\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`];
   const api = await fakeApi((n) => message(replies[n]!));
   const gh: string[][] = [];
-  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/7") : sh(cmd, args, cwd));
+  // docker: the fake runs the container's command on the host and records its argv (a real run: test/align-gate.test.ts).
+  const dockerCalls: string[][] = [];
+  const docker = fakeDocker(dockerCalls);
+  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/7") : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
   const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url };
   try {
     const ok = await assist(plan, { repo, dataDir: data, runId: "assist-1", env, run, now: NOW });
@@ -188,6 +193,11 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.ok(o!.gate!.after.trainDivergences < o!.gate!.before.trainDivergences);
     assert.ok(o!.gate!.after.heldOut.L3.k > o!.gate!.before.heldOut.L3.k, "the held-out customers match too");
     assert.match(assistText(ok), /^ {2}proposed · \d+ · customer description · src\/twin\/resources\/customers\.ts · \$0\.0070 · https:\/\/github\.com\/example\/parity\/pull\/7$/m);
+    // The LLM's file was scored only in the container: first a start check of the pinned image, then score-twin there.
+    assert.deepEqual(dockerCalls[0], ["run", "--rm", "--network", "none", nodeImage(), "node", "--version"]);
+    assert.equal(dockerCalls.length, 2);
+    assert.deepEqual(dockerCalls[1]!.slice(0, 4), ["run", "--rm", "--network", "none"]);
+    assert.deepEqual(dockerCalls[1]!.slice(dockerCalls[1]!.indexOf(nodeImage())), [nodeImage(), "node", "src/cli.ts", "score-twin", "--oracle", "/oracle.jsonl", "--json", "/out/score.json"]);
 
     // The prompt: the owning module, a train counterexample truncated after its first divergent step, the clean-room
     // rule; nothing from held-out sequences.
@@ -239,11 +249,23 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.match(capped.outcomes[0]!.detail!, /> cap \$0 /);
     assert.equal(api.requests.length, 2);
 
+    // No docker (or the pinned image does not start): refused before any LLM call, logged, no PR. LLM-written code
+    // never runs outside the container.
+    const noDocker: Run = (cmd, args, cwd) => {
+      if (cmd === "docker") throw Object.assign(new Error("Command failed: docker run"), { stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\n" });
+      return run(cmd, args, cwd);
+    };
+    const refused = await assist(plan, { repo, dataDir: data, runId: "assist-6", env, run: noDocker, now: NOW });
+    assert.deepEqual([refused.skipped, refused.outcomes, refused.cost_usd], ["refused: docker cannot run the pinned node image (Cannot connect to the Docker daemon at unix:///var/run/docker.sock.); LLM-written code never runs outside its container", [], 0]);
+    assert.equal(api.requests.length, 2, "no LLM call");
+    assert.equal(gh.length, 1, "no PR");
+    assert.match(assistText(refused), /^assist: refused: docker cannot run the pinned node image/);
+
     // gh refuses the PR (the repo does not let GitHub Actions create pull requests): pr-failed, and the branch it
     // pushed is deleted again, on origin and here.
     const refuse: Run = (cmd, args, cwd) => {
       if (cmd === "gh") throw new Error("gh: GitHub Actions is not permitted to create or approve pull requests");
-      return sh(cmd, args, cwd);
+      return cmd === "docker" ? docker(args) : sh(cmd, args, cwd);
     };
     const denied = await assist(plan, { repo, dataDir: data, runId: "assist-5", env, run: refuse, now: NOW });
     assert.deepEqual([denied.outcomes[0]!.result, denied.outcomes[0]!.branch], ["pr-failed", undefined]);
@@ -252,15 +274,17 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.equal(git("branch", "--list", "align/*"), "align/assisted-2026-09-26-1");
 
     const log = readJsonl<LogEntry>(logPath(data));
-    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 6 });
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 7 });
     assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [
       ["patch", "assist-1", "assisted", "proposed"],
       ["note", "assist-1", undefined, undefined],
       ["note", "assist-2", undefined, undefined],
       ["note", "assist-3", undefined, undefined],
       ["note", "assist-4", undefined, undefined],
+      ["note", "assist-6", undefined, undefined],
       ["note", "assist-5", undefined, undefined],
     ]);
+    assert.equal((log[5]!.data.assist as { skipped: string }).skipped, refused.skipped);
     assert.deepEqual([log[0]!.data.pr, log[0]!.data.branch, log[0]!.data.file], ["https://github.com/example/parity/pull/7", "align/assisted-2026-09-26-1", FILE]);
     assert.deepEqual((log[3]!.data.assist as { skipped?: string }).skipped, none.skipped);
   } finally {

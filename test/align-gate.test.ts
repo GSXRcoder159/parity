@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { applyEdits, gate, scoreTwinIn, type Eval } from "../src/align/gate.ts";
+import { sh } from "../src/align/assist.ts";
+import { applyEdits, gate, nodeImage, scoreTwinIn, type Eval, type Run } from "../src/align/gate.ts";
 import { align, planText } from "../src/align/index.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import type { Candidate, Edit } from "../src/align/patch.ts";
@@ -15,6 +16,7 @@ import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { wilson, type LevelScores } from "../src/bench/score.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { createTwin } from "../src/twin/server.ts";
+import { fakeDocker } from "./fake-docker.ts";
 
 const REPO = resolve(import.meta.dirname, "..");
 const levels = (l3: number): LevelScores => ({ L1: wilson(100, 100), L2: wilson(50, 100), L3: wilson(l3, 100), L4: wilson(0, 10) });
@@ -133,6 +135,70 @@ test("scoreTwinIn: the score-twin child (gate and assisted pass) gets PATH, HOME
       else process.env[k] = v;
     }
   }
+});
+
+test("scoreTwinIn with docker (the assisted pass): exactly this container: no network, read-only root and inputs, one writable output dir, no host env; a docker failure throws, never a fallback", () => {
+  const repo = mkdtempSync(join(tmpdir(), "pb-child-docker-"));
+  mkdirSync(join(repo, "src"));
+  mkdirSync(join(repo, "templates"));
+  writeFileSync(join(repo, "package.json"), '{ "type": "module" }\n');
+  writeFileSync(join(repo, "oracle.jsonl"), "{}\n");
+  writeFileSync(join(repo, "src/cli.ts"), 'import { writeFileSync } from "node:fs";\nwriteFileSync(process.argv[process.argv.indexOf("--json") + 1]!, JSON.stringify({ score: { argv: process.argv.slice(2) }, results: [] }));\n');
+  const calls: string[][] = [];
+  const cmds: string[] = [];
+  const run: Run = (cmd, args) => (cmds.push(cmd), fakeDocker(calls)(args));
+  const { json } = scoreTwinIn(repo, join(repo, "oracle.jsonl"), [], false, run);
+  assert.deepEqual(cmds, ["docker"]);
+  const [args] = calls;
+  const root = args![args!.indexOf("-v") + 1]!.split(":")[0]!;
+  const image = /^FROM\s+(\S+)/m.exec(readFileSync(join(REPO, "Dockerfile"), "utf8"))![1]!;
+  assert.match(image, /^node:22-alpine@sha256:[0-9a-f]{64}$/);
+  assert.equal(nodeImage(), image, "the Dockerfile's pinned image");
+  assert.deepEqual(args, [
+    "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+    "--user", `${process.getuid!()}:${process.getgid!()}`,
+    "-v", `${root}:/parity:ro`, "-v", `${realpathSync(join(repo, "oracle.jsonl"))}:/oracle.jsonl:ro`, "-v", `${root}/out:/out`, "-w", "/parity",
+    image, "node", "src/cli.ts", "score-twin", "--oracle", "/oracle.jsonl", "--json", "/out/score.json",
+  ]);
+  assert.ok(root.startsWith(realpathSync(tmpdir())) && root !== repo, "a temp copy is mounted, never the repo");
+  assert.ok(!args!.some((a) => /^(-e|--env|--env-file|--privileged|--network=host)$/.test(a)), "no host env, no privileges");
+  assert.deepEqual((json.score as unknown as { argv: string[] }).argv.slice(0, 1), ["score-twin"]);
+
+  // docker cannot start (or the container fails): the error surfaces, and nothing runs on the host instead.
+  const down: Run = () => {
+    throw Object.assign(new Error("Command failed: docker run"), { stderr: "Cannot connect to the Docker daemon" });
+  };
+  assert.throws(() => scoreTwinIn(repo, join(repo, "oracle.jsonl"), [], false, down), /^Error: gate: score-twin failed in its container: Cannot connect to the Docker daemon$/);
+});
+
+const dockerOk = (() => {
+  try {
+    return spawnSync("docker", ["image", "inspect", nodeImage()], { stdio: "ignore", timeout: 20_000 }).status === 0;
+  } catch {
+    return false;
+  }
+})();
+
+test("scoreTwinIn in the real container (docker and the pinned image present): the same score as the host child, and no network inside", { skip: !dockerOk && "docker or the pinned node image is not available", timeout: 180_000 }, async () => {
+  const CLOCK = "2026-03-01T00:00:00.000Z";
+  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "refund-full", "subscription-cancel-at-period-end"].includes(t.name)), [1]);
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "oracle", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const oracle = join(mkdtempSync(join(tmpdir(), "pb-docker-")), "oracle.jsonl");
+  writeJsonl(oracle, recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events) })));
+  const host = scoreTwinIn(REPO, oracle, [], true);
+  const boxed = scoreTwinIn(REPO, oracle, [], true, sh);
+  assert.deepEqual(boxed.json.score, host.json.score);
+  assert.equal(boxed.twin!.length, seqs.length);
+  assert.ok(boxed.json.score.overall.L1.n > 0);
+  // --network none: even a DNS lookup fails inside.
+  const probe = "require('node:dns').lookup('example.com', (e) => process.stdout.write(e ? e.code : 'resolved'))";
+  assert.match(sh("docker", ["run", "--rm", "--network", "none", nodeImage(), "node", "-e", probe], REPO), /^E[A-Z_]+$/);
 });
 
 test("applyEdits: JSON-pointer set/delete in shapes (2-space JSON) and errors.json (one entry per line, round-trips byte for byte)", () => {

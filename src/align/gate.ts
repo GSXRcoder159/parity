@@ -2,7 +2,7 @@
 // iff held-out L3 does not drop AND the train divergence count strictly falls. Greedy per-file batches; a batch that
 // fails is split (by which edits removed their own divergences, else in halves) down to single edits.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { SeqResult } from "../bench/compare.ts";
@@ -59,35 +59,70 @@ export interface ScoreJson {
  */
 const childEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
 
+/** Runs a command in `cwd`, returns its stdout, throws with its stderr on failure (assist.ts `Run`; tests fake docker). */
+export type Run = (cmd: string, args: string[], cwd: string) => string;
+
+/** The repo Dockerfile's digest-pinned node image (its FROM line): the Node the twin image runs. */
+export function nodeImage(): string {
+  const from = /^FROM\s+(\S+@sha256:[0-9a-f]{64})\s*$/m.exec(readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8"))?.[1];
+  if (!from) throw new Error("gate: the Dockerfile has no digest-pinned FROM line");
+  return from;
+}
+
 /**
- * `score-twin` on `oraclePath` from a temp copy of `repo` (src/, templates/, package.json) with `edits` applied, in a
- * child process with childEnv(); with `recordings`, also the twin's raw recordings.
- *
- * The child runs code an LLM may have written (the assisted pass), so it runs under Node's permission model: it reads
- * only the temp copy and the oracle file and writes only the temp copy, so it cannot read the data repo, other
- * recordings, git credentials in either checkout's .git/config, or /proc/<parent>/environ, and it cannot spawn
- * processes. ponytail: the permission model does not restrict the network, and the child needs the oracle (held-out
- * sequences included) to score: a hostile patch could send the oracle out. A container with --network none closes that
- * when the assisted pass runs unattended with a real key (B2).
+ * `docker run` arguments for score-twin on the repo copy `root` and `oracle`, writing only into `out`: no network,
+ * read-only root filesystem, no capabilities, no privilege gain, the caller's uid (so `out` is writable and the files
+ * come back owned by it), `root` and the oracle mounted read-only, `out` read-write. docker passes the container no
+ * host environment variable: it sees only the image's own (PATH, NODE_VERSION, …).
  */
-export function scoreTwinIn(repo: string, oraclePath: string, edits: Edit[], recordings = false): { json: ScoreJson; twin?: Recording[] } {
+export function dockerArgs(root: string, oracle: string, out: string, recordings: boolean): string[] {
+  return [
+    "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+    "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+    "-v", `${root}:/parity:ro`, "-v", `${oracle}:/oracle.jsonl:ro`, "-v", `${out}:/out`, "-w", "/parity",
+    nodeImage(), "node", "src/cli.ts", "score-twin", "--oracle", "/oracle.jsonl", "--json", "/out/score.json",
+    ...(recordings ? ["--recordings", "/out/twin.jsonl"] : []),
+  ];
+}
+
+/** Starts the pinned image with no network and returns its `node --version`: throws when docker cannot run it. */
+export const dockerCheck = (run: Run, cwd: string): string => run("docker", ["run", "--rm", "--network", "none", nodeImage(), "node", "--version"], cwd);
+
+/**
+ * `score-twin` on `oraclePath` from a temp copy of `repo` (src/, templates/, package.json) with `edits` applied; with
+ * `recordings`, also the twin's raw recordings. What runs it:
+ *
+ * - `docker` given (the assisted pass: the copy holds a file an LLM wrote): a container (dockerArgs) run through
+ *   `docker`. The LLM-written code can read only the repo copy and the oracle, write only an empty output directory, and
+ *   reach no network, host environment variable, credential, data repo or other recording. The oracle holds held-out
+ *   sequences, so without the network it cannot send them out. If docker fails, this throws: never a fallback.
+ * - otherwise (the mechanical gate: data-file edits, the repo's own code; align surface: committed code): a child
+ *   process under Node's permission model with childEnv(): it reads only the copy and the oracle, writes only the copy,
+ *   and cannot spawn processes. ponytail: the permission model does not restrict the network; this code is not an LLM's.
+ */
+export function scoreTwinIn(repo: string, oraclePath: string, edits: Edit[], recordings = false, docker?: Run): { json: ScoreJson; twin?: Recording[] } {
   const tmp = mkdtempSync(join(tmpdir(), "parity-gate-"));
   try {
     for (const p of ["src", "templates", "package.json"]) cpSync(join(repo, p), join(tmp, p), { recursive: true });
     applyEdits(tmp, edits);
     const oracle = existsSync(oraclePath) ? realpathSync(oraclePath) : resolve(oraclePath);
     const root = realpathSync(tmp); // the permission model compares resolved paths (macOS: /var -> /private/var)
-    const sandbox = ["--permission", `--allow-fs-read=${root}`, `--allow-fs-read=${oracle}`, `--allow-fs-write=${root}`];
-    const args = [...sandbox, join(root, "src/cli.ts"), "score-twin", "--oracle", oracle, "--json", join(root, "score.json")];
-    if (recordings) args.push("--recordings", join(root, "twin.jsonl"));
+    const out = join(root, "out");
+    mkdirSync(out);
     try {
-      execFileSync(process.execPath, args, { cwd: tmp, env: childEnv(), stdio: ["ignore", "ignore", "pipe"] });
+      if (docker) docker("docker", dockerArgs(root, oracle, out, recordings), root);
+      else {
+        const sandbox = ["--permission", `--allow-fs-read=${root}`, `--allow-fs-read=${oracle}`, `--allow-fs-write=${out}`];
+        const args = [...sandbox, join(root, "src/cli.ts"), "score-twin", "--oracle", oracle, "--json", join(out, "score.json")];
+        if (recordings) args.push("--recordings", join(out, "twin.jsonl"));
+        execFileSync(process.execPath, args, { cwd: root, env: childEnv(), stdio: ["ignore", "ignore", "pipe"] });
+      }
     } catch (e) {
-      throw new Error(`gate: score-twin failed: ${String((e as { stderr?: Buffer }).stderr ?? e).trim()}`);
+      throw new Error(`gate: score-twin failed${docker ? " in its container" : ""}: ${String((e as { stderr?: Buffer }).stderr ?? (e as Error).message ?? e).trim()}`);
     }
     return {
-      json: JSON.parse(readFileSync(join(tmp, "score.json"), "utf8")) as ScoreJson,
-      twin: recordings ? readJsonl<Recording>(join(tmp, "twin.jsonl")) : undefined,
+      json: JSON.parse(readFileSync(join(out, "score.json"), "utf8")) as ScoreJson,
+      twin: recordings ? readJsonl<Recording>(join(out, "twin.jsonl")) : undefined,
     };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
