@@ -5,7 +5,6 @@
   "amount_due": 0,
   "amount_overpaid": 0,
   "amount_paid": 0,
-  "amount_paid_off_stripe": 0,
   "amount_remaining": 0,
   "amount_shipping": 0,
   "application": null,
@@ -22,7 +21,6 @@
   "automatically_finalizes_at": null,
   "billing_reason": null,
   "collection_method": "charge_automatically",
-  "confirmation_secret": null,
   "created": 0,
   "currency": "",
   "custom_fields": null,
@@ -33,8 +31,8 @@
   "customer_name": null,
   "customer_phone": null,
   "customer_shipping": null,
-  "customer_tax_exempt": null,
-  "customer_tax_ids": null,
+  "customer_tax_exempt": "none",
+  "customer_tax_ids": [],
   "default_payment_method": null,
   "default_source": null,
   "default_tax_rates": [],
@@ -49,8 +47,7 @@
   "id": "",
   "invoice_pdf": null,
   "issuer": {
-    "account": "",
-    "type": "account"
+    "type": "self"
   },
   "last_finalization_error": null,
   "latest_revision": null,
@@ -61,7 +58,7 @@
     "url": ""
   },
   "livemode": false,
-  "metadata": null,
+  "metadata": {},
   "next_payment_attempt": null,
   "number": null,
   "object": "invoice",
@@ -71,12 +68,6 @@
     "default_mandate": null,
     "payment_method_options": null,
     "payment_method_types": null
-  },
-  "payments": {
-    "data": [],
-    "has_more": false,
-    "object": "list",
-    "url": ""
   },
   "period_end": 0,
   "period_start": 0,
@@ -98,14 +89,10 @@
   "subtotal": 0,
   "subtotal_excluding_tax": null,
   "test_clock": null,
-  "threshold_reason": {
-    "amount_gte": null,
-    "item_reasons": []
-  },
   "total": 0,
-  "total_discount_amounts": null,
+  "total_discount_amounts": [],
   "total_excluding_tax": null,
-  "total_pretax_credit_amounts": null,
-  "total_taxes": null,
+  "total_pretax_credit_amounts": [],
+  "total_taxes": [],
   "webhooks_delivered_at": null
 }

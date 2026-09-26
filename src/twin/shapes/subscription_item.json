@@ -1,5 +1,4 @@
 {
-  "billed_until": 0,
   "billing_thresholds": null,
   "created": 0,
   "current_period_end": 0,
@@ -33,5 +32,6 @@
   },
   "quantity": 0,
   "subscription": "",
-  "tax_rates": null
+  "tax_rates": [],
+  "current_trial": null
 }

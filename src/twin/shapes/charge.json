@@ -7,7 +7,14 @@
   "application_fee_amount": null,
   "balance_transaction": null,
   "billing_details": {
-    "address": null,
+    "address": {
+      "city": null,
+      "country": null,
+      "line1": null,
+      "line2": null,
+      "postal_code": null,
+      "state": null
+    },
     "email": null,
     "name": null,
     "phone": null,
@@ -34,25 +41,21 @@
   "payment_intent": null,
   "payment_method": null,
   "payment_method_details": null,
-  "presentment_details": {
-    "presentment_amount": 0,
-    "presentment_currency": ""
-  },
-  "radar_options": {
-    "session": ""
-  },
+  "radar_options": {},
   "receipt_email": null,
   "receipt_number": null,
   "receipt_url": null,
   "refunded": false,
-  "refunds": null,
   "review": null,
   "shipping": null,
   "source_transfer": null,
   "statement_descriptor": null,
   "statement_descriptor_suffix": null,
   "status": "failed",
-  "transfer": "",
   "transfer_data": null,
-  "transfer_group": null
+  "transfer_group": null,
+  "destination": null,
+  "dispute": null,
+  "order": null,
+  "source": null
 }

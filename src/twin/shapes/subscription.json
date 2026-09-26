@@ -27,7 +27,7 @@
   "days_until_due": null,
   "default_payment_method": null,
   "default_source": null,
-  "default_tax_rates": null,
+  "default_tax_rates": [],
   "description": null,
   "discounts": [],
   "ended_at": null,
@@ -38,8 +38,7 @@
     "description": null,
     "footer": null,
     "issuer": {
-      "account": "",
-      "type": "account"
+      "type": "self"
     }
   },
   "items": {
@@ -50,25 +49,34 @@
   },
   "latest_invoice": null,
   "livemode": false,
-  "managed_payments": null,
+  "managed_payments": {
+    "enabled": false
+  },
   "metadata": {},
   "next_pending_invoice_item_invoice": null,
   "object": "subscription",
   "on_behalf_of": null,
   "pause_collection": null,
-  "payment_settings": null,
+  "payment_settings": {
+    "payment_method_options": null,
+    "payment_method_types": null,
+    "save_default_payment_method": "off"
+  },
   "pending_invoice_item_interval": null,
   "pending_setup_intent": null,
   "pending_update": null,
-  "presentment_details": {
-    "presentment_currency": ""
-  },
   "schedule": null,
   "start_date": 0,
   "status": "active",
   "test_clock": null,
   "transfer_data": null,
   "trial_end": null,
-  "trial_settings": null,
-  "trial_start": null
+  "trial_settings": {
+    "end_behavior": {
+      "billing_cycle_anchor": "now",
+      "missing_payment_method": "create_invoice"
+    }
+  },
+  "trial_start": null,
+  "quantity": 1
 }

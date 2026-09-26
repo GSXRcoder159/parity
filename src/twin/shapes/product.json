@@ -16,5 +16,8 @@
   "tax_code": null,
   "unit_label": null,
   "updated": 0,
-  "url": null
+  "url": null,
+  "attributes": [],
+  "tax_details": null,
+  "type": "service"
 }

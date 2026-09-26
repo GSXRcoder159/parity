@@ -2,7 +2,7 @@
   "amount": 0,
   "currency": "",
   "description": null,
-  "discount_amounts": null,
+  "discount_amounts": [],
   "discountable": false,
   "discounts": [],
   "id": "",
@@ -15,11 +15,10 @@
     "end": 0,
     "start": 0
   },
-  "pretax_credit_amounts": null,
+  "pretax_credit_amounts": [],
   "pricing": null,
   "quantity": null,
   "quantity_decimal": null,
-  "subscription": null,
   "subtotal": 0,
-  "taxes": null
+  "taxes": []
 }
