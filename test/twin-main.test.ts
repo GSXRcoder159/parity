@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -9,7 +9,7 @@ const MAIN = new URL("../src/twin/main.ts", import.meta.url).pathname;
 const AUTH = { Authorization: "Bearer sk_test_parity" };
 
 /** Spawns the entrypoint and waits for its listening line; the child is killed when the test ends. */
-async function boot(t: { after(fn: () => void): void }, args: string[], env: Record<string, string> = {}) {
+async function boot(t: TestContext, args: string[], env: Record<string, string> = {}) {
   const child = spawn(process.execPath, [MAIN, ...args], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "inherit"] });
   t.after(() => child.kill("SIGKILL"));
   const [line] = (await once(createInterface({ input: child.stdout }), "line")) as [string];

@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Twin entrypoint: `node src/twin/main.ts [--port 12111] [--host 127.0.0.1]` (port also from env PORT).
 import type { AddressInfo } from "node:net";
 import { parseArgs } from "node:util";
