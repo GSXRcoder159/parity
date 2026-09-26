@@ -189,7 +189,7 @@ test("constant only in this oracle: a message quoting the request, an account- o
     rec(`e#${n}`, false, [
       { ...st(0, 400, { error: { type: "invalid_request_error", message: `Too deep: ${path}` } }), params: { expand: [path] } },
       { ...st(1, 402, { error: { type: "card_error", message: "Your card was declined." } }), params: { customer: `cus_${n}abc`, confirm: true, metadata: { tag: "de" } } },
-      st(2, 200, customer({ address: { country: "ZZ" }, invoice_settings: { card: { exp_month: 12 } }, account_country: "ZZ" })),
+      st(2, 200, customer({ address: { country: null }, invoice_settings: { card: { exp_month: 12 } }, account_country: "ZZ" })),
     ]),
   );
   const twin = [1, 2].map((n) => rec(`e#${n}`, false, [st(0, 400, {}, "expand_too_deep"), st(1, 402, {}, "card_declined"), st(2, 200, {})]));
@@ -211,11 +211,48 @@ test("constant only in this oracle: a message quoting the request, an account- o
   // The declined message quotes no request value (short and boolean leaves never count); the address is API semantics.
   assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
     ["/card_declined/message", "Your card was declined."],
-    ["/address", { country: "ZZ" }],
+    ["/address", { country: null }],
   ]);
   assert.deepEqual(notMechanical.map((n) => n.reason), [
     "request-derived: the message quotes a request parameter value",
     "account- or time-derived: constant only within one account or month",
     "account- or time-derived: constant only within one account or month",
+  ]);
+});
+
+test("constant only for what the corpus covers: free text in a field, a generic key's message seen with one binding", () => {
+  const oracle = [1, 2].map((n) =>
+    rec(`g#${n}`, false, [
+      st(0, 400, { error: { type: "invalid_request_error", message: "Must be at least one.", param: "q" } }),
+      st(1, 400, { error: { type: "invalid_request_error", message: "Not a number.", param: n === 1 ? "q" : "r" } }),
+      st(2, 200, customer({ note: "made by flow", mode: "auto_x", settings: { label: "TIER1", kind: "basic" }, level: { kind: "basic", n: 2 } })),
+    ]),
+  );
+  // Both keys are generic ({param}); the twin raises the first for one parameter only, the second for two.
+  const twin = [1, 2].map((n) =>
+    rec(`g#${n}`, false, [st(0, 400, { error: { param: "q" } }, "bad_min"), st(1, 400, { error: { param: n === 1 ? "q" : "r" } }, "bad_number"), st(2, 200, {})]),
+  );
+  const generic = (key: string) => ({ status: 400, type: "invalid_request_error", param: "{param}", message: `parity: ${key}` });
+  const seqs = ["g#1", "g#2"];
+  const { candidates, notMechanical } = propose(
+    [
+      ...seqs.map((s) => div(s, 0, "$.error.message", "VALUE_MISMATCH", error("bad_min", "message"))),
+      ...seqs.map((s) => div(s, 1, "$.error.message", "VALUE_MISMATCH", error("bad_number", "message"))),
+      ...["note", "mode", "settings", "level"].flatMap((f) => seqs.map((s) => div(s, 2, `$.${f}`, "MISSING_FIELD", field(f)))),
+    ],
+    oracle,
+    twin,
+    new Set(),
+    { ...data, catalog: { ...catalog, bad_min: generic("bad_min"), bad_number: generic("bad_number") } },
+  );
+  assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
+    ["/bad_number/message", "Not a number."],
+    ["/mode", "auto_x"],
+    ["/level", { kind: "basic", n: 2 }],
+  ]);
+  assert.deepEqual(notMechanical.map((n) => n.reason), [
+    "one binding: every occurrence renders the same {param}, so the message is shown for one use of the key only",
+    "context text: only enum-like tokens are type defaults", // prose
+    "context text: only enum-like tokens are type defaults", // an uppercase code inside a seeded parent
   ]);
 });

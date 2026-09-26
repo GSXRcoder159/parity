@@ -1,7 +1,8 @@
 // Mechanical candidates (decision 0002 §3), from train sequences only: data-file edits whose value the oracle shows
 // deterministically — the same normalized value at every train occurrence, none of them in the noise set — and that
-// holds beyond this oracle: no account- or date-derived field, no message quoting the request. Every other train locus is
-// returned as not mechanical, with the reason (input to the assisted pass).
+// holds beyond this oracle: no account- or date-derived field, no free text, no message quoting the request or seen for
+// one use of a generic error key only. Every other train locus is returned as not mechanical, with the reason (input to
+// the assisted pass).
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
 import type { Recording, StepRecord } from "../types.ts";
@@ -43,6 +44,15 @@ const ERROR_FIELDS = new Set(["status", "type", "code", "param", "message"]);
  */
 // ponytail: fixed name list; drop a name once the rolling oracle spans accounts/months and the determinism check rejects it on its own.
 const ACCOUNT_OR_TIME = new Set(["account_country", "account_name", "calculated_statement_descriptor", "exp_month", "exp_year"]);
+/**
+ * An API type default is an enum token (lowercase, digits, `_.-`). Any other text (prose, labels, country or descriptor
+ * codes) is set by the request, the account or the context, e.g. a charge description that follows its invoice's reason.
+ */
+// ponytail: token regex; a context-set value that happens to be one lowercase word still passes until the oracle varies it.
+const TOKEN = /^[a-z0-9_.-]*$/;
+const strings = (v: unknown): string[] => (typeof v === "string" ? [v] : Array.isArray(v) || isObj(v) ? Object.values(v).flatMap(strings) : []);
+/** A catalog `{var}`: an entry with one in `param` serves every parameter (and call site) that raises its key. */
+const VAR = /\{\w+\}/;
 const keysIn = (v: unknown): string[] => (Array.isArray(v) ? v.flatMap(keysIn) : isObj(v) ? Object.entries(v).flatMap(([k, x]) => [k, ...keysIn(x)]) : []);
 /** Request param leaves as text (numbers too); booleans and values under 3 characters are too common to mean an echo. */
 const requestValues = (v: unknown): string[] =>
@@ -161,6 +171,7 @@ export function propose(
       else if (!present.every((o) => isDeepStrictEqual(o.at.value, value))) no("varies across sequences");
       else if (computed(value)) no("computed: the value holds a normalization placeholder");
       else if ([...segs.map(String), ...keysIn(value)].some((k) => ACCOUNT_OR_TIME.has(k))) no("account- or time-derived: constant only within one account or month");
+      else if (strings(value).some((x) => !TOKEN.test(x))) no("context text: only enum-like tokens are type defaults");
       else candidates.push({ ...edit, op: "set", value, locus, ids });
     } else {
       const entry = data.catalog[locus.errorKey];
@@ -182,10 +193,14 @@ export function propose(
         else candidates.push(values[0] === undefined ? { ...edit, op: "delete", locus, ids } : { ...edit, op: "set", value: values[0], locus, ids });
       } else if (values.some((m) => typeof m !== "string")) no("absent from some occurrences");
       else {
-        const tpl = values.map((m, i) => messageTemplate(m as string, twinVars(entry, occ[i]!.t)));
+        const vars = occ.map((x) => twinVars(entry, x.t));
+        const tpl = values.map((m, i) => messageTemplate(m as string, vars[i]!));
         if (tpl.some((m) => m === undefined)) no("computed: the message holds placeholders no twin var renders");
         else if (tpl.some((m, i) => echoes(m!, occ[i]!.o.params))) no("request-derived: the message quotes a request parameter value");
         else if (!tpl.every((m) => m === tpl[0])) no("varies across sequences");
+        // A generic entry's message is shown to hold for its other uses only when the corpus renders 2+ bindings of its vars.
+        else if (VAR.test(String(entry.param)) && new Set(vars.map((v) => JSON.stringify(v))).size < 2)
+          no("one binding: every occurrence renders the same {param}, so the message is shown for one use of the key only");
         else candidates.push({ ...edit, op: "set", value: tpl[0], locus, ids });
       }
     }
