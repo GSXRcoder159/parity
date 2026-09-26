@@ -207,7 +207,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     for (const s of ["**Draft: merge only after review**", "- Before: train L1", "- After: train L1", "cost_usd 0.0070", "## Counterexample (normalized): customer-crud#1", "decision 0001 C3"]) assert.ok(body.includes(s), s);
     const ce = user.slice(user.indexOf("## Counterexample"));
     for (const text of [ce, body]) {
-      assert.ok(!text.includes(RISK) && !/"(outcome|checks|risk_level|seller_message|cvc_check)"|\$\.outcome/.test(text), "no fraud or risk field, key or value");
+      assert.ok(!text.includes(RISK) && !/outcome|checks|risk_level|seller_message|cvc_check/.test(text), "no fraud or risk field, key or value");
       assert.match(text, /^- step 0 \$\.payment MISSING_FIELD expected \{"card":\{"brand":"visa"\}\} actual undefined$/m);
     }
     assert.ok(!gh.flat().includes("merge"), "never merges");
