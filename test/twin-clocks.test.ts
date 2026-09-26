@@ -4,7 +4,6 @@
 // exists (B1): expectations follow the public test-clock docs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setTimeout as sleep } from "node:timers/promises";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { encodeForm, resolveRefs } from "../src/bench/run.ts";
 import { createTwin } from "../src/twin/server.ts";
@@ -120,17 +119,16 @@ test("advance: later than the frozen time, at most two intervals of the shortest
   assert.equal((await advance(t, ck2, F0 + 14 * DAY)).status, 200);
 });
 
-test("an advance answers advancing at the old frozen time; reads show ready at the new one 1 s later (wall clock)", async () => {
+test("an advance answers advancing at the old frozen time; the next read is ready at the new one (no wall-clock wait)", async () => {
   const t = createTwin();
   const ck = (await clock(t)).body;
   const r = await advance(t, ck, F0 + DAY);
   const advancing = { ...ck, status: "advancing", status_details: { advancing: { target_frozen_time: F0 + DAY } } };
   assert.deepEqual(r.body, advancing);
-  assert.deepEqual(await get(t, `/v1/test_helpers/test_clocks/${ck.id}`), advancing);
-  assert.deepEqual((await get(t, "/v1/test_helpers/test_clocks")).data, [advancing]);
-  await sleep(1050);
+  // score-twin skips the templates' waits: the first read must already match the oracle's read after them.
   const ready = { ...ck, frozen_time: F0 + DAY, status: "ready", status_details: {} };
   assert.deepEqual(await get(t, `/v1/test_helpers/test_clocks/${ck.id}`), ready);
+  assert.deepEqual((await get(t, "/v1/test_helpers/test_clocks")).data, [ready]);
   assert.deepEqual(t.store.events.slice(1).map((e) => [e.type, e.data.object.status]), [["test_helpers.test_clock.advancing", "advancing"], ["test_helpers.test_clock.ready", "ready"]]);
 });
 

@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { TwinError, renderError } from "./errors.ts";
 import type { Ctx } from "./server.ts";
 import type { Emit } from "./store.ts";
-import { live } from "./util.ts";
+import { attachedPm } from "./util.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -27,11 +27,29 @@ export function addInterval(t: number, interval: string, count = 1): number {
   return Date.UTC(y, m, Math.min(d.getUTCDate(), last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()) / 1000;
 }
 
+/**
+ * A price's unit amount in minor units: `unit_amount`, else its `unit_amount_decimal` (a price created with the decimal
+ * has unit_amount null, observed #20), else 0. Amounts computed from it are rounded to the minor unit.
+ * ponytail: Math.round (half up); the real rounding of a fractional line amount is unobserved until B1.
+ */
+export const unitAmount = (price: Obj): number => (price.unit_amount as number | null) ?? Number(price.unit_amount_decimal ?? 0);
+
+/**
+ * The first period boundary after `t` of a billing cycle anchored at `anchor`: anchor + k intervals for the smallest
+ * such k (k = 0 when the anchor is still ahead), each step counted from the anchor so a month-end anchor keeps its
+ * day (docs: an anchor of January 31 bills February 28, then March 31, April 30, ...).
+ */
+export function nextBoundary(anchor: number, t: number, interval: string, count = 1): number {
+  let k = 0;
+  while (addInterval(anchor, interval, k * count) <= t) k++;
+  return addInterval(anchor, interval, k * count);
+}
+
 /** A subscription item's line for `period` at its price (not a proration: discountable, unlike prorations per the docs). */
 export function itemLine(ctx: Ctx, invoice: string, sub: Obj, item: Obj, period: { start: number; end: number }, prefix = "il"): Obj {
   const price = item.price as Obj;
   const quantity = item.quantity as number;
-  const amount = ((price.unit_amount as number | null) ?? 0) * quantity;
+  const amount = Math.round(unitAmount(price) * quantity);
   return ctx.build("line_item", {
     id: ctx.id(prefix),
     amount,
@@ -274,7 +292,7 @@ export function collect(ctx: Ctx, sub: Obj, customer: Obj, inv: Obj, prefix = ["
     inv = { ...paid(inv, now), attempted: true }; // attempt_count stays 0 (observed, #17 always_invoice downgrade)
     types.push("invoice.paid", "invoice.payment_succeeded");
   } else if (sub.collection_method === "charge_automatically") {
-    const pm = live(ctx, sub.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method, "payment_method");
+    const pm = attachedPm(ctx, sub.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method, customer.id);
     const attempt = attemptPayment(ctx, inv, pm, openIntent(ctx, inv));
     emits.push(...attempt.emits);
     if (pm) inv = { ...inv, attempt_count: (inv.attempt_count as number) + 1, attempted: true };

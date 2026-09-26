@@ -143,9 +143,7 @@ for (const seed of SEEDS) {
   });
 }
 
-// Task 4 owns these routes. Sandbox: missing subscription GET/POST/DELETE and invoice POST -> param "id",
-// invoice GET/DELETE -> "invoice"; POST /v1/subscriptions without items -> 400 parameter_missing "items".
-test("#11/#12 subscription and invoice steps", { todo: "Task 4 adds the subscription and invoice routes" });
+// The subscription and invoice steps of #11/#12 run in test/twin-resources-b.test.ts.
 
 test("attaching a token that declines on verification is a 402 card error and stores nothing", async () => {
   const t = createTwin();

@@ -4,7 +4,7 @@
 // subscription turns active), the trial_will_end notice 3 days before it, cancel at period end, the draft's
 // finalization and charge an hour after its creation, and payment retries. Requests on a clock's objects run at its
 // frozen time (server.ts); an advance's events carry each transition's time.
-import { addInterval, applyBalance, attemptPayment, collect, invoiceItemLine, itemLine, pendingItems, subInvoice } from "../billing.ts";
+import { addInterval, applyBalance, attemptPayment, collect, invoiceItemLine, itemLine, nextBoundary, pendingItems, subInvoice } from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Handler, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
@@ -22,18 +22,9 @@ const DRAFT_S = 3600;
 // unsuccessful attempts"). The real retries pick their own times; unobserved until B1.
 const TRIES = 8;
 const RETRY_S = 2 * DAY;
-// ponytail: fixed delay: after an advance, reads show the clock `advancing` for 1 s of wall-clock time, then `ready`
-// (the store already holds the advanced clock). The sandbox's advance time is unmeasured until B1.
-const ADVANCING_MS = 1000;
-/** Clock id -> the `advancing` clock an advance returned, shown until `until` (wall ms). Shared by every twin in the process: ids are random. */
-const advancing = new Map<string, { clock: Obj; until: number }>();
-
-const view = (clock: Obj): Obj => {
-  const a = advancing.get(clock.id as string);
-  if (a && Date.now() < a.until) return a.clock;
-  advancing.delete(clock.id as string);
-  return clock;
-};
+// ponytail: the advance response is `advancing`, and every later read is `ready` at the new frozen time: the twin
+// advances at once, so it matches the oracle's reads after the templates' waits whether or not the waits run (score-twin
+// skips them). The sandbox's advance time is unmeasured until B1.
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, TYPE) ?? ctx.fail("resource_missing", { param: "test_clock" });
 const itemsOf = (sub: Obj) => (sub.items as Obj).data as Obj[];
 const recurring = (item: Obj) => (item.price as Obj).recurring as { interval: string; interval_count: number };
@@ -96,7 +87,9 @@ const advance: Handler = (ctx, { pathParams, params }) => {
     const sub = c.get(id as string)!;
     const customer = c.get(sub.customer as string)!;
     const inId = c.id("in");
-    const items = itemsOf(sub).map((item) => ({ ...item, current_period_end: addInterval(t, recurring(item).interval, recurring(item).interval_count), current_period_start: t }));
+    // The next end counts from the billing cycle anchor, not from t: a month-end anchor keeps its day (Jan 31 -> Feb 28 -> Mar 31).
+    const next = (item: Obj) => nextBoundary(sub.billing_cycle_anchor as number, t, recurring(item).interval, recurring(item).interval_count);
+    const items = itemsOf(sub).map((item) => ({ ...item, current_period_end: next(item), current_period_start: t }));
     const after = { ...sub, items: { ...(sub.items as Obj), data: items }, latest_invoice: inId, status: sub.status === "trialing" ? "active" : sub.status };
     const swept = pendingItems(c, sub.id).map((ii) => ({ ...ii, invoice: inId }));
     const lines = [
@@ -203,7 +196,6 @@ const advance: Handler = (ctx, { pathParams, params }) => {
 
   const body = { ...clock, status: "advancing", status_details: { advancing: { target_frozen_time: to } } };
   const ready = { ...clock, frozen_time: to, status: "ready", status_details: {} };
-  advancing.set(clock.id as string, { clock: body, until: Date.now() + ADVANCING_MS });
   return {
     body,
     puts,
@@ -238,8 +230,8 @@ const ID = /^\/v1\/test_helpers\/test_clocks\/(?<test_clock>[^/]+)$/;
 
 export const routes: Route[] = [
   ["POST", /^\/v1\/test_helpers\/test_clocks$/, create, "post /v1/test_helpers/test_clocks"],
-  ["GET", /^\/v1\/test_helpers\/test_clocks$/, (ctx, { params }) => ({ body: list(ctx.all(TYPE).map(view), params, "/v1/test_helpers/test_clocks") }), "get /v1/test_helpers/test_clocks"],
-  ["GET", ID, (ctx, { pathParams }) => ({ body: view(find(ctx, pathParams.test_clock)) }), "get /v1/test_helpers/test_clocks/{test_clock}"],
+  ["GET", /^\/v1\/test_helpers\/test_clocks$/, (ctx, { params }) => ({ body: list(ctx.all(TYPE), params, "/v1/test_helpers/test_clocks") }), "get /v1/test_helpers/test_clocks"],
+  ["GET", ID, (ctx, { pathParams }) => ({ body: find(ctx, pathParams.test_clock) }), "get /v1/test_helpers/test_clocks/{test_clock}"],
   ["DELETE", ID, remove, "delete /v1/test_helpers/test_clocks/{test_clock}"],
   ["POST", /^\/v1\/test_helpers\/test_clocks\/(?<test_clock>[^/]+)\/advance$/, advance, "post /v1/test_helpers/test_clocks/{test_clock}/advance"],
 ];

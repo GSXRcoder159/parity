@@ -2,6 +2,7 @@
 import { list, search } from "../list.ts";
 import type { Route } from "../server.ts";
 import { assign, checkAttached, diff, isHash, live } from "../util.ts";
+import { cancellation } from "./subscriptions.ts";
 
 const FIELDS = [
   "address",
@@ -86,9 +87,17 @@ export const routes: Route[] = [
     ID,
     (ctx, { pathParams }) => {
       const c = live(ctx, pathParams.customer, "customer") ?? ctx.fail("resource_missing", { param: "id" });
+      const now = ctx.now();
+      // Observed (#26): the customer's subscriptions are canceled at once (reason cancellation_requested), then the
+      // customer is deleted. ponytail: an incomplete subscription is canceled too, not expired (unobserved).
+      const subs = ctx
+        .all("subscription")
+        .filter((s) => s.customer === c.id && s.status !== "canceled")
+        .map((s) => ({ ...s, canceled_at: now, cancellation_details: cancellation("cancellation_requested"), ended_at: now, status: "canceled" }));
       const tombstone = ctx.build("deleted_customer", { id: c.id });
       // The event carries the last full customer; the response and later retrieves the tombstone.
-      return { body: tombstone, emits: [{ type: "customer.deleted", object: c }], deletes: [tombstone] };
+      const emits = [...subs.map((object) => ({ type: "customer.subscription.deleted", object })), { type: "customer.deleted", object: c }];
+      return { body: tombstone, emits, deletes: [tombstone] };
     },
     "delete /v1/customers/{customer}",
   ],

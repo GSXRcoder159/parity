@@ -1,11 +1,11 @@
 // Invoices: retrieve, list, create_preview, and the lifecycle draft -> open -> paid | void (finalize, pay, void,
 // update). Invoices are created by subscriptions (billing.ts). `uncollectible` has no route (mark_uncollectible is not
 // in the pruned spec); pay and void accept it like `open`, per the docs.
-import { addInterval, applyBalance, attemptPayment, invoiceItem, invoiceItemLine, itemLine, paid, pendingItems, subInvoice } from "../billing.ts";
+import { applyBalance, attemptPayment, invoiceItem, invoiceItemLine, itemLine, nextBoundary, paid, pendingItems, subInvoice } from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Handler, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
-import { assign, diff, isHash, live } from "../util.ts";
+import { assign, attachedPm, diff, isHash, live } from "../util.ts";
 import { ITEM, change, itemPrice, newItem, only } from "./subscriptions.ts";
 
 type Obj = Record<string, unknown>;
@@ -32,7 +32,8 @@ const invoiceEmits = (before: Obj, after: Obj, types: string[]): Emit[] => [
 /** Draft `inv` finalized now (`open`), with the customer's balance applied then (a customer.updated if it moves). */
 function finalize(ctx: Ctx, inv: Obj): { invoice: Obj; emits: Emit[] } {
   const now = ctx.now();
-  const customer = ctx.get(inv.customer as string)!;
+  // ponytail: an invoice of a deleted customer is refused (a tombstone has no balance; the real answer is unobserved).
+  const customer = live(ctx, inv.customer, "customer") ?? ctx.fail("not_implemented");
   const transitions = { ...(inv.status_transitions as Obj), finalized_at: now };
   const open = { ...inv, automatically_finalizes_at: null, effective_at: now, status: "open", status_transitions: transitions };
   const invoice = applyBalance(open, customer.balance as number);
@@ -93,10 +94,11 @@ const payRoute: Handler = (ctx, { pathParams, params }) => {
     if (intent) emits.push(canceled(intent, "duplicate", now));
   } else {
     const sub = subscriptionOf(ctx, open);
-    const customer = ctx.get(open.customer as string)!;
+    const customer = live(ctx, open.customer, "customer") ?? ctx.fail("not_implemented"); // ponytail: as in finalize
     const pmId = open.default_payment_method || sub?.default_payment_method || (customer.invoice_settings as Obj | null)?.default_payment_method;
-    // ponytail: no payment method -> the subscription create's error (for an invoice, unobserved).
-    const pm = live(ctx, pmId, "payment_method") ?? ctx.fail("customer_no_payment_method");
+    // ponytail: no payment method (or a detached one, which can never be charged) -> the subscription create's error
+    // (for an invoice, unobserved).
+    const pm = attachedPm(ctx, pmId, customer.id) ?? ctx.fail("customer_no_payment_method");
     const attempt = attemptPayment(ctx, open, pm, intent);
     emits.push(...attempt.emits);
     open = { ...open, attempt_count: (open.attempt_count as number) + 1, attempted: true };
@@ -185,7 +187,8 @@ const preview: Handler = (ctx, { params }) => {
   }
   for (const item of items) {
     const [end, r] = [item.current_period_end as number, (item.price as Obj).recurring as Obj];
-    lines.push(itemLine(ctx, id, after, item, { end: addInterval(end, r.interval as string, r.interval_count as number), start: end }, "il_tmp"));
+    const next = nextBoundary(after.billing_cycle_anchor as number, end, r.interval as string, r.interval_count as number);
+    lines.push(itemLine(ctx, id, after, item, { end: next, start: end }, "il_tmp"));
   }
   const [first] = items as [Obj];
   return draft(after, customer, lines, first.current_period_end as number, { parent, period_start: first.current_period_start });

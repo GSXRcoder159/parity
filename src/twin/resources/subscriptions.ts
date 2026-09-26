@@ -17,6 +17,7 @@ import {
   paid,
   pendingItems,
   subInvoice,
+  unitAmount,
 } from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
@@ -177,7 +178,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     const [start, end] = [item.current_period_start as number, item.current_period_end as number];
     // ponytail: a proration_date outside the item's current period is refused (the real API's error is unobserved).
     if (date < start || date > end) ctx.fail("not_implemented");
-    return { amount: Math.round((((price.unit_amount as number | null) ?? 0) * quantity * (end - date)) / (end - start)), period: { end, start: date } };
+    return { amount: Math.round((unitAmount(price) * quantity * (end - date)) / (end - start)), period: { end, start: date } };
   };
   const credit = (old: Obj) => {
     const d = lastDebit(ctx, sub.id, old.id);
@@ -345,7 +346,9 @@ export const routes: Route[] = [
       const iis = prorations.map((p) => invoiceItem(ctx, after, p, inId));
       const tail: Emit[] = [];
       if (inId) {
-        const customer = ctx.get(after.customer as string)!;
+        // ponytail: a deleted customer's subscriptions are canceled with it (customers.ts), so change() refuses them
+        // before this; the refusal stays in case a path gets here (billing a tombstone has no observed answer).
+        const customer = live(ctx, after.customer, "customer") ?? ctx.fail("not_implemented");
         const swept = pendingItems(ctx, after.id).map((ii) => ({ ...ii, invoice: inId }));
         puts.push(...swept); // ponytail: no invoiceitem.updated for swept items (unobserved)
         const lines = [...swept, ...iis].map((ii) => invoiceItemLine(ctx, inId, ii));
@@ -374,7 +377,8 @@ export const routes: Route[] = [
     (ctx, { pathParams, params }) => {
       const before = find(ctx, pathParams.id);
       if (before.status === "canceled") ctx.fail("resource_missing", { param: "id" });
-      if (params.invoice_now || params.prorate) ctx.fail("not_implemented"); // final invoice and proration: W4
+      // ponytail: a final invoice and proration at cancel are refused: unobserved until B1 (no template covers them).
+      if (params.invoice_now || params.prorate) ctx.fail("not_implemented");
       const now = ctx.now();
       const details = assign(cancellation("cancellation_requested"), isHash(params.cancellation_details) ? params.cancellation_details : {});
       const after = { ...before, canceled_at: now, cancellation_details: details, ended_at: now, status: "canceled" };

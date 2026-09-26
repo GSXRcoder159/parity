@@ -5,6 +5,7 @@
   "card_declined": { "status": 402, "type": "card_error", "code": "card_declined", "message": "parity: card_declined" },
   "charge_already_refunded": { "status": 400, "type": "invalid_request_error", "code": "charge_already_refunded", "message": "parity: charge_already_refunded" },
   "customer_no_payment_method": { "status": 400, "type": "invalid_request_error", "code": "resource_missing", "message": "parity: customer_no_payment_method" },
+  "decimal_too_precise": { "status": 400, "type": "invalid_request_error", "param": "{param}", "message": "parity: decimal_too_precise" },
   "default_payment_method_not_attached": { "status": 400, "type": "invalid_request_error", "code": "resource_missing", "param": "{param}", "message": "parity: default_payment_method_not_attached" },
   "expand_invalid": { "status": 400, "type": "invalid_request_error", "message": "parity: expand_invalid" },
   "expand_too_deep": { "status": 400, "type": "invalid_request_error", "message": "parity: expand_too_deep" },
@@ -35,6 +36,8 @@
   "test_clock_advance_too_far": { "status": 400, "type": "invalid_request_error", "param": "frozen_time", "message": "parity: test_clock_advance_too_far" },
   "test_clock_customer_limit": { "status": 400, "type": "invalid_request_error", "param": "test_clock", "message": "parity: test_clock_customer_limit" },
   "test_clock_frozen_time_not_after": { "status": 400, "type": "invalid_request_error", "param": "frozen_time", "message": "parity: test_clock_frozen_time_not_after" },
+  "unit_amount_exclusive": { "status": 400, "type": "invalid_request_error", "param": "unit_amount", "message": "parity: unit_amount_exclusive" },
+  "unit_amount_too_large": { "status": 400, "type": "invalid_request_error", "code": "parameter_invalid_integer", "param": "unit_amount", "message": "parity: unit_amount_too_large" },
   "unrecognized_url": { "status": 404, "type": "invalid_request_error", "message": "parity: unrecognized_url" },
   "url_invalid": { "status": 400, "type": "invalid_request_error", "code": "url_invalid", "param": "url", "message": "parity: url_invalid" }
 }

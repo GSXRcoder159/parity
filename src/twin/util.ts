@@ -36,6 +36,15 @@ export function diff(before: Obj, after: Obj): Obj {
   return prev;
 }
 
+/**
+ * The payment method `id` if it is still attached to `customer`, else undefined: a detached one can never be charged
+ * again (docs: "once detached, a PaymentMethod can no longer be used for payments").
+ */
+export function attachedPm(ctx: Ctx, id: unknown, customer: unknown): Obj | undefined {
+  const pm = live(ctx, id, "payment_method");
+  return pm && pm.customer === customer ? pm : undefined;
+}
+
 /** A payment method id param must name a payment method attached to `customer` (undefined: not created yet). */
 export function checkAttached(ctx: Ctx, pm: unknown, customer: unknown, param = "default_payment_method"): void {
   if (typeof pm !== "string" || pm === "") return;

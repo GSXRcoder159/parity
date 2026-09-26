@@ -39,6 +39,7 @@ const priceEvents = (ctx: Ctx, verb: string, p: Obj, previous_attributes?: Obj):
 ];
 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "price") ?? ctx.fail("resource_missing", { param: "price" });
+const MAX_UNIT_AMOUNT = 99_999_999_999_999;
 const ID = /^\/v1\/prices\/(?<price>[^/]+)$/;
 
 export const routes: Route[] = [
@@ -48,7 +49,12 @@ export const routes: Route[] = [
     (ctx, { params }) => {
       if (!params.currency) ctx.fail("parameter_missing", { param: "currency" });
       const unit = typeof params.unit_amount === "number" ? params.unit_amount : undefined;
+      const decimal = typeof params.unit_amount_decimal === "string" && params.unit_amount_decimal !== "" ? params.unit_amount_decimal : undefined;
+      // Observed (#20): one of the two only; at most 99,999,999,999,999 (undocumented); at most 12 decimal places.
+      if (unit !== undefined && decimal !== undefined) ctx.fail("unit_amount_exclusive");
       if (unit !== undefined && unit < 0) ctx.fail("invalid_non_negative_integer", { param: "unit_amount" });
+      if (unit !== undefined && unit > MAX_UNIT_AMOUNT) ctx.fail("unit_amount_too_large");
+      if (decimal !== undefined && (decimal.split(".")[1]?.length ?? 0) > 12) ctx.fail("decimal_too_precise", { param: "unit_amount_decimal" });
       const r = params.recurring && typeof params.recurring === "object" ? (params.recurring as Obj) : undefined;
       if (r && !r.interval) ctx.fail("parameter_missing", { param: "recurring[interval]" });
 
@@ -71,8 +77,9 @@ export const routes: Route[] = [
         type: r ? "recurring" : "one_time",
         // Documented defaults: interval_count 1, usage_type licensed.
         recurring: r ? { interval: r.interval, interval_count: r.interval_count ?? 1, meter: r.meter ?? null, trial_period_days: null, usage_type: r.usage_type ?? "licensed" } : null,
+        // Observed (#20): an integer amount comes back as its decimal string too; a decimal one as sent, with unit_amount null.
         unit_amount: unit ?? null,
-        unit_amount_decimal: unit === undefined ? null : String(unit),
+        unit_amount_decimal: unit === undefined ? (decimal ?? null) : String(unit),
       });
       assign(price, params, ["active", "lookup_key", "metadata", "nickname", "tax_behavior"]);
       return { body: price, emits: [...emits, ...priceEvents(ctx, "created", price)] };
