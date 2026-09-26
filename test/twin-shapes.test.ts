@@ -104,17 +104,21 @@ test("expandable fields take the string form", () => {
   assert.equal(shape("price").product, "");
 });
 
-test("generator is deterministic and the committed templates are current", () => {
-  const dirs = [0, 1].map(() => mkdtempSync(join(tmpdir(), "parity-shapes-")));
+// After the freeze (0002 §3) align patches the templates, so the generator must reproduce the templates as frozen at
+// the tag, not the working copy. Needs the tag locally: CI checks out with fetch-depth: 0.
+test("generator is deterministic and reproduces the templates frozen at twin-scaffold-v0", () => {
+  const dirs = [0, 1, 2].map(() => mkdtempSync(join(tmpdir(), "parity-shapes-")));
   try {
     const sentinel = join(dirs[0]!, "keep.json"); // a dir passed on the command line is never cleared
     writeFileSync(sentinel, "{}");
-    for (const d of dirs) execFileSync(process.execPath, [join(root, "scripts/gen-shapes.ts"), d]);
+    for (const d of dirs.slice(0, 2)) execFileSync(process.execPath, [join(root, "scripts/gen-shapes.ts"), d]);
     assert.equal(readFileSync(sentinel, "utf8"), "{}");
     rmSync(sentinel);
-    const [a, b] = dirs.map(readDir);
+    const [a, b] = dirs.slice(0, 2).map(readDir);
     assert.deepEqual(a, b);
-    assert.deepEqual(a, readDir(shapesDir));
+    const tar = execFileSync("git", ["-C", root, "archive", "twin-scaffold-v0", "src/twin/shapes"], { maxBuffer: 64 << 20 });
+    execFileSync("tar", ["-x", "-C", dirs[2]!], { input: tar });
+    assert.deepEqual(a, readDir(join(dirs[2]!, "src/twin/shapes")));
   } finally {
     for (const d of dirs) rmSync(d, { recursive: true });
   }
