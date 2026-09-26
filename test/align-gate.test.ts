@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -173,6 +173,28 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   assert.throws(() => align({ repo, dataDir: data, runId: "dirty", apply: true }), /refusing --apply: uncommitted changes/);
   git("checkout", "--", "src/twin/shapes/customer.json");
 
+  // Nothing is written when the sealed log is broken, and nothing is logged when the commit fails (files restored).
+  const customerJson = readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8");
+  mkdirSync(join(data, "align"));
+  writeFileSync(logPath(data), JSON.stringify({ ts: "t", runId: "r", kind: "note", data: { oracle: { oracleSeqs: 1, oracleSha: "x" } }, prev: "", hash: "edited" }) + "\n");
+  assert.throws(() => align({ repo, dataDir: data, runId: "broken", apply: true }), /refusing --apply: the sealed log is broken: .*line 1: hash does not match/);
+  rmSync(logPath(data));
+  const hooks = mkdtempSync(join(tmpdir(), "pb-align-hooks-"));
+  writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  git("config", "core.hooksPath", hooks);
+  assert.throws(() => align({ repo, dataDir: data, runId: "no-commit", apply: true }), /Command failed: git .* commit/);
+  git("config", "--unset", "core.hooksPath");
+  assert.equal(existsSync(logPath(data)), false, "a failed commit logs nothing");
+  assert.equal(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8"), customerJson);
+  assert.equal(git("status", "--porcelain"), "");
+  // A failed append after the commit names the commit and how to undo it; the command it gives restores the tree.
+  chmodSync(join(data, "align"), 0o555);
+  assert.throws(() => align({ repo, dataDir: data, runId: "no-log", apply: true }), /commit [0-9a-f]{40} landed but the sealed log append failed; undo the commit \(git reset --soft HEAD~1 && git checkout HEAD -- src\/twin\/shapes\/customer\.json\)/);
+  chmodSync(join(data, "align"), 0o755);
+  git("reset", "--soft", "HEAD~1");
+  git("checkout", "HEAD", "--", "src/twin/shapes/customer.json");
+  assert.deepEqual([git("log", "--format=%s"), git("status", "--porcelain"), existsSync(logPath(data))], ["init", "", false]);
+
   const done = align({ repo, dataDir: data, runId: "run-apply", apply: true });
   assert.equal(JSON.parse(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "reverse");
   assert.match(git("log", "-1", "--format=%B"), /^align: 1 automatic patches \(train Δ -\d+ divergences, L3 \+[\d.]+ pts; held-out Δ L3 \+[\d.]+ pts\)\n\nSealed log run run-apply /);
@@ -182,5 +204,6 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 2 });
   assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [["patch", "run-apply", "automatic", "applied"], ["gate", "run-apply", undefined, undefined]]);
   assert.deepEqual(log[0]!.data.edit, { file: "src/twin/shapes/customer.json", pointer: "/tax_exempt", op: "set", value: "reverse" });
+  assert.deepEqual(log.map((e) => e.data.commit), [done.applied?.commit, done.applied?.commit], "every entry names the commit that landed its patch");
   assert.equal(log[0]!.data.oracle.oracleSeqs, oracle.length);
 });

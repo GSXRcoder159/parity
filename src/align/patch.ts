@@ -1,7 +1,8 @@
 // Mechanical candidates (decision 0002 §3), from train sequences only: data-file edits whose value the oracle shows
 // deterministically — the same normalized value at every train occurrence, none of them in the noise set — and that
 // holds beyond this oracle: no account- or date-derived field, no free text, no message quoting the request or seen for
-// one use of a generic error key (one parameter or one decline code) only. Every other train locus is returned as not
+// one use of a generic error key (one parameter or one decline code) only, no literal over a catalog `{var}`; and never a
+// fraud or risk field, which the public templates must not carry. Every other train locus is returned as not
 // mechanical, with the reason (input to the assisted pass).
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
@@ -46,6 +47,11 @@ const RENDERED = new Set([...ERROR_FIELDS, "doc_url", "request_log_url"]);
  */
 // ponytail: fixed name list; drop a name once the rolling oracle spans accounts/months and the determinism check rejects it on its own.
 const ACCOUNT_OR_TIME = new Set(["account_country", "account_name", "calculated_statement_descriptor", "exp_month", "exp_year"]);
+/**
+ * Fraud and risk fields ("information Stripe uses for security or fraud prevention", 0001 §(c)/R8): never published in
+ * any form, so never seeded into the public templates. `checks` holds card verification results (cvc, address).
+ */
+const FRAUD_OR_RISK = new Set(["fraud_details", "outcome", "risk_level", "risk_score", "checks", "radar_options"]);
 /**
  * An API type default is an enum token (lowercase, digits, `_.-`). Any other text (prose, labels, country or descriptor
  * codes) is set by the request, the account or the context, e.g. a charge description that follows its invoice's reason.
@@ -176,6 +182,7 @@ export function propose(
       else if (!data.shape(locus.objectType)) no(`no template ${edit.file}`);
       else if (occ.some((o) => noisy(o.template, o.step, `${o.path}.${locus.fieldPath}`))) no("noise: an occurrence is in the noise set");
       else if (!present.length && g.every((d) => d.cls === "EXTRA_FIELD")) candidates.push({ ...edit, op: "delete", locus, ids });
+      else if ([...segs.map(String), ...present.flatMap((o) => keysIn(o.at.value))].some((k) => FRAUD_OR_RISK.has(k))) no("fraud or risk data: never seeded into a public template");
       else if (present.length < occ.length) no("absent from some occurrences");
       else if (!present.every((o) => isDeepStrictEqual(o.at.value, value))) no("varies across sequences");
       else if (computed(value)) no("computed: the value holds a normalization placeholder");
@@ -197,7 +204,9 @@ export function propose(
       else if (!ERROR_FIELDS.has(locus.field)) no("not a catalog field (status, type, code, param, message)");
       else if (occ.some((x) => noisy(x.template, x.o.i, path))) no("noise: an occurrence is in the noise set");
       else if (locus.field !== "message") {
-        if (!values.every((v) => isDeepStrictEqual(v, values[0]))) no("varies across sequences");
+        // A {var} renders per call site: a wrong rendered value is a call-site bug, and a literal would break the other sites.
+        if (VAR.test(String(entry[locus.field]))) no("call-site var: the entry's {var} renders per call site (assisted)");
+        else if (!values.every((v) => isDeepStrictEqual(v, values[0]))) no("varies across sequences");
         else if (computed(values[0])) no("computed: the value holds a normalization placeholder");
         else candidates.push(values[0] === undefined ? { ...edit, op: "delete", locus, ids } : { ...edit, op: "set", value: values[0], locus, ids });
       } else if (values.some((m) => typeof m !== "string")) no("absent from some occurrences");

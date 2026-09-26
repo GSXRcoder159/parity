@@ -1,6 +1,6 @@
 // paritybench align (decision 0002 §3): score the twin on the latest oracle, triage every divergence to a locus,
 // propose mechanical data-file edits from train sequences only, and gate them on held-out. --apply writes the accepted
-// edits, appends them (and every blocked-by-code candidate) to the sealed log, and commits the data files.
+// edits, commits the data files, then appends them (with the commit, and every blocked-by-code candidate) to the sealed log.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import type { LevelScores } from "../bench/score.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
 import { applyEdits, evalOf, gate, scoreTwinIn, type GateResult, type Judged, type Scores } from "./gate.ts";
-import { appendLog, logPath, provenance, type Kind, type LogData, type Provenance } from "./log.ts";
+import { appendLog, logPath, provenance, verifyLog, type Kind, type LogData, type Provenance } from "./log.ts";
 import { CATALOG_FILE, SHAPES_DIR, propose, type Candidate, type NotMechanical } from "./patch.ts";
 import { triage, type Locus, type Triaged } from "./triage.ts";
 
@@ -56,6 +56,9 @@ export function align(o: { repo: string; dataDir: string; runId: string; apply?:
   // --apply commits the data files as automatic patches: a pending hand edit there must never ride along.
   const dirty = o.apply ? git(o.repo, "status", "--porcelain", "--", ...DATA_PATHS) : "";
   if (dirty) throw new Error(`refusing --apply: uncommitted changes in the twin's data files:\n${dirty}`);
+  // A broken chain would refuse the append only after the data files are rewritten: check it before anything is written.
+  const v = o.apply ? verifyLog(logPath(o.dataDir)) : { ok: true as const };
+  if (!v.ok) throw new Error(`refusing --apply: the sealed log is broken: ${v.error}`);
   const oracle = provenance(oraclePath);
   const recs = readJsonl<Recording>(oraclePath);
   const noise = noiseFromRuns(o.dataDir);
@@ -73,22 +76,41 @@ export function align(o: { repo: string; dataDir: string; runId: string; apply?:
 const editOf = (c: Candidate) => ({ file: c.file, pointer: c.pointer, op: c.op, ...(c.op === "set" ? { value: c.value } : {}) });
 const pts = (a: LevelScores, b: LevelScores): string => `${b.L3.p >= a.L3.p ? "+" : ""}${((b.L3.p - a.L3.p) * 100).toFixed(1)} pts`;
 
-/** Writes the accepted edits, logs one `patch` entry per edit and one `gate` entry for the run, commits the data files. */
+/**
+ * Writes the accepted edits and commits the data files, then logs one `patch` entry per edit (with the commit) and one
+ * `gate` entry for the run. A failed write or commit restores the files and logs nothing; the sealed log never records
+ * a patch that did not land.
+ */
 function applyAndLog(repo: string, dataDir: string, r: AlignResult): NonNullable<AlignResult["applied"]> {
   const g = r.gate;
-  const files = applyEdits(repo, g.accepted.map((j) => j.candidate));
   const oracle = r.oracle;
+  const files = [...new Set(g.accepted.map((j) => j.candidate.file))];
+  let commit: string | undefined;
+  if (files.length) {
+    const msg =
+      `align: ${g.accepted.length} automatic patches (train Δ ${g.after.trainDivergences - g.before.trainDivergences} divergences, L3 ${pts(g.before.train, g.after.train)}; ` +
+      `held-out Δ L3 ${pts(g.before.heldOut, g.after.heldOut)})\n\nSealed log run ${r.runId} (${g.accepted.length} patch entries + 1 gate entry); oracle ${oracle.oracleSeqs} sequences, sha256 ${oracle.oracleSha}.`;
+    try {
+      applyEdits(repo, g.accepted.map((j) => j.candidate));
+      git(repo, "commit", "-q", "-m", msg, "--", ...files);
+    } catch (e) {
+      git(repo, "checkout", "HEAD", "--", ...files); // the dirty check saw them clean at HEAD
+      throw e;
+    }
+    commit = git(repo, "rev-parse", "HEAD");
+  }
   const brief = (j: Judged) => ({ edit: editOf(j.candidate), locus: j.candidate.locus, evidence: { occurrences: j.candidate.evidence.occurrences, seqs: j.candidate.evidence.seqs.length }, divergences: j.candidate.ids.length });
   const reasons: Record<string, number> = {};
   for (const n of r.notMechanical) reasons[n.reason] = (reasons[n.reason] ?? 0) + 1;
   const entries: { kind: Kind; data: LogData }[] = [
     ...g.accepted.map((j) => ({
       kind: "patch" as const,
-      data: { class: "automatic", status: "applied", edit: editOf(j.candidate), locus: j.candidate.locus, evidence: j.candidate.evidence, gate: { before: j.before, after: j.after }, oracle },
+      data: { class: "automatic", status: "applied", commit, edit: editOf(j.candidate), locus: j.candidate.locus, evidence: j.candidate.evidence, gate: { before: j.before, after: j.after }, oracle },
     })),
     {
       kind: "gate",
       data: {
+        ...(commit ? { commit } : {}),
         before: g.before,
         after: g.after,
         evaluations: g.evaluations,
@@ -104,13 +126,12 @@ function applyAndLog(repo: string, dataDir: string, r: AlignResult): NonNullable
     },
   ];
   const log = logPath(dataDir);
-  appendLog(log, r.runId, entries);
-  if (!files.length) return { files, log, entries: entries.length };
-  const msg =
-    `align: ${g.accepted.length} automatic patches (train Δ ${g.after.trainDivergences - g.before.trainDivergences} divergences, L3 ${pts(g.before.train, g.after.train)}; ` +
-    `held-out Δ L3 ${pts(g.before.heldOut, g.after.heldOut)})\n\nSealed log run ${r.runId} (${g.accepted.length} patch entries + 1 gate entry); oracle ${oracle.oracleSeqs} sequences, sha256 ${oracle.oracleSha}.`;
-  git(repo, "commit", "-q", "-m", msg, "--", ...files);
-  return { files, log, entries: entries.length, commit: git(repo, "rev-parse", "HEAD") };
+  try {
+    appendLog(log, r.runId, entries);
+  } catch (e) {
+    throw new Error(`align: ${commit ? `commit ${commit} landed but ` : ""}the sealed log append failed${commit ? `; undo the commit (git reset --soft HEAD~1 && git checkout HEAD -- ${files.join(" ")})` : ""}: ${String(e)}`);
+  }
+  return { files, log, entries: entries.length, ...(commit ? { commit } : {}) };
 }
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;

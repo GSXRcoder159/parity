@@ -288,3 +288,39 @@ test("one binding by sub-code: a key's message seen with one decline-code-like e
     [error("declined_one", "message"), "one binding: every occurrence renders the same {param} or sub-code, so the message is shown for one use of the key only"],
   ]);
 });
+
+test("never seeded: a fraud or risk field (the key, a path under it, a key inside the value); a literal over a catalog {var}", () => {
+  const oracle = [1, 2].map((n) =>
+    rec(`f#${n}`, false, [
+      st(0, 200, customer({ outcome: "basic", checks: { cvc: "pass" }, card: { kind: "basic", risk_score: 1 }, tier: "basic" })),
+      st(1, 404, { error: { type: "invalid_request_error", code: "gone", param: "p" } }),
+      st(2, 404, { error: { type: "invalid_request_error" } }),
+    ]),
+  );
+  // The twin renders a different {param} than the oracle (one call site's bug), and one the oracle omits.
+  const twin = [1, 2].map((n) => rec(`f#${n}`, false, [st(0, 200, {}), st(1, 404, { error: { param: "q" } }, "resource_missing"), st(2, 404, { error: { param: "q" } }, "gone_var")]));
+  const seqs = ["f#1", "f#2"];
+  const { candidates, notMechanical } = propose(
+    [
+      ...["outcome", "checks.cvc", "card", "tier"].flatMap((f) => seqs.map((s) => div(s, 0, `$.${f}`, "MISSING_FIELD", field(f)))),
+      ...seqs.map((s) => div(s, 0, "$.fraud_details", "EXTRA_FIELD", field("fraud_details"))), // a delete seeds nothing
+      ...seqs.map((s) => div(s, 1, "$.error.param", "VALUE_MISMATCH", error("resource_missing", "param"))),
+      ...seqs.map((s) => div(s, 1, "$.error.code", "VALUE_MISMATCH", error("resource_missing", "code"))), // a literal field of the same entry
+      ...seqs.map((s) => div(s, 2, "$.error.param", "EXTRA_FIELD", error("gone_var", "param"))),
+    ],
+    oracle,
+    twin,
+    new Set(),
+    { ...data, catalog: { ...catalog, gone_var: { status: 404, type: "invalid_request_error", param: "{param}", message: "parity: gone_var" } } },
+  );
+  assert.deepEqual(candidates.map((c) => [c.pointer, c.op, c.value]), [
+    ["/tier", "set", "basic"],
+    ["/fraud_details", "delete", undefined],
+    ["/resource_missing/code", "set", "gone"],
+  ]);
+  assert.deepEqual(notMechanical.map((n) => [n.locus, n.reason]), [
+    ...["outcome", "checks.cvc", "card"].map((f) => [field(f), "fraud or risk data: never seeded into a public template"]),
+    [error("resource_missing", "param"), "call-site var: the entry's {var} renders per call site (assisted)"],
+    [error("gone_var", "param"), "call-site var: the entry's {var} renders per call site (assisted)"],
+  ]);
+});
