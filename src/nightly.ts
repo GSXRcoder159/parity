@@ -295,7 +295,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   // its hash, so it is never rebased): up to date with origin first, and a rejected push stops the night before the data
   // repo's log (with the entries citing it) is pushed.
   const branch = o.dryRun ? "" : run("git", ["rev-parse", "--abbrev-ref", "HEAD"], o.repo);
-  if (!o.dryRun) run("git", ["pull", "-q", "--ff-only"], o.repo);
+  if (!o.dryRun) run("git", ["pull", "-q", "--ff-only", "origin", branch], o.repo);
   const plan = align({ repo: o.repo, dataDir: data, runId, apply: !o.dryRun });
   if (plan.applied?.commit) {
     try {
@@ -351,7 +351,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
       `${d.file ? `; drift: ${d.items.length} paths` : ""}\n\nSealed log run ${runId} (data repo ${dataCommit}); oracle ${oracle.oracleSeqs} sequences, sha256 ${oracle.oracleSha}.`;
     run("git", ["commit", "-q", "-m", msg, "--", ...files], o.repo);
     // This commit is cited by nothing, so it may be rebased onto a main that moved during the night.
-    run("git", ["pull", "-q", "--rebase"], o.repo);
+    run("git", ["pull", "-q", "--rebase", "origin", branch], o.repo);
     run("git", ["push", "-q", "origin", `HEAD:${branch}`], o.repo);
     run("git", ["push", "-q"], data);
     commits = { data: dataCommit, parity: run("git", ["rev-parse", "HEAD"], o.repo) };

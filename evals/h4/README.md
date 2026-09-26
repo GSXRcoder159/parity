@@ -42,8 +42,10 @@ node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
 ```
 
 A full run (twin, control, sandbox) is up to 60 × 12 = 720 model calls, half again the 480 of twin + sandbox alone.
-The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day, shared with other LLM spend, which
-`PARITY_LLM_CAP_USD` can only lower) may well stop it; the result is then a partial report with no verdict.
+The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day, which `PARITY_LLM_CAP_USD` can only
+lower) may well stop it; the result is then a partial report with no verdict. The cap counts the spend in one ledger,
+`<data dir>/budget/llm.jsonl`: it is shared with the nightly's assisted pass only if you pull the data repo before a
+local run (the nightly pushes its spend there).
 
 ## Status (2026-09-26)
 
@@ -73,7 +75,8 @@ The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day,
   own run-to-run variance with twin infidelity, and it biases H4 toward "stop": an agent that repeats its own outcome
   only 90% of the time reads "stop" even against a perfect twin. The control run measures that variance on the same
   tasks, and the report prints it beside the H4 number.
-- **Spend.** Every call goes through `src/align/llm.ts`'s `complete()` and is written to `budget/llm.jsonl` (purpose `h4`).
+- **Spend.** Every call goes through `src/align/llm.ts`'s `complete()` and is written to `<data dir>/budget/llm.jsonl`
+  (purpose `h4`), the ledger the nightly's assisted pass also writes and pushes to the data repo.
   A 429 or 529 is retried twice there; a third one errors that task. A call is refused before it is sent if it would
   pass any of three caps:
   - the daily cap;

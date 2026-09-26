@@ -72,8 +72,9 @@ const USAGE = `usage:
     Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a
     sealed-log score entry) with the noise ceiling from the latest noise-a/noise-b pair; align --apply; align --assist;
     log merged align/assisted-* PRs (gh); append site/data/curve.json and write site/data/scores/<date>.json; drift
-    (drift/<date>.md + site/data/drift.json, or a note); commit and push the data repo, commit the public-safe files here
-    (the workflow pushes). Tonight's run files and read-ledger entries are pushed as soon as recording ends. A refused or
+    (drift/<date>.md + site/data/drift.json, or a note); commit both repos and push them: this one first (the align
+    commit as soon as it lands), the data repo last. Tonight's run files and read-ledger entries (and the LLM ledger,
+    after the assisted pass) are pushed to the data repo as soon as they are written. A refused or
     aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
     oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface
     entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
