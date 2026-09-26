@@ -1,5 +1,11 @@
 # Day-1 outreach messages
 
+> **Before sending (added 2026-09-26):** these messages promise to run the recipient's tests against the real sandbox "within a week". That cannot be kept until **B1** (claim the sandbox): the claimable key has refused every request since 2026-09-26 01:56 UTC.
+> - Send after B1.
+> - Or, if you send now, replace the sandbox promise with "against the existing mocks now, and the real sandbox as soon as my sandbox access is upgraded".
+>
+> Runs for a partner use **their** Stripe key or their own run of `paritybench agree`, never our account (decision 0001 C8).
+
 **Sender:** Adam Kuca, University of Michigan · **Drafted:** 2026-09-25 · **Targets:** rows 1–20 of `cohorts.md` · **Tracker:** `funnel.md`
 
 **The ask (plan §6.2, verbatim):**
