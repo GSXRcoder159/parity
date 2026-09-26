@@ -317,7 +317,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
   }
 });
 
-test("nightly lands an align commit with its sealed-log entries: a failed parity push drops both; a failed data push leaves them on a pending branch that the next night relands", { timeout: 240_000 }, async () => {
+test("nightly lands an align commit with its sealed-log entries: a failed parity push drops both here and leaves the pending branch, which the next night deletes unread, or relands when the push landed after all; a failed data push leaves them on a pending branch that the next night relands",{ timeout: 240_000 }, async () => {
   // A sandbox recording where every customer's tax_exempt is "reverse": align --apply seeds it (one automatic patch).
   const CLOCK = "2026-09-27T07:00:00.000Z";
   const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
@@ -388,7 +388,9 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
     // (1) The align commit's push fails: neither the commit nor its entries land anywhere, and none is left here.
     await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: failing(parityPush), now: () => new Date("2026-10-05T07:00:00Z") }), /the align commit was not pushed \(injected failure: git push -q origin HEAD:main\); the align commit [0-9a-f]{40} and its sealed-log entries were dropped/);
     assert.deepEqual([git(repo, "rev-parse", "HEAD"), bare(parityOrigin, "rev-parse", "main"), git(repo, "status", "--porcelain")], [head0, head0, ""]);
-    assert.equal(pendingRefs(), "", "the pending branch is deleted");
+    // A failed push may have landed (a lost reply): the pending branch is left for the next night's reland() to decide.
+    const left = pendingRefs();
+    assert.match(left, /^nightly\/pending-\S+$/);
     assert.ok(!readJsonl<LogEntry>(logPath(data)).some((e) => e.kind === "patch" || e.kind === "gate"), "no patch or gate entry here either");
     invariant();
 
@@ -411,7 +413,8 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
     assert.match(bare(parityOrigin, "log", "-1", "--format=%s", "main"), /^align: 1 automatic patches/);
     const [pending, ...more] = pendingRefs().split("\n");
     assert.match(pending!, /^nightly\/pending-\d{8}T\d{6}-\w+$/);
-    assert.deepEqual(more, [], "the ghost branch was deleted unread");
+    assert.notEqual(pending, left);
+    assert.deepEqual(more, [], "(1)'s branch and the ghost branch were deleted unread: their align commits are not on origin");
     assert.ok(!originLog().some((e) => e.runId === "ghost"));
     assert.ok(!originLog().some((e) => e.data.commit === aligned), "not on the log's main yet");
     const waiting = originLog(pending).filter((e) => e.data.commit === aligned).map((e) => [e.kind, e.data.class]);
@@ -447,6 +450,30 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
     assert.equal(r.patches.automatic, 1, "counted once");
     assert.deepEqual(site(repo, "changelog.json").map((c: { class: string; pointers: string[]; commit: string }) => [c.class, c.pointers, c.commit]), [["automatic", ["/tax_exempt"], aligned]]);
     assert.equal(bare(parityOrigin, "rev-parse", "main"), git(repo, "rev-parse", "HEAD"));
+    invariant();
+
+    // (6) The align commit's push lands but its reply is lost, so land() drops the commit and entries here. A later
+    // recording (tax_exempt "exempt") gives align a second patch. The pending branch is the entries' only copy.
+    const exempt = JSON.parse(JSON.stringify(oracle).replaceAll('"tax_exempt":"reverse"', '"tax_exempt":"exempt"')) as typeof oracle;
+    writeJsonl(join(data, "runs/2026-10-09/sandbox-20261009T060000-bbbb.jsonl"), exempt.map((x) => ({ ...x, runId: "20261009T060000-bbbb", startedAt: "2026-10-09T06:00:00.000Z" })));
+    const lostReply: Run = (cmd, args, cwd) => {
+      const out = failing(() => false)(cmd, args, cwd);
+      if (parityPush(args, cwd)) throw new Error("injected failure: the push landed, its reply was lost");
+      return out;
+    };
+    await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: lostReply, now: () => new Date("2026-10-09T07:00:00Z") }), /the push landed, its reply was lost/);
+    const aligned2 = bare(parityOrigin, "rev-parse", "main");
+    assert.notEqual(aligned2, aligned);
+    assert.match(bare(parityOrigin, "log", "-1", "--format=%s", "main"), /^align: 1 automatic patches/);
+    const [pending2, ...more2] = pendingRefs().split("\n");
+    assert.deepEqual([pending2!.startsWith("nightly/pending-"), more2], [true, []]);
+    assert.ok(!originLog().some((e) => e.data.commit === aligned2), "not on the log's main");
+    assert.deepEqual(originLog(pending2).filter((e) => e.data.commit === aligned2).map((e) => [e.kind, e.data.class]), [["patch", "automatic"], ["gate", undefined]], "the pending branch holds them");
+    // The next night, on this same checkout, relands them.
+    const r2 = await nightly({ repo, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-10T07:00:00Z") });
+    assert.equal(pendingRefs(), "");
+    assert.deepEqual(originLog().filter((e) => e.data.relanded && e.data.commit === aligned2).map((e) => e.kind), ["patch", "gate"]);
+    assert.equal(r2.patches.automatic, 2, "counted once");
     invariant();
   } finally {
     for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {

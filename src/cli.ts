@@ -75,8 +75,9 @@ const USAGE = `usage:
     site/data/changelog.json; drift (drift/<date>.md + site/data/drift.json, or a note); commit both repos and push them:
     this one first, the data repo last. An align commit lands with its sealed-log entries at once: the entries go to the
     data repo's branch nightly/pending-<runId>, then the commit to this repo, then the entries to the data repo's main (a
-    failed first or second push drops both; after a failed third, the next nightly relands them from the pending branch
-    before anything else). Tonight's run files and read-ledger entries (and the LLM ledger,
+    failed first or second push drops both here; after a failed second or third, the next nightly relands them from the
+    pending branch before anything else if the commit is on origin, else deletes the branch). Tonight's run files and
+    read-ledger entries (and the LLM ledger,
     after the assisted pass) are pushed to the data repo as soon as they are written. A refused or
     aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
     oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface

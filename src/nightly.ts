@@ -194,8 +194,10 @@ const PENDING = "nightly/pending-";
  * origin has its patch entries on the log's main, or, from the moment it is pushed until the next nightly relands them
  * (reland()), on the data repo's branch nightly/pending-<runId>. So:
  *   1. commit the log (and tonight's other data files) and push it to nightly/pending-<runId>, never to main;
- *   2. push the align commit. If 1 or 2 fails, nothing landed: the entries and the commit are dropped here too (so no
- *      later push carries them) and the pending branch is deleted (reland() deletes a leftover whose commit is not on origin);
+ *   2. push the align commit. If 1 or 2 fails, the entries and the commit are dropped here (so no later push carries
+ *      them). After 1 the commit was never pushed: the pending branch is deleted. After 2 it may have landed with the
+ *      reply lost, so the branch is left: the next nightly's reland() relands the entries if the commit is on origin and
+ *      deletes the branch unread if not;
  *   3. push the log to main, then delete the pending branch. If 3 fails, the entries wait on the pending branch, which
  *      outlives this checkout (the nightly's runner is discarded), and the next nightly lands them before anything else.
  */
@@ -209,12 +211,12 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
     } catch {}
   };
   let committed = false;
-  const drop = (why: string, e: unknown): never => {
+  const drop = (why: string, e: unknown, kept = ""): never => {
     if (committed) git(data, "reset", "-q", "HEAD~1");
     writeFileSync(o.log, o.logBefore);
     git(o.repo, "reset", "-q", "--keep", `${o.commit}~1`);
-    quiet(() => git(data, "push", "-q", "origin", "--delete", pending));
-    throw new Error(`nightly: ${why} (${(e as Error).message}); the align commit ${o.commit} and its sealed-log entries were dropped: nothing is published tonight`);
+    if (!kept) quiet(() => git(data, "push", "-q", "origin", "--delete", pending));
+    throw new Error(`nightly: ${why} (${(e as Error).message}); the align commit ${o.commit} and its sealed-log entries were dropped here: nothing is published tonight${kept}`);
   };
   try {
     git(data, "pull", "-q", "--rebase", "--autostash");
@@ -228,7 +230,8 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
   try {
     git(o.repo, "push", "-q", "origin", `HEAD:${o.branch}`);
   } catch (e) {
-    drop("the align commit was not pushed", e);
+    // The push may have landed with its reply lost: only the next night's reland() can tell, so the entries' copy stays.
+    drop("the align commit was not pushed", e, `. If the push landed after all, the entries wait on ${pending} and the next nightly lands them first; if not, it deletes the branch unread`);
   }
   try {
     git(data, "pull", "-q", "--rebase");
@@ -241,8 +244,8 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
 }
 
 /**
- * The first step of a night: for each nightly/pending-<runId> branch on the data repo's origin (land()), re-append its
- * run's entries when they are missing from the log and its align commit is on this repo's origin (same data and ts, a
+ * The first step of a night: for each nightly/pending-<runId> branch on the data repo's origin (land()), re-append those
+ * of its run's entries missing from the log (by hash) when its align commit is on this repo's origin (same data and ts, a
  * new place in the chain, `relanded` naming the branch and the original hash), commit and push; then delete the branch.
  * A branch whose align commit never reached origin is deleted unread: its entries never landed. In a shallow clone a
  * commit it does not have decides nothing: the branch, the only copy of its entries, is left for a full checkout.
@@ -259,9 +262,11 @@ export function reland(o: { data: string; repo: string; branch: string; date: st
   const relanded: string[] = [];
   for (const ref of refs) {
     const r = ref.slice(PENDING.length);
-    const logged = existsSync(log) && readJsonl<LogEntry>(log).some((e) => e.runId === r);
+    // By hash, not run id: after a failed parity push this checkout's log keeps the run's entries from before align.
+    const have = new Set((existsSync(log) ? readJsonl<LogEntry>(log) : []).flatMap((e) => [e.hash, (e.data.relanded as { hash?: string } | undefined)?.hash]));
     git(data, "fetch", "-q", "origin", ref);
     const theirs = git(data, "show", "FETCH_HEAD:align/log.jsonl").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as LogEntry).filter((e) => e.runId === r);
+    const missing = theirs.filter((e) => !have.has(e.hash));
     const commit = theirs.find((e) => e.kind === "gate")?.data.commit;
     let known = true;
     try {
@@ -278,14 +283,14 @@ export function reland(o: { data: string; repo: string; branch: string; date: st
       git(o.repo, "merge-base", "--is-ancestor", String(commit), `origin/${o.branch}`);
       onOrigin = true;
     } catch {}
-    if (!logged && onOrigin && theirs.length) {
+    if (onOrigin && missing.length) {
       // One append per original timestamp: appendLog stamps a batch with one ts.
-      for (const ts of [...new Set(theirs.map((e) => e.ts))]) {
-        appendLog(log, r, theirs.filter((e) => e.ts === ts).map((e) => ({ kind: e.kind, data: { ...e.data, relanded: { branch: ref, hash: e.hash } } })), ts);
+      for (const ts of [...new Set(missing.map((e) => e.ts))]) {
+        appendLog(log, r, missing.filter((e) => e.ts === ts).map((e) => ({ kind: e.kind, data: { ...e.data, relanded: { branch: ref, hash: e.hash } } })), ts);
       }
       git(data, "add", "--", "align");
       git(data, "commit", "-q", "-m", `nightly ${o.date} run ${o.runId}: reland run ${r}'s sealed-log entries from ${ref} (align commit ${commit})`);
-      git(data, "pull", "-q", "--rebase");
+      git(data, "pull", "-q", "--rebase", "--autostash"); // a night dropped by land() leaves its oracle.jsonl here
       git(data, "push", "-q");
       relanded.push(r);
     }
