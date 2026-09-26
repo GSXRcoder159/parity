@@ -2,7 +2,7 @@
 // paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle,
 // serve the twin (over HTTP or MCP), score the twin against an oracle.
 import { randomInt } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -35,7 +35,7 @@ const USAGE = `usage:
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
   Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger <dataDir>/budget/reads.jsonl (private:
-    it names the account; seeded once from this repo's old budget/reads.jsonl).
+    it names the account).
   Data dir: PARITY_DATA_DIR, else ../parity-data next to the repo if present, else recordings/.
   record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
   --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
@@ -60,7 +60,8 @@ const USAGE = `usage:
     --assist (after the plan, on HEAD; run align --apply first): the LLM proposes one twin code file per non-mechanical
     locus (top 3); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
     merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
-    call's tokens and cost_usd go to budget/llm.jsonl; daily cap $15 (UTC), PARITY_LLM_CAP_USD may only lower it.
+    call's tokens and cost_usd go to <dataDir>/budget/llm.jsonl; daily cap $15 (UTC) per ledger, PARITY_LLM_CAP_USD may
+    only lower it. The nightly pushes its ledger to the data repo: pull it before a local LLM run so both count.
   align surface: log a surface-added twin change (decision 0002 §3; not counted as alignment): score-twin on the oracle for a
     temp checkout of <commit>^ (--commit default HEAD) and for the working tree, then a sealed-log patch entry
     {class: "surface-added", note, commit, normalization, before, after}; prints the deltas. The next nightly point
@@ -183,17 +184,9 @@ export function resolveTarget(spec: string, name?: string): Target {
 
 /**
  * The sandbox read ledger <dir>/budget/reads.jsonl. It names the Stripe account, so it lives in the private data repo
- * (decision 0001 C3), never in this one. Seeded from `legacy` (this repo's old ledger) when absent, so the rolling 30-day
- * count keeps its history. ponytail: one-time migration; drop `legacy` once the data repo carries its own ledger.
+ * (decision 0001 C3), never in this one; each data dir counts its own account's reads.
  */
-export function readsLedger(dir: string, legacy = join(REPO_ROOT, LEDGER)): string {
-  const path = join(dir, LEDGER);
-  if (!existsSync(path) && existsSync(legacy)) {
-    mkdirSync(dirname(path), { recursive: true });
-    copyFileSync(legacy, path);
-  }
-  return path;
-}
+export const readsLedger = (dir: string): string => join(dir, LEDGER);
 
 const fileName = (spec: string, name?: string): string => name ?? (spec === "sandbox" ? "sandbox" : new URL(spec).host.replace(/[^A-Za-z0-9.-]/g, "-"));
 const today = (): string => new Date().toISOString().slice(0, 10);

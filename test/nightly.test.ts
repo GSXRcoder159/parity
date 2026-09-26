@@ -51,7 +51,7 @@ test("logMerged: each merged align/assisted-* PR is logged once across runs; ope
   );
 });
 
-test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits; the next night annotates only what is new", { timeout: 180_000 }, async () => {
+test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits and pushes both repos (parity first); the next night annotates only what is new and replaces a same-date point", { timeout: 180_000 }, async () => {
   // Oracle and noise pair: two back-to-back recordings of the twin itself (as "sandbox") over three strata, one held out;
   // `extra` (seed 3) is a later run that grows the oracle before the second night.
   const three = TEMPLATES.filter((t) => ["customer-crud", "refund-full", "invalid-params"].includes(t.name));
@@ -83,23 +83,27 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
   writeJsonl(join(data, "runs/2026-09-27/noise-b-20260927T071000-bbbb.jsonl"), pair.b!);
   appendLog(logPath(data), "manual", [
     { kind: "score", data: { label: "day-0", oracle: ORACLE } },
+    { kind: "patch", data: { class: "automatic", status: "applied", commit: "0".repeat(40), oracle: ORACLE } }, // a manual align --apply
     { kind: "patch", data: { class: "surface-added", status: "applied", note: "test clocks", oracle: ORACLE } },
   ]);
+  // The data repo's read ledger (it names the account): the gate counts it (dated yesterday by the wall clock: the gate's
+  // 30-day window ends at the real now, not at the pipeline's `now`).
+  writeJsonl(join(data, "budget/reads.jsonl"), [{ date: new Date(Date.now() - 86_400_000).toISOString(), account: "acct_legacy00000000", target: "sandbox", runId: "old", gets: 5, posts: 0, deletes: 0, charges: 0 }]);
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(tmp, "origin.git")]);
   init(data);
   git(data, "remote", "add", "origin", join(tmp, "origin.git"));
   git(data, "add", ".");
   git(data, "commit", "-q", "-m", "init");
   git(data, "push", "-q", "-u", "origin", "main");
-  // The parity repo: the twin's code, no pushes (the workflow pushes it).
+  // The parity repo: the twin's code, with its own bare origin (the nightly pushes it, before the data repo).
   const repo = join(tmp, "parity");
   for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
-  // The repo's old read ledger (it names the account): the gate seeds the data repo's ledger from it and counts it
-  // (dated yesterday by the wall clock: the gate's 30-day window ends at the real now, not at the pipeline's `now`).
-  writeJsonl(join(repo, "budget/reads.jsonl"), [{ date: new Date(Date.now() - 86_400_000).toISOString(), account: "acct_legacy00000000", target: "sandbox", runId: "old", gets: 5, posts: 0, deletes: 0, charges: 0 }]);
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(tmp, "parity-origin.git")]);
   init(repo);
+  git(repo, "remote", "add", "origin", join(tmp, "parity-origin.git"));
   git(repo, "add", ".");
   git(repo, "commit", "-q", "-m", "init");
+  git(repo, "push", "-q", "-u", "origin", "main");
 
   const logBefore = readFileSync(logPath(data), "utf8");
   const heads = () => [git(repo, "rev-parse", "HEAD"), git(data, "rev-parse", "HEAD")];
@@ -128,7 +132,9 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.match(nightlyText(dry), /DRY RUN: nothing recorded, applied, assisted, committed or pushed/);
 
     // (c) A night that fails after recording (here gh, at step 5) has already pushed tonight's run files and read-ledger
-    // entries: the refused slice wrote no run file, but the gate seeded the data repo's ledger from the legacy one.
+    // entries: the refused slice wrote no run file, so here an uncommitted run file stands in for one.
+    const late = "runs/2026-10-03/late-20261003T070000-dddd.jsonl";
+    writeJsonl(join(data, late), pair.b!);
     const ghDown: Run = (cmd, args, cwd) => {
       if (cmd === "gh") throw new Error("gh: injected outage");
       return sh(cmd, args, cwd);
@@ -136,7 +142,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: ghDown, now }), /gh: injected outage/);
     const origin = (...args: string[]) => git(tmp, "--git-dir", join(tmp, "origin.git"), ...args);
     assert.match(origin("log", "-1", "--format=%s", "main"), /^nightly 2026-10-04 run \S+: recordings and read ledger$/);
-    assert.deepEqual(origin("show", "--name-only", "--format=", "main").split("\n"), ["budget/reads.jsonl"]);
+    assert.deepEqual(origin("show", "--name-only", "--format=", "main").split("\n"), [late]);
     assert.equal(git(repo, "rev-parse", "HEAD"), head0, "it failed before publishing anything");
 
     const gh: string[][] = [];
@@ -178,7 +184,9 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.equal(curve.length, 1);
     const pt = curve[0];
     // The failed night left a nightly score entry but never published: its surface-added entry is annotated here.
-    assert.deepEqual([pt.date, pt.normalization, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.3", false, 6, ["surface-added: test clocks"], { automatic: 0, assisted: 1 }, undefined]);
+    // patches: sealed-log totals since the freeze, the manual --apply included.
+    assert.deepEqual([pt.date, pt.normalization, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.3", false, 6, ["surface-added: test clocks"], { automatic: 1, assisted: 1 }, undefined]);
+    assert.deepEqual(pt.noise.coverage, { seqs: 6, oracleSeqs: 6, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
     assert.deepEqual(r.events, pt.events);
     assert.match(text, /^curve annotations: surface-added: test clocks$/m);
     assert.deepEqual(Object.keys(pt.noise.byStratum).sort(), ["errors", "lifecycle", "refunds"]);
@@ -198,7 +206,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
       assert.ok(row.ceiling.L3 !== null && row.ceiling.L4 !== null, `${k} has a ceiling`);
       assert.ok(row.L3.n > 0);
     }
-    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 0, assisted: 1, share: 0 }]);
+    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 1, assisted: 1, share: 0.5 }]);
 
     // Public-safe: no ids, no values' telltales, no fraud or risk fields.
     for (const f of ["curve.json", "scores/2026-10-04.json"]) {
@@ -206,22 +214,24 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
       assert.doesNotMatch(s, /\b[a-z]+_[A-Za-z0-9]{10,}\b|@example|outcome|risk_|sk_test/, f);
     }
 
-    // Step 8: the data repo committed and pushed; here, exactly the public files committed, the tree left clean.
+    // Step 8: both repos committed and pushed; here, exactly the public files committed, the tree left clean.
     const [head1, dataHead1] = heads();
     assert.notEqual(dataHead1, dataHead0);
     assert.equal(git(tmp, "--git-dir", join(tmp, "origin.git"), "rev-parse", "main"), dataHead1, "the data repo was pushed");
+    assert.equal(git(tmp, "--git-dir", join(tmp, "parity-origin.git"), "rev-parse", "main"), head1, "this repo was pushed");
     assert.deepEqual(r.commits, { data: dataHead1, parity: head1 });
     assert.deepEqual(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n"), ["site/data/curve.json", "site/data/scores/2026-10-04.json"], "no ledger here: it names the account");
     assert.ok(git(data, "log", "--name-only", "--format=").split("\n").includes("budget/reads.jsonl"), "the read ledger is committed in the data repo");
     assert.match(git(repo, "log", "-1", "--format=%s"), /^nightly 2026-10-04: curve point and scores \(train L3 [\d.]+%, held-out L3 [\d.]+%; noise ceiling L3 [\d.]+%; oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);
-    assert.ok(readdirSync(join(data, "runs")).every((d) => d === "2026-09-27"), "a refused recording writes no run file");
+    assert.deepEqual(readdirSync(join(data, "runs")).sort(), ["2026-09-27", "2026-10-03"], "a refused recording writes no run file");
 
     // (d) and "annotated once": the next night, after a surface-added entry and a run that grows the oracle 6 -> 9.
     appendLog(logPath(data), "manual", [{ kind: "patch", data: { class: "surface-added", status: "applied", note: "proration", oracle: ORACLE } }]);
     writeJsonl(join(data, "runs/2026-10-04/extra-20261004T120000-cccc.jsonl"), pair.extra!);
     const r2 = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T07:00:00Z") });
     assert.equal(r2.oracle.oracleSeqs, 9);
+    assert.deepEqual(r2.patches, { automatic: 1, assisted: 1 }, "totals: nothing counted twice");
     const curve2 = site("curve.json");
     assert.deepEqual(curve2.map((p: { date: string; oracleSeqs: number; events: string[] }) => [p.date, p.oracleSeqs, p.events]), [
       ["2026-10-04", 6, ["surface-added: test clocks"]],
@@ -230,6 +240,12 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const d2 = await app.load(async (url: string) => (existsSync(join(repo, "site", url)) ? JSON.parse(readFileSync(join(repo, "site", url), "utf8")) : null));
     assert.deepEqual(app.series(d2.curve, "all").map((row: { events: string[] }) => row.events), [["surface-added: test clocks"], ["surface-added: proration", "oracle expanded: 6→9"]]);
     assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").map((e) => [e.data.date, e.data.events]), [["2026-10-04", curve2[0].events], ["2026-10-05", curve2[1].events]]);
+    assert.deepEqual(curve2[1].noise.coverage, { seqs: 6, oracleSeqs: 9, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
+    assert.deepEqual(clean(), ["", ""]);
+
+    // A second run on the same date replaces that date's point.
+    await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T09:00:00Z") });
+    assert.deepEqual(site("curve.json").map((p: { date: string }) => p.date), ["2026-10-04", "2026-10-05"]);
     assert.deepEqual(clean(), ["", ""]);
   } finally {
     for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {

@@ -4,12 +4,18 @@
 // Data contract. Public-safe only (decision 0001 C3): scores, counts, strata, templates, paths and classes; no values, no ids.
 //   Levels   {L1, L2, L3, L4}, each a 95% Wilson interval {p, lo, hi, n} (src/bench/score.ts).
 //   curve.json   [{date: "YYYY-MM-DD", normalization, overall: Levels, byStratum: {name: Levels}, heldOut: Levels,
-//                  train: Levels, events: ["surface-added: …"], noise?: {overall: Levels, byStratum: {name: Levels}},
-//                  patches?: {automatic, assisted}, sample?: true}]
+//                  train: Levels, events: ["surface-added: …", "oracle expanded: 88→120", …],
+//                  noise?: {overall?: Levels, byStratum: {name: Levels}, coverage?: Coverage},
+//                  patches?: {automatic, assisted}, oracleRefreshed?: boolean, oracleSeqs?: number, sample?: true}]
 //                noise = agreement of two real sandbox recordings of the same sequences: ceiling = noise p, floor = 1 − p.
-//                patches = align-loop patches merged that night, by class (decision 0002 §3).
-//   scores/<date>.json  {date, normalization, overall: Split, byStratum: {name: Split}, sample?: true},
-//                Split = {train: Levels, heldOut: Levels, noise: Levels}
+//                  overall is present only when the pair covers every scored template, byStratum only for the strata
+//                  it covers whole. Coverage = {seqs, oracleSeqs, templates, oracleTemplates, strata, inSample}:
+//                  inSample = the normalization rules were written from this pair.
+//                patches = align-loop patches since the scaffold freeze (cumulative sealed-log totals, decision 0002 §3):
+//                  automatic applied, assisted merged.
+//                oracleRefreshed = tonight's sandbox slice was recorded; oracleSeqs = sequences in the scored oracle.
+//   scores/<date>.json  {date, normalization, overall: Split, byStratum: {name: Split}, noiseCoverage?: Coverage, sample?: true},
+//                Split = {train: Levels, heldOut: Levels, noise?: Levels}
 //   drift.json   [{date, endpoint, template, path, cls, sample?: true}]
 // test/site.test.ts imports this module in Node, so everything above main() is DOM-free.
 
@@ -43,17 +49,20 @@ export function series(curve, stratum) {
   return rows;
 }
 
-/** Cumulative automatic and assisted patches after each night that reports patches; share = automatic / both (null at 0). */
+/** The cumulative automatic and assisted patches of each night that reports them (already totals); share = automatic / both (null at 0). */
 export function automation(curve) {
-  let automatic = 0;
-  let assisted = 0;
   return curve
     .filter((pt) => pt.patches)
-    .map((pt) => {
-      automatic += pt.patches.automatic ?? 0;
-      assisted += pt.patches.assisted ?? 0;
-      return { date: pt.date, events: [], automatic, assisted, share: automatic + assisted ? automatic / (automatic + assisted) : null };
-    });
+    .map(({ date, patches: { automatic = 0, assisted = 0 } }) => ({ date, events: [], automatic, assisted, share: automatic + assisted ? automatic / (automatic + assisted) : null }));
+}
+
+/** What the latest night's noise pair covers, as a sentence; null without a pair. */
+export function coverageText(pt) {
+  const c = pt?.noise?.coverage;
+  if (!c) return null;
+  const part = c.templates < c.oracleTemplates ? `: the ceiling is shown only for ${c.strata.length ? c.strata.join(", ") : "no stratum"}` : "";
+  const sample = c.inSample ? " In-sample: the normalization rules were written from this pair, so its floor flatters them." : "";
+  return `Noise pair: ${c.seqs} of ${c.oracleSeqs} oracle sequences, ${c.templates} of ${c.oracleTemplates} templates${part}.${sample}`;
 }
 
 /** Pixel scales of a w×h chart for 0–1 values over `dates`; a single date sits in the middle, no date gives no NaN. */
@@ -288,7 +297,10 @@ async function main() {
   for (const id of ["meta", "curve", "table", "automation"]) $(id).hidden = false;
   $("latest").textContent = last.date;
   $("norm").textContent = last.normalization;
-  $("invalid").hidden = Boolean(last.noise);
+  $("invalid").hidden = Boolean(last.noise?.overall);
+  const cov = coverageText(last);
+  $("coverage").hidden = !cov;
+  $("coverage").textContent = cov ?? "";
   $("stratum").replaceChildren(h("option", { value: "all" }, "All strata"), ...strata(data.curve).map((k) => h("option", { value: k }, k)));
   $("stratum").addEventListener("change", () => renderCurve(data));
   renderScores(data);

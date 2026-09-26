@@ -147,7 +147,7 @@
       }
     },
     "patches": {
-      "automatic": 5,
+      "automatic": 8,
       "assisted": 1
     }
   },
@@ -223,8 +223,8 @@
       }
     },
     "patches": {
-      "automatic": 2,
-      "assisted": 0
+      "automatic": 10,
+      "assisted": 1
     }
   },
   {
@@ -299,8 +299,8 @@
       }
     },
     "patches": {
-      "automatic": 0,
-      "assisted": 1
+      "automatic": 10,
+      "assisted": 2
     }
   },
   {
@@ -389,8 +389,8 @@
       }
     },
     "patches": {
-      "automatic": 4,
-      "assisted": 0
+      "automatic": 14,
+      "assisted": 2
     }
   },
   {
@@ -477,8 +477,8 @@
       }
     },
     "patches": {
-      "automatic": 2,
-      "assisted": 1
+      "automatic": 16,
+      "assisted": 3
     }
   },
   {
@@ -565,8 +565,8 @@
       }
     },
     "patches": {
-      "automatic": 1,
-      "assisted": 0
+      "automatic": 17,
+      "assisted": 3
     }
   },
   {
@@ -653,8 +653,8 @@
       }
     },
     "patches": {
-      "automatic": 3,
-      "assisted": 0
+      "automatic": 20,
+      "assisted": 3
     }
   }
 ]

@@ -88,6 +88,20 @@ test("nights are sorted, a normalization change is annotated, and the sample fla
   assert.equal(d.sample, true);
 });
 
+test("patches are cumulative totals per night (not summed); a partial noise pair has no overall ceiling and says what it covers", () => {
+  const curve = [point("2026-10-01", { patches: { automatic: 174, assisted: 0 } }), point("2026-10-02", { patches: { automatic: 180, assisted: 2 } })];
+  assert.deepEqual(app.automation(curve).map((r: { automatic: number; assisted: number }) => [r.automatic, r.assisted]), [[174, 0], [180, 2]]);
+  const coverage = { seqs: 60, oracleSeqs: 88, templates: 15, oracleTemplates: 26, strata: ["errors"], inSample: true };
+  const partial = point("2026-10-03", { noise: { byStratum: { errors: LEVELS }, coverage } });
+  assert.deepEqual(app.series([partial], "all")[0].ceiling, { L3: null, L4: null });
+  assert.deepEqual(app.series([partial], "errors")[0].ceiling, { L3: 0.6, L4: 0.3 });
+  assert.equal(
+    app.coverageText(partial),
+    "Noise pair: 60 of 88 oracle sequences, 15 of 26 templates: the ceiling is shown only for errors. In-sample: the normalization rules were written from this pair, so its floor flatters them.",
+  );
+  assert.equal(app.coverageText(point("2026-10-04")), null);
+});
+
 test("cells: an interval with its sample size, and a dash for an empty one", () => {
   assert.equal(app.cell({ p: 0.924, lo: 0.894, hi: 0.946, n: 420 }), "92.4% [89.4–94.6] (420)");
   assert.equal(app.cell({ p: 0, lo: 0, hi: 0, n: 0 }), "—");

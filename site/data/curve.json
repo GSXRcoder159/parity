@@ -364,11 +364,14 @@
         "n": 72
       }
     },
-    "events": [],
+    "events": [
+      "align apply: 174 automatic patches before this point (commit 8bbf612, sealed-log run 20260926T070554-dfta); day-0 scaffold overall L3 3.1% before them"
+    ],
     "patches": {
-      "automatic": 0,
+      "automatic": 174,
       "assisted": 0
     },
-    "oracleRefreshed": false
+    "oracleRefreshed": false,
+    "oracleSeqs": 88
   }
 ]
