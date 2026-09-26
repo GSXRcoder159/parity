@@ -11,7 +11,7 @@ import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.t
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
-import { ceilingText, changelog, logMerged, nightly, nightlyText } from "../src/nightly.ts";
+import { ceilingText, changelog, logMerged, nightly, nightlyText, removedTotals } from "../src/nightly.ts";
 import { createTwin } from "../src/twin/server.ts";
 
 // site/app.js is browser JS with no build step; a computed specifier keeps tsc from asking for its types.
@@ -79,6 +79,7 @@ test("changelog: automatic patches per gate batch, merged PRs joined with their 
     { date: "2026-10-04", class: "surface-added", note: "invoices", commit: "c2", divergencesRemoved: -4 },
   ]);
   assert.doesNotMatch(JSON.stringify(rows), /SECRET_VALUE|radar/);
+  assert.deepEqual(removedTotals(rows), { automatic: 20, assisted: 9 }, "surface-added counts as neither");
 });
 
 test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits and pushes both repos (parity first); the next night annotates only what is new and replaces a same-date point", { timeout: 180_000 }, async () => {
@@ -217,6 +218,9 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     // patches: sealed-log totals since the freeze, the manual --apply included.
     assert.deepEqual([pt.date, pt.normalization, pt.method, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.3", "m2", false, 6, ["surface-added: test clocks"], { automatic: 1, assisted: 1 }, undefined]);
     assert.equal(site("scores/2026-10-04.json").method, "m2");
+    // Train divergences removed per class: the fixture's manual apply and merged PR carry no gate counts.
+    assert.deepEqual([pt.divergencesRemoved, r.divergencesRemoved], [{ automatic: 0, assisted: 0 }, { automatic: 0, assisted: 0 }]);
+    assert.match(text, /^merged align\/assisted-\* PRs newly logged: 1 · since the scaffold freeze \(sealed log\): patches automatic 1 \(JSON-pointer edits\), assisted 1 \(merged PRs\); train divergences removed automatic 0, assisted 0$/m);
     assert.equal(mine.find((e) => e.kind === "score")!.data.method, "m2");
     assert.deepEqual(pt.noise.coverage, { seqs: 6, oracleSeqs: 6, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
     assert.deepEqual(r.events, pt.events);
@@ -238,7 +242,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
       assert.ok(row.ceiling.L3 !== null && row.ceiling.L4 !== null, `${k} has a ceiling`);
       assert.ok(row.L3.n > 0);
     }
-    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 1, assisted: 1, share: 0.5 }]);
+    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 1, assisted: 1, share: 0.5, removed: { automatic: 0, assisted: 0, share: null } }]);
 
     // The changelog: the sealed log's patch entries in log order, merged PRs by number, no values.
     assert.deepEqual(site("changelog.json"), [

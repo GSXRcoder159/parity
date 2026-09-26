@@ -372,6 +372,10 @@
       "automatic": 174,
       "assisted": 0
     },
+    "divergencesRemoved": {
+      "automatic": 7458,
+      "assisted": 0
+    },
     "oracleRefreshed": false,
     "oracleSeqs": 88
   }

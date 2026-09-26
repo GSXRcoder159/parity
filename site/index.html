@@ -73,7 +73,16 @@
           Automatic: an align-loop patch that edits only the twin's data files, for a value the oracle shows deterministically, applied when the held-out
           gate passes. Assisted: a code change proposed by the loop and merged after review. Surface-added changes are scaffold work and count as neither.
         </p>
+        <p class="muted">
+          <strong>Units.</strong> The H2 ratio (at least 60% of applied patches automatic) counts patches: one automatic patch is one JSON-pointer edit
+          to a data file, and one assisted patch is one merged pull request. One pull request can fix what many pointer edits fix, so each class also
+          reports the train divergences it removed: the held-out gate's train divergence count before the change minus after it, from the sealed log.
+        </p>
         <p id="automation-summary"></p>
+        <ul class="legend">
+          <li><span class="key" style="background: var(--s1)"></span>share of patches (H2)</li>
+          <li><span class="key" style="background: var(--s2)"></span>share of train divergences removed</li>
+        </ul>
         <div id="automation-chart" class="chart"></div>
       </section>
 

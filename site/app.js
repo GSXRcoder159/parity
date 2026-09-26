@@ -6,13 +6,15 @@
 //   curve.json   [{date: "YYYY-MM-DD", normalization, method?, overall: Levels, byStratum: {name: Levels}, heldOut: Levels,
 //                  train: Levels, events: ["surface-added: …", "oracle expanded: 88→120", "method change: …", …],
 //                  noise?: {overall?: Levels, byStratum: {name: Levels}, coverage?: Coverage},
-//                  patches?: {automatic, assisted}, oracleRefreshed?: boolean, oracleSeqs?: number, sample?: true}]
+//                  patches?: {automatic, assisted}, divergencesRemoved?: {automatic, assisted}, oracleRefreshed?: boolean,
+//                  oracleSeqs?: number, sample?: true}]
 //                noise = agreement of two real sandbox recordings of the same sequences: ceiling = noise p, floor = 1 − p.
 //                  overall is present only when the pair covers every scored template, byStratum only for the strata
 //                  it covers whole. Coverage = {seqs, oracleSeqs, templates, oracleTemplates, strata, inSample}:
 //                  inSample = the normalization rules were written from this pair.
-//                patches = align-loop patches since the scaffold freeze (cumulative sealed-log totals, decision 0002 §3):
-//                  automatic applied, assisted merged.
+//                patches = align-loop patches since the scaffold freeze (cumulative sealed-log totals, decision 0002 §3),
+//                  H2's unit: automatic = JSON-pointer edits applied, assisted = PRs merged. divergencesRemoved = the same
+//                  classes' train divergences removed (held-out gate's count before minus after), also cumulative.
 //                oracleRefreshed = tonight's sandbox slice was recorded; oracleSeqs = sequences in the scored oracle.
 //                method = the compare method (src/bench/compare.ts METHOD; absent = m1): m1 event-type sets, m2 plus causal
 //                  event order. A change is annotated by the nightly ("method change: causal event order").
@@ -57,11 +59,22 @@ export function series(curve, stratum) {
   return rows;
 }
 
-/** The cumulative automatic and assisted patches of each night that reports them (already totals); share = automatic / both (null at 0). */
+/**
+ * Each reporting night's cumulative patches (already totals; share = automatic / both, null at 0) and, when the night
+ * reports them, train divergences removed per class with the same share (`removed`, else null).
+ */
 export function automation(curve) {
+  const share = (a, b) => (a + b ? a / (a + b) : null);
   return curve
     .filter((pt) => pt.patches)
-    .map(({ date, patches: { automatic = 0, assisted = 0 } }) => ({ date, events: [], automatic, assisted, share: automatic + assisted ? automatic / (automatic + assisted) : null }));
+    .map(({ date, patches: { automatic = 0, assisted = 0 }, divergencesRemoved: r }) => ({
+      date,
+      events: [],
+      automatic,
+      assisted,
+      share: share(automatic, assisted),
+      removed: r ? { automatic: r.automatic, assisted: r.assisted, share: share(r.automatic, r.assisted) } : null,
+    }));
 }
 
 /** Changelog rows newest first (the file is oldest first): the date, class, patch count, what changed, and removals. */
@@ -247,13 +260,18 @@ function renderAutomation(data) {
   const all = automation(data.curve);
   const rows = all.filter((r) => r.share !== null);
   const end = all.at(-1);
+  const removed = end?.removed?.share == null ? "" : ` Train divergences removed: ${end.removed.automatic} by automatic patches, ${end.removed.assisted} by assisted ones: ${pct(end.removed.share)} automatic by divergences removed.`;
   $("automation-summary").textContent = rows.length
-    ? `${end.automatic} automatic and ${end.assisted} assisted patches since the scaffold freeze: ${pct(end.share)} automatic.`
+    ? `${end.automatic} automatic patches (JSON-pointer edits) and ${end.assisted} assisted patches (merged PRs) since the scaffold freeze: ${pct(end.share)} automatic by patch count, H2's unit.${removed}`
     : "No align-loop patches have been recorded yet.";
   $("automation-chart").hidden = !rows.length;
   if (rows.length) {
-    const def = { label: "automatic (cumulative)", color: "var(--s1)", get: (r) => r.share, text: (r) => `${pct(r.share)} (${r.automatic} of ${r.automatic + r.assisted})` };
-    chart($("automation-chart"), rows, [def], "Cumulative share of automatic patches");
+    const defs = [{ label: "automatic, share of patches", color: "var(--s1)", get: (r) => r.share, text: (r) => `${pct(r.share)} (${r.automatic} of ${r.automatic + r.assisted} patches)` }];
+    // ponytail: the second line needs every plotted night to report removals; points before it do not, and then it is left out.
+    if (rows.every((r) => r.removed?.share != null)) {
+      defs.push({ label: "automatic, share of train divergences removed", color: "var(--s2)", get: (r) => r.removed.share, text: (r) => `${pct(r.removed.share)} (${r.removed.automatic} of ${r.removed.automatic + r.removed.assisted} divergences)` });
+    }
+    chart($("automation-chart"), rows, defs, "Cumulative automatic share, by patches and by train divergences removed");
   }
 }
 
@@ -264,8 +282,10 @@ function renderChanges(data) {
     ? `${rows.length} entries: ${n("automatic")} automatic gate batches, ${n("assisted")} merged assisted PRs, ${n("surface-added")} surface-added`
     : "No changes logged yet";
   const unit = (r) => (r.patches === null ? "" : r.class === "automatic" ? ` · ${r.patches} JSON-pointer edits` : " · 1 merged PR");
-  const gone = (r) => (r.removed === null ? "" : ` · ${r.removed >= 0 ? r.removed : `${-r.removed} added`} train divergences${r.removed >= 0 ? " removed" : ""}`);
-  $("changes-list").replaceChildren(...rows.map((r) => h("li", {}, h("div", {}, h("b", {}, r.date), ` · ${r.class}${unit(r)}${gone(r)}`), h("code", {}, r.what))));
+  const gone = (r) => (r.removed === null ? "" : r.removed >= 0 ? ` · ${r.removed} train divergences removed` : ` · ${-r.removed} train divergences added`);
+  // Files and pointers as code; a surface-added note is prose.
+  const what = (r) => (r.class === "surface-added" ? h("div", { class: "muted" }, r.what) : h("code", {}, r.what));
+  $("changes-list").replaceChildren(...rows.map((r) => h("li", {}, h("div", {}, h("b", {}, r.date), ` · ${r.class}${unit(r)}${gone(r)}`), what(r))));
 }
 
 function renderScores(data) {

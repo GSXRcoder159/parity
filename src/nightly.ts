@@ -39,7 +39,10 @@ const CORPUS_SEEDS = "1-20";
  */
 export type Coverage = { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number; strata: string[]; inSample: boolean };
 export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScores> };
-/** Cumulative since the scaffold freeze, from the sealed log: automatic patches applied, assisted patches merged. */
+/**
+ * Cumulative since the scaffold freeze, from the sealed log, per class. Patches (H2's unit): automatic = JSON-pointer
+ * edits applied, assisted = PRs merged. Train divergences removed: the held-out gate's train count before minus after.
+ */
 export type Patches = { automatic: number; assisted: number };
 
 /** Run ids of the noise pairs the current normalization rules were written from (v1.2: the W0 pair A/D). */
@@ -176,6 +179,12 @@ export function changelog(log: string): Change[] {
   return rows;
 }
 
+/** Train divergences removed per class, summed over the changelog (automatic per gate batch, assisted per merged PR). */
+export function removedTotals(rows: Change[]): Patches {
+  const sum = (cls: Change["class"]) => rows.filter((r) => r.class === cls).reduce((n, r) => n + (r.divergencesRemoved ?? 0), 0);
+  return { automatic: sum("automatic"), assisted: sum("assisted") };
+}
+
 /**
  * The night's public-safe files (the page's contract, site/app.js): a curve point and site/data/scores/<date>.json.
  * Scores only, no values or ids (decision 0001 C3). Without a noise pair `noise` is absent (the page marks the night
@@ -189,6 +198,7 @@ function publicFiles(o: {
   noise?: Noise & { seqs: number; templates: Set<string>; inSample: boolean };
   events: string[];
   patches: Patches;
+  divergencesRemoved: Patches;
   oracleRefreshed: boolean;
   oracleSeqs: number;
 }) {
@@ -212,7 +222,7 @@ function publicFiles(o: {
     byStratum: Object.fromEntries(strata.map((k) => [k, o.noise!.byStratum[k]!])),
     coverage,
   };
-  const point = { date, normalization, method, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
+  const point = { date, normalization, method, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, divergencesRemoved: o.divergencesRemoved, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
   const byStratum = Object.keys(s.byStratum)
     .sort()
     .map((k) => {
@@ -256,8 +266,10 @@ export interface NightlyResult {
   plan: string;
   assist: string;
   merged: number;
-  /** Cumulative (patchTotals). */
+  /** Cumulative (patchTotals): JSON-pointer edits and merged PRs. */
   patches: Patches;
+  /** Cumulative train divergences removed per class (removedTotals). */
+  divergencesRemoved: Patches;
   /** The curve point's annotations. */
   events: string[];
   drift: DriftResult;
@@ -385,6 +397,8 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   }
   const merged = logMerged({ repo: o.repo, log, runId, oracle, run });
   const patches = patchTotals(log);
+  const changes = changelog(log);
+  const divergencesRemoved = removedTotals(changes);
 
   // 6. The public-safe curve point and scores file, then a `publish` entry: the next night's surface-added window starts here.
   const curveFile = join(root, "site/data/curve.json");
@@ -401,10 +415,10 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     ...(methodChanged ? [`method change: ${METHOD.change}`] : []),
   ];
   const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
-  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
+  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, divergencesRemoved, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
   writeJson(curveFile, [...curve, point]);
   writeJson(join(root, `site/data/scores/${date}.json`), scores);
-  writeJson(join(root, "site/data/changelog.json"), changelog(log));
+  writeJson(join(root, "site/data/changelog.json"), changes);
   appendLog(log, runId, [{ kind: "publish", data: { label: "nightly", date, events, oracle } }]);
   const published = ["site/data/curve.json", `site/data/scores/${date}.json`, "site/data/changelog.json"];
 
@@ -452,6 +466,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     assist: assisted,
     merged,
     patches,
+    divergencesRemoved,
     events,
     drift: d,
     published,
@@ -475,7 +490,7 @@ export function nightlyText(r: NightlyResult): string {
       : "noise ceiling: none (no noise-a/noise-b pair with clean sequences): the page marks the night invalid",
     r.plan,
     r.assist,
-    `merged align/assisted-* PRs newly logged: ${r.merged} · patches since the scaffold freeze (sealed log): automatic ${r.patches.automatic}, assisted ${r.patches.assisted}`,
+    `merged align/assisted-* PRs newly logged: ${r.merged} · since the scaffold freeze (sealed log): patches automatic ${r.patches.automatic} (JSON-pointer edits), assisted ${r.patches.assisted} (merged PRs); train divergences removed automatic ${r.divergencesRemoved.automatic}, assisted ${r.divergencesRemoved.assisted}`,
     `curve annotations: ${r.events.join("; ") || "none"}`,
     d.file
       ? `drift: ${d.items.length} paths in ${d.compared} sequences compared -> ${d.file}${d.withheld ? ` (${d.withheld} fraud or risk divergences withheld)` : ""}`

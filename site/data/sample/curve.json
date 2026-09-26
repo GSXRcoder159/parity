@@ -74,7 +74,8 @@
     "patches": {
       "automatic": 3,
       "assisted": 0
-    }
+    },
+    "divergencesRemoved": { "automatic": 27, "assisted": 0 }
   },
   {
     "sample": true,
@@ -151,7 +152,8 @@
     "patches": {
       "automatic": 8,
       "assisted": 1
-    }
+    },
+    "divergencesRemoved": { "automatic": 72, "assisted": 31 }
   },
   {
     "sample": true,
@@ -228,7 +230,8 @@
     "patches": {
       "automatic": 10,
       "assisted": 1
-    }
+    },
+    "divergencesRemoved": { "automatic": 90, "assisted": 31 }
   },
   {
     "sample": true,
@@ -305,7 +308,8 @@
     "patches": {
       "automatic": 10,
       "assisted": 2
-    }
+    },
+    "divergencesRemoved": { "automatic": 90, "assisted": 62 }
   },
   {
     "sample": true,
@@ -396,7 +400,8 @@
     "patches": {
       "automatic": 14,
       "assisted": 2
-    }
+    },
+    "divergencesRemoved": { "automatic": 126, "assisted": 62 }
   },
   {
     "sample": true,
@@ -485,7 +490,8 @@
     "patches": {
       "automatic": 16,
       "assisted": 3
-    }
+    },
+    "divergencesRemoved": { "automatic": 144, "assisted": 93 }
   },
   {
     "sample": true,
@@ -574,7 +580,8 @@
     "patches": {
       "automatic": 17,
       "assisted": 3
-    }
+    },
+    "divergencesRemoved": { "automatic": 153, "assisted": 93 }
   },
   {
     "sample": true,
@@ -663,6 +670,7 @@
     "patches": {
       "automatic": 20,
       "assisted": 3
-    }
+    },
+    "divergencesRemoved": { "automatic": 180, "assisted": 93 }
   }
 ]

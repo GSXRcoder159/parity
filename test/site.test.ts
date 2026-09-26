@@ -61,7 +61,7 @@ test("a one-point curve: the latest night's scores file, one row per series, fin
   ]);
   // No noise for the stratum: its ceiling is null, which the page shows as invalid.
   assert.deepEqual(app.series(d.curve, "errors")[0].ceiling, { L3: null, L4: null });
-  assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-01", events: [], automatic: 2, assisted: 1, share: 2 / 3 }]);
+  assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-01", events: [], automatic: 2, assisted: 1, share: 2 / 3, removed: null }]);
 
   // One date sits mid-plot: plot x spans 44..388 in a 400px chart, so 216.
   const sc = app.scales(["2026-10-01"], 400, 240);
@@ -91,6 +91,9 @@ test("nights are sorted, a normalization change is annotated, and the sample fla
 test("patches are cumulative totals per night (not summed); a partial noise pair has no overall ceiling and says what it covers", () => {
   const curve = [point("2026-10-01", { patches: { automatic: 174, assisted: 0 } }), point("2026-10-02", { patches: { automatic: 180, assisted: 2 } })];
   assert.deepEqual(app.automation(curve).map((r: { automatic: number; assisted: number }) => [r.automatic, r.assisted]), [[174, 0], [180, 2]]);
+  // Train divergences removed, per class, with their own share: the unit next to H2's patch count.
+  const removed = app.automation([point("2026-10-02", { patches: { automatic: 180, assisted: 2 }, divergencesRemoved: { automatic: 7500, assisted: 2500 } })]);
+  assert.deepEqual(removed[0].removed, { automatic: 7500, assisted: 2500, share: 0.75 });
   const coverage = { seqs: 60, oracleSeqs: 88, templates: 15, oracleTemplates: 26, strata: ["errors"], inSample: true };
   const partial = point("2026-10-03", { noise: { byStratum: { errors: LEVELS }, coverage } });
   assert.deepEqual(app.series([partial], "all")[0].ceiling, { L3: null, L4: null });
