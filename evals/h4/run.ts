@@ -22,12 +22,12 @@ import type { Sequence, Step, Stratum } from "../../src/types.ts";
 
 const HERE = import.meta.dirname;
 const REPO_ROOT = resolve(HERE, "../..");
-export const TASKS = join(HERE, "tasks.json");
+const TASKS = join(HERE, "tasks.json");
 const TOOLKIT = join(HERE, "toolkit.py");
-export const LLM_LEDGER = join(REPO_ROOT, "budget/llm.jsonl");
+const LLM_LEDGER = join(REPO_ROOT, "budget/llm.jsonl");
 export const MAX_TURNS = 12;
 /** Plan W4 budget for all of H4's LLM spend, over every ledger entry with purpose "h4". */
-export const H4_CAP_USD = 50;
+const H4_CAP_USD = 50;
 const SYSTEM =
   "You are a billing support agent with API tools. Resolve the request (amounts are in cents). " +
   "Change nothing the request does not ask for. When done, reply with a one-line summary.";
@@ -375,7 +375,7 @@ export function h4Text(r: H4Report): string {
 
 const USAGE = "usage: node evals/h4/run.ts [--runs twin,sandbox] [--agent llm|scripted] [--cap-usd 10] [--out reports/<name>]";
 
-export async function main(argv: string[]): Promise<number> {
+async function main(argv: string[]): Promise<number> {
   if (existsSync(".env")) process.loadEnvFile(".env");
   let runs: ("twin" | "sandbox")[];
   let agent: "scripted" | "llm";
