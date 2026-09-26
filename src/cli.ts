@@ -29,6 +29,7 @@ const USAGE = `usage:
   paritybench align [--apply | --assist] [--max-batches N]
   paritybench align surface --note "<text>" [--commit <sha>]
   paritybench nightly [--dry-run]
+  paritybench agree --cmd "<test command>" [--junit <path>] [--runs twin,sandbox] [--out reports/<name>]
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
@@ -69,6 +70,12 @@ const USAGE = `usage:
     entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
     and writes the public files to a temp dir.
+  agree: runs the command once per target (--runs order) with STRIPE_API_BASE and STRIPE_API_KEY set: twin = an in-process
+    twin on an ephemeral port with sk_test_parity, sandbox = https://api.stripe.com with STRIPE_API_KEY (refused when the
+    read budget is already spent; the command's own requests are not ledgered). Outcomes come from the JUnit XML the command
+    writes to --junit, else from node --test TAP on stdout (pass --test-reporter=tap; top-level tests only). Reports per-test
+    outcomes, agreement with a Wilson 95% CI and the disagreeing tests (names and outcomes only) to stdout, and to
+    <out>.md + <out>.json with --out. The suite's contract: send requests to STRIPE_API_BASE. Example: examples/agree-suite.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 export const LEDGER = "budget/reads.jsonl";
@@ -82,6 +89,7 @@ const FLAGS: Record<string, string[]> = {
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
   align: ["apply", "assist", "max-batches", "note", "commit"],
   nightly: ["dry-run"],
+  agree: ["cmd", "junit", "runs", "out"],
 };
 
 class UsageError extends Error {}
@@ -421,6 +429,16 @@ export async function main(argv: string[]): Promise<number> {
     if (cmd === "nightly") {
       const { nightly, nightlyText } = await import("./nightly.ts");
       console.log(nightlyText(await nightly({ repo: REPO_ROOT, dataDir: dataDir(), dryRun: flags["dry-run"] === "1" })));
+      return 0;
+    }
+
+    if (cmd === "agree") {
+      const runs = (flags.runs ?? "twin,sandbox").split(",");
+      if (runs.some((r) => r !== "twin" && r !== "sandbox") || new Set(runs).size !== runs.length) {
+        throw new UsageError(`--runs must be twin, sandbox or both (comma-separated), got "${flags.runs}"`);
+      }
+      const { agreeRuns } = await import("./agree.ts");
+      console.log(await agreeRuns({ cmd: need(flags, "cmd"), junit: flags.junit, runs: runs as ("twin" | "sandbox")[], out: flags.out }));
       return 0;
     }
 
