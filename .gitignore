@@ -5,3 +5,4 @@ dist/
 recordings/
 .superpowers/
 budget/
+*.tgz
