@@ -35,6 +35,7 @@ The oracle behind the report is 88 sequences:
 
 Check first with one side-effect-free POST, which is not a read:
 ```sh
+set -a; . ./.env; set +a      # STRIPE_API_KEY
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -u "$STRIPE_API_KEY:" -H 'Stripe-Version: 2026-08-26.dahlia' \
   https://api.stripe.com/v1/customers/cus_ParityQuotaProbe
 ```
