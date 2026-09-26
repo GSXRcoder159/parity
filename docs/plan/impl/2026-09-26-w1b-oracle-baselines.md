@@ -12,15 +12,18 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §3.1, §5 W1, §7, 
 
 ## Task 1: Oracle store, incremental sweep, per-sequence headers, slices
 
-**Paths:** `src/bench/run.ts`, `src/bench/oracle.ts`, `src/cli.ts`, `test/run.test.ts`, `test/oracle.test.ts`, `test/cli.test.ts`
+**Paths:** `src/bench/run.ts`, `src/bench/oracle.ts`, `src/bench/normalize.ts`, `src/cli.ts`, `test/run.test.ts`, `test/oracle.test.ts`, `test/normalize.test.ts`, `test/cli.test.ts`, `test/compare.test.ts`, `test/score.test.ts`
 
 1. **Incremental event sweep.** The corpus sweep's first pass lists all events since `corpusStartSec-60`; each repeat pass fetches only events newer than the newest seen (`ending_before=<newest event id>`, following pagination), stopping when a repeat pass returns nothing new twice in a row or 30 s elapse. Report `eventSweepGets` in the run summary (it must be ≈ pages of events, not pages × repeats). Test against the local fake server.
 2. **Per-sequence headers.** `runCorpus` accepts `headersFor?: (seq: Sequence) => Record<string, string>`; those headers are sent on every step of that sequence and recorded like step headers.
 3. **Clock from oracle.** `paritybench bench <url> --oracle <file>` sends `Parity-Now: <epoch seconds of the oracle recording's startedAt>` per sequence (via `headersFor`). Other targets ignore the header.
 4. **Oracle store** (`src/bench/oracle.ts`): `dataDir()` resolves `PARITY_DATA_DIR` per Global Constraints; `record` against the sandbox writes to `<dataDir>/runs/<YYYY-MM-DD>/<name>-<runId>.jsonl` by default; `paritybench oracle build [--max-age-days N]` scans `<dataDir>/runs/**` sandbox recordings and writes `<dataDir>/oracle.jsonl` = the newest recording per `seq` (optionally only those newer than N days), printing counts per template and the oldest/newest dates. Migrate any existing sandbox recordings under `recordings/` into `<dataDir>/runs/<date>/` (copy, keep names).
 5. **Slices.** `record --slice k/n` keeps only corpus sequences whose index (in `buildCorpus` order) ≡ k (mod n).
-6. **Twin subcommand wiring is NOT in this task** (the twin workflow's `src/twin/main.ts` may not exist yet).
-7. After finishing, commit the data repo changes too: `git -C <dataDir> add -A && git -C <dataDir> commit -m "..." && git -C <dataDir> push` (private repo; recordings only).
+6. **Circuit breaker and pacing** (W0 report "Harness follow-ups"): abort a corpus after 10 consecutive steps that ended 429 after all retries (still ledger what was sent; recordings of unfinished sequences are written but flagged); record `Stripe-Rate-Limited-Reason` and `Retry-After` response headers when present. `record --chunk <n> --chunk-wait <minutes>` runs the corpus in chunks of n sequences with a wait between chunks (for the claimable key's undocumented quota: ~460 requests per ~20 min is safe). The pre-run GET projection scales with expected events: template GET steps + ceil(10.5 × sequences / 100) × 5 sweep passes.
+7. **Normalization v1.2** (W0 report "Nondeterministic paths"; bump `NORMALIZATION_VERSION`, update RULES rationales): (a) drop the key `error.request_log_url` (dashboard link; absent on responses that carry the unclaimed-sandbox banner); (b) `updated` is a timestamp key; (c) opaque values: `payment_method_details.card.authorization_code`, `network_transaction_id`, `transaction_link_id`, and `outcome.risk_score` (fraud/risk field; never published); (d) drop the keys `reference`, `reference_status`, `reference_type` under `destination_details.card` of refunds (random and assigned asynchronously); (e) **remove the list-order sort (rule 7) entirely** — Ruling: Stripe lists are deterministic (created desc, same-second ties in reverse insertion order, per templates-validation.md); the W0 pagination noise was created by the sort's tie-break reordering same-second elements, so comparing lists as returned is both stricter and quieter. Keep the rule list documenting that list order is compared as-is. Re-run `compare` on the W0 A/D recordings (under `recordings/` or the data dir) and put the new normalized floor in your report.
+8. **Oracle build excludes contaminated runs:** a recording with any step `status` 0 or 429, or with `eventsError`, is never selected as the oracle for its sequence.
+9. **Twin subcommand wiring is NOT in this task** (the twin workflow's `src/twin/main.ts` may not exist yet).
+10. After finishing, commit the data repo changes too: `git -C <dataDir> add -A && git -C <dataDir> commit -m "..." && git -C <dataDir> push` (private repo; recordings only).
 
 Tests: incremental sweep page count, `headersFor` applied and recorded, `oracle build` picks newest per seq from fixture runs, slice filter, `dataDir` resolution.
 
@@ -41,6 +44,7 @@ Validate live: each of #16–#26 × seeds 1–2 via `paritybench record --templa
 **Paths:** `reports/`, `budget/`, `docs/plan/STATUS.md`, `docs/plan/impl/baselines.md`
 **Depends on:** Tasks 1–2.
 
+0. **Key check:** if `.env` now holds a claimed `sk_test_` key (B1 done), run without chunking and also run the W0 clock checks listed in `docs/research/2026-09-25-w0-verifications.md` (clock advance seconds, parallel clocks, events for clock transitions) and record them in the report. Otherwise use `--chunk 50 --chunk-wait 20` (the claimable-key quota) and run long recordings in the background, polling for completion.
 1. **Oracle v1 on the sandbox:** the non-clock corpus = templates #1–#26 × seeds 1–20 (≈520 sequences). Reuse existing W0 recordings of #1–#15 seeds 1–4 (already in the data dir); record the rest (budget-gated; expect ~1,500 GETs). Then `oracle build`.
 2. **Noise:** templates #16–#26 × seeds 1–2 recorded a second time back-to-back with their Task 2 validation run or a fresh pair (W0 A/B already covers #1–#15); normalized noise floor per stratum over all 26 templates.
 3. **Baselines** (plan §7, decision 0001 C5):
