@@ -18,14 +18,18 @@ jobs:
         working-directory: parity
     steps:
       # Siblings under the workspace: the raw data never sits inside this repo's working tree (decision 0001 C3).
+      # persist-credentials: false: no token is written to either .git/config, where the gate's score-twin child (code an
+      # LLM may have written) could read it. The nightly step gets the push credentials in its environment only.
       - uses: actions/checkout@v4
         with:
           path: parity
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: GSXRcoder159/parity-data
           token: ${{ secrets.PARITY_DATA_TOKEN }}
           path: parity-data
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -42,7 +46,17 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # optional: without it the assisted pass is skipped and logged
           PARITY_DATA_DIR: ${{ github.workspace }}/parity-data
           GH_TOKEN: ${{ github.token }}
-        # Commits and pushes the data repo itself (with the read ledger); commits the public-safe files (and the LLM ledger) here.
-        run: node src/cli.ts nightly
-      - name: Push this repo
-        run: git push origin "HEAD:${GITHUB_REF_NAME}"
+          PARITY_TOKEN: ${{ github.token }}
+          PARITY_DATA_TOKEN: ${{ secrets.PARITY_DATA_TOKEN }}
+        # Commits both repos and pushes them itself, this one first (the align commit as soon as it lands), the data repo
+        # last. Git reads each repo's credential from URL-scoped config in the environment (GIT_CONFIG_*), never from disk;
+        # the gate's child process gets none of these variables (src/align/gate.ts).
+        run: |
+          auth() { printf 'AUTHORIZATION: basic %s' "$(printf 'x-access-token:%s' "$1" | base64 -w0)"; }
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0="http.https://github.com/${GITHUB_REPOSITORY}.extraheader"
+          export GIT_CONFIG_VALUE_0="$(auth "$PARITY_TOKEN")"
+          export GIT_CONFIG_KEY_1="http.https://github.com/GSXRcoder159/parity-data.extraheader"
+          export GIT_CONFIG_VALUE_1="$(auth "$PARITY_DATA_TOKEN")"
+          unset PARITY_TOKEN PARITY_DATA_TOKEN
+          node src/cli.ts nightly

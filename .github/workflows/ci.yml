@@ -17,6 +17,20 @@ jobs:
           node-version: 22 # engines >=22.18: type stripping
           cache: npm
       - run: npm ci
+      - name: Clean-room gate (decision 0001 C1/R4)
+        run: |
+          if grep -rniE "localstripe|stripe-mock|fixtures3|wondertwin" src/twin; then echo "R4: a clean-room term in src/twin"; exit 1; fi
+          if git ls-files | grep -i fixtures3; then echo "R4: fixtures3 files are tracked"; exit 1; fi
+      # R5 asks for no GPL/AGPL/unlicensed package; there is no production dependency to check, and this keeps it so
+      # until a license check (e.g. npx license-checker --production --failOn "GPL;AGPL;UNLICENSED") comes with one.
+      - name: No production dependencies (decision 0001 R5)
+        run: |
+          node -e 'const d = Object.keys(require("./package.json").dependencies ?? {}); if (d.length) { console.error(`R5: production dependencies ${d} need a license check here`); process.exit(1); }'
       - run: npx tsc -p tsconfig.json
+      # The H4 bridge tests run the pinned toolkit under uv; the verifiers package's tests run under uv too.
+      - uses: astral-sh/setup-uv@v6
       # Actions sets CI=true: wall-clock upper bounds in the tests get 3x slack.
       - run: node --test test/*.test.ts
+      - name: Python verifiers (python/parity_verifiers)
+        working-directory: python/parity_verifiers
+        run: uv run --locked pytest -q
