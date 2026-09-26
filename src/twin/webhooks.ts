@@ -1,5 +1,5 @@
 // Webhook delivery: after each store.apply, every enabled endpoint subscribed to an event gets a signed POST of it,
-// retried on a non-2xx or network error. Fire-and-forget: the API response never waits for it.
+// retried on a non-2xx (a 3xx included: redirects are not followed) or network error. Fire-and-forget: the API response never waits for it.
 import { createHmac } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { StripeEvent } from "../types.ts";
@@ -40,6 +40,7 @@ async function send(store: Store, evt: StripeEvent, id: string, backoffMs: numbe
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8", "Stripe-Signature": sign(payload, String(ep.secret), t) },
         body: payload,
+        redirect: "manual", // the real API does not follow redirects and counts them as failures
       });
       await res.arrayBuffer();
       if (res.ok) {

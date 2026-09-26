@@ -20,8 +20,8 @@ const call = (t: Twin, method: string, path: string, params?: Obj, headers: Obj 
 };
 
 /**
- * A local receiver. `script[path]` gives each attempt's status in turn (0 = destroy the socket: a network error),
- * then 200. `gate` holds every response until it resolves.
+ * A local receiver. `script[path]` gives each attempt's status in turn (0 = destroy the socket: a network error;
+ * a 3xx redirects to `<path>/`), then 200. `gate` holds every response until it resolves.
  */
 async function receiver(script: Record<string, number[]> = {}, gate?: Promise<void>) {
   const hits: { path: string; body: string; headers: http.IncomingHttpHeaders; at: number }[] = [];
@@ -32,7 +32,7 @@ async function receiver(script: Record<string, number[]> = {}, gate?: Promise<vo
     const status = script[req.url!]?.shift() ?? 200;
     if (status === 0) return void req.socket.destroy();
     await gate;
-    res.writeHead(status).end();
+    res.writeHead(status, status >= 300 && status < 400 ? { Location: `${req.url}/` } : {}).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   after(() => {
@@ -137,6 +137,18 @@ test("delivery retries a network error and a non-2xx with backoff, then succeeds
   assert.equal(new Set(rx.hits.map((h) => h.body)).size, 1, "every attempt sends the same payload");
   const gaps = rx.at("/down").slice(1).map((h, i) => h.at - rx.at("/down")[i]!.at);
   gaps.forEach((g, i) => assert.ok(g >= [30, 60, 90][i]! - 5, `retry ${i + 1} waited ${g} ms`));
+});
+
+test("delivery does not follow a redirect: a 3xx is a failed attempt, retried, never re-sent to the Location", { timeout: 5000 }, async () => {
+  const rx = await receiver({ "/moved": [301, 302, 307, 308] });
+  const t = createTwin({ webhookBackoffMs: [30, 60, 90] });
+  await endpoint(t, `${rx.url}/moved`, ["customer.created"]);
+  await call(t, "POST", "/v1/customers", {});
+
+  await until(() => rx.at("/moved").length === 4);
+  await sleep(50); // let the last 308 be handled
+  assert.deepEqual(rx.at("/moved/"), [], "the Location is never requested");
+  assert.equal(t.store.events[0]!.pending_webhooks, 1, "no redirect counts as a delivery");
 });
 
 test("delivery follows enabled_events (`*` gets everything) and skips disabled endpoints, even mid-retry", { timeout: 5000 }, async () => {
