@@ -21,7 +21,8 @@
       <p>The twin is scored nightly against an oracle that is at most 7 days old; drift on any sequence is detected within 7 days.</p>
       <p id="sample-banner" class="banner" hidden><strong>Sample data.</strong> These numbers are synthetic, for developing this page. They are not measurements.</p>
       <p id="meta" hidden>
-        Latest night <b id="latest"></b> · normalization <b id="norm"></b> (<a href="https://github.com/GSXRcoder159/parity/blob/main/src/bench/normalize.ts">rules</a>)
+        Latest night <b id="latest"></b> · normalization <b id="norm"></b> (<a href="https://github.com/GSXRcoder159/parity/blob/main/src/bench/normalize.ts">rules</a>) ·
+        method <b id="method"></b> (<a href="https://github.com/GSXRcoder159/parity/blob/main/src/bench/compare.ts">compare</a>)
         <span id="invalid" class="banner" hidden><strong>Invalid:</strong> this night has no noise floor and ceiling for the whole corpus.</span>
       </p>
       <p id="coverage" class="muted" hidden></p>
@@ -36,7 +37,8 @@
       <section id="curve" hidden>
         <h2>Nightly curve</h2>
         <p class="muted">
-          Share of agreeing steps (L3) and sequences (L4), with 95% Wilson intervals. The ceiling is the agreement of two real sandbox recordings of the
+          Share of agreeing steps (L3) and sequences (L4: every step at L3, the same event types, and, from method m2, no event
+          created before one the sandbox always creates first), with 95% Wilson intervals. The ceiling is the agreement of two real sandbox recordings of the
           same sequences: no server can be measured above it. A “surface-added” mark means the twin's scope grew that night, so a jump there is not
           alignment.
         </p>

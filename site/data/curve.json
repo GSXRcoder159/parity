@@ -2,6 +2,7 @@
   {
     "date": "2026-09-26",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": {
         "p": 0.9375,

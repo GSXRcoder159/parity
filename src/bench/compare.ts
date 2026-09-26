@@ -2,6 +2,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Divergence, Recording, Stratum } from "../types.ts";
 
+/**
+ * The comparison method, published with every score next to the normalization version: a change moves every score, so
+ * the curve annotates it. m1: steps (L1-L3) and event-type multisets. m2: m1 plus causal event order (plan §3.1).
+ */
+export const METHOD = { version: "m2", change: "causal event order" } as const;
+
 export interface StepResult {
   i: number;
   L1: boolean;
@@ -18,7 +24,7 @@ export interface SeqResult {
   L4: boolean;
   eventsMatch: boolean;
   /**
-   * Event check not run: the oracle's event collection failed (`eventsError`); eventsMatch is then true. A target whose
+   * Event checks (set and order) not run: the oracle's event collection failed (`eventsError`); eventsMatch is then true. A target whose
    * collection failed is compared as having no events (EVENT_SET_MISMATCH, actual "error: <message>"): a broken
    * `/v1/events` must never score better than a working but imperfect one.
    */
@@ -53,6 +59,36 @@ function diff(o: unknown, t: unknown, path: string, out: Omit<Divergence, "seq" 
 
 const types = (r: Recording): string[] => r.events.map((e) => e.type).sort();
 
+/** Each event type's earliest and latest raw `created` (normalization keeps an event's own `created` raw). */
+function spans(r: Recording): Map<string, [number, number]> {
+  const out = new Map<string, [number, number]>();
+  for (const { type, created } of r.events) {
+    if (!Number.isFinite(created)) continue;
+    const s = out.get(type);
+    out.set(type, s ? [Math.min(s[0], created), Math.max(s[1], created)] : [created, created]);
+  }
+  return out;
+}
+
+/**
+ * Causal-order violations, as [A, B] pairs (plan §3.1: event sets plus causal-order constraints, never strict
+ * sequences). The oracle orders A before B when every A was created strictly before every B; the target violates that
+ * when some B was created strictly before some A. Ties never violate: events are stamped by the second, and Stripe does
+ * not order events of the same second.
+ */
+export function orderViolations(oracle: Recording, target: Recording): [string, string][] {
+  const o = spans(oracle);
+  const t = spans(target);
+  const out: [string, string][] = [];
+  for (const [a, [, aLast]] of o) {
+    for (const [b, [bFirst]] of o) {
+      const [ta, tb] = [t.get(a), t.get(b)];
+      if (a !== b && aLast < bFirst && ta && tb && tb[0] < ta[1]) out.push([a, b]);
+    }
+  }
+  return out.sort((x, y) => (x.join() < y.join() ? -1 : 1));
+}
+
 export function compareRecordings(oracle: Recording, target: Recording, noise?: Set<string>): SeqResult {
   const divergences: Divergence[] = [];
   const steps = oracle.steps.map((o, idx): StepResult => {
@@ -73,6 +109,8 @@ export function compareRecordings(oracle: Recording, target: Recording, noise?: 
   const actual = target.eventsError ? `error: ${target.eventsError}` : types(target);
   const eventsMatch = eventsSkipped || (!target.eventsError && isDeepStrictEqual(expected, actual));
   if (!eventsMatch) divergences.push({ seq: oracle.seq, step: -1, path: "$", cls: "EVENT_SET_MISMATCH", expected, actual });
+  const order = eventsSkipped ? [] : orderViolations(oracle, target);
+  for (const [a, b] of order) divergences.push({ seq: oracle.seq, step: -1, path: `$.order(${a}<${b})`, cls: "EVENT_ORDER_MISMATCH", expected: `${a} before ${b}`, actual: `${b} before ${a}` });
 
   for (const d of divergences) if (noise?.has(`${oracle.template}|${d.step}|${d.path}`)) d.cls = "NONDETERMINISTIC";
 
@@ -82,7 +120,7 @@ export function compareRecordings(oracle: Recording, target: Recording, noise?: 
     stratum: oracle.stratum,
     heldOut: oracle.heldOut,
     steps,
-    L4: eventsMatch && steps.every((s) => s.L3),
+    L4: eventsMatch && !order.length && steps.every((s) => s.L3),
     eventsMatch,
     eventsSkipped,
     divergences,

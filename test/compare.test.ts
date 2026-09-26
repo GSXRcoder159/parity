@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareRecordings, noiseKeys } from "../src/bench/compare.ts";
+import { compareRecordings, noiseKeys, orderViolations } from "../src/bench/compare.ts";
 import type { Recording, StepRecord, StripeEvent } from "../src/types.ts";
 
 const step = (i: number, status: number, body: unknown): StepRecord => ({
@@ -141,4 +141,33 @@ test("an oracle eventsError skips the event check; a target eventsError fails it
   const broken = compareRecordings(a, { ...a, events: [], eventsError: "GET /v1/events -> 404" });
   assert.deepEqual([broken.eventsSkipped, broken.eventsMatch, broken.L4], [false, false, false]);
   assert.deepEqual(broken.divergences, [{ seq: "tmpl#1", step: -1, path: "$", cls: "EVENT_SET_MISMATCH", expected: ["customer.created"], actual: "error: GET /v1/events -> 404" }]);
+});
+
+test("causal order (method m2): oracle precedence pairs from strict created order; the target violates one when a B precedes an A; ties never violate", () => {
+  const at = (type: string, created: number): StripeEvent => ({ ...ev(type), created });
+  // Oracle: customer.created (100) strictly before both invoice events (105, 110); the two invoice.created instances
+  // (105 and 110) interleave with invoice.paid (110): no pair between them.
+  const oracle = rec([step(0, 200, sub)], [at("customer.created", 100), at("invoice.created", 105), at("invoice.paid", 110), at("invoice.created", 110)]);
+  assert.deepEqual(orderViolations(oracle, oracle), []);
+  assert.equal(compareRecordings(oracle, oracle).L4, true);
+
+  // Target: one invoice.created strictly before customer.created: the pair customer.created -> invoice.created is violated.
+  const swapped = rec([step(0, 200, sub)], [at("customer.created", 100), at("invoice.created", 99), at("invoice.paid", 120), at("invoice.created", 120)]);
+  const r = compareRecordings(oracle, swapped);
+  assert.deepEqual([r.eventsMatch, r.L4, r.steps[0]!.L3], [true, false, true], "same event set, every step agrees, L4 fails on order alone");
+  assert.deepEqual(r.divergences, [{ seq: "tmpl#1", step: -1, path: "$.order(customer.created<invoice.created)", cls: "EVENT_ORDER_MISMATCH", expected: "customer.created before invoice.created", actual: "invoice.created before customer.created" }]);
+
+  // Ties never violate: every target event in the same second (the twin stamps a sequence's events with one clock).
+  const tied = rec([step(0, 200, sub)], ["customer.created", "invoice.created", "invoice.paid", "invoice.created"].map((t) => at(t, 100)));
+  assert.deepEqual([orderViolations(oracle, tied), compareRecordings(oracle, tied).L4], [[], true]);
+  // ...and an oracle tie derives no pair, whatever order the target shows.
+  const oracleTied = rec([step(0, 200, sub)], [at("customer.created", 100), at("invoice.created", 100)]);
+  assert.deepEqual(orderViolations(oracleTied, rec([], [at("invoice.created", 1), at("customer.created", 2)])), []);
+  // A type missing on the target is the event-set check's divergence, not an order violation.
+  const missing = compareRecordings(oracle, rec([step(0, 200, sub)], [at("invoice.created", 1), at("invoice.paid", 2), at("invoice.created", 3)]));
+  assert.deepEqual(missing.divergences.map((d) => d.cls), ["EVENT_SET_MISMATCH"]);
+  // Skipped with the event check (oracle eventsError), and a noise key marks it NONDETERMINISTIC like any divergence.
+  assert.deepEqual(compareRecordings({ ...oracle, eventsError: "GET /v1/events -> 500" }, swapped).divergences, []);
+  const noisy = compareRecordings(oracle, swapped, noiseKeys([r]));
+  assert.deepEqual([noisy.divergences[0]!.cls, noisy.L4], ["NONDETERMINISTIC", false]);
 });

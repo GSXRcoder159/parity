@@ -54,7 +54,7 @@ test("score: L1–L3 per step, L4 per sequence, split by stratum and held-out", 
 
 test("markdown report has every required section; the invalid-score warning depends on noise", () => {
   const s = score(results);
-  const base = { title: "W0 noise", date: "2026-09-25", target: "twin", oracle: "sandbox", score: s, normalization: NORMALIZATION_VERSION, results };
+  const base = { title: "W0 noise", date: "2026-09-25", target: "twin", oracle: "sandbox", score: s, normalization: NORMALIZATION_VERSION, method: "m2", results };
   const md = renderMarkdown(base);
   for (const h of ["# W0 noise", "**Summary:**", "## Noise floor and ceiling", "## Per stratum", "## Held-out vs train", "## Top divergence paths", "## Per-template L4", "## Normalization"]) {
     assert.ok(md.includes(h), h);
@@ -65,9 +65,13 @@ test("markdown report has every required section; the invalid-score warning depe
   assert.match(md, /\| `\$\.amount_refunded` \| VALUE_MISMATCH \| 3 \| refund-full#1 step 1: expected `500` → actual `0` \|/);
   assert.match(md, /\| refund-partial-then-rest \| refunds \| yes \| 0\.0% \[0\.0–79\.3\] \(1\) \|/);
   for (const r of RULES) assert.ok(md.includes(r.name), r.name);
-  assert.match(md, /Event check skipped for 0 of 3 sequences/);
+  assert.match(md, /^Date: 2026-09-25 · Target: `twin` · Oracle: `sandbox` · Normalization: v[\d.]+ · Method: m2$/m);
+  assert.match(md, /Event checks skipped for 0 of 3 sequences/);
+  assert.match(md, /Event order violated in 0 sequences \(method m2: /);
   const skipped = results.map((r, i) => ({ ...r, eventsSkipped: i > 0 }));
-  assert.match(renderMarkdown({ ...base, results: skipped }), /Event check skipped for 2 of 3 sequences/);
+  assert.match(renderMarkdown({ ...base, results: skipped }), /Event checks skipped for 2 of 3 sequences/);
+  const unordered = results.map((r, i) => ({ ...r, divergences: i ? r.divergences : [...r.divergences, { seq: r.seq, step: -1, path: "$.order(a<b)", cls: "EVENT_ORDER_MISMATCH" as const }] }));
+  assert.match(renderMarkdown({ ...base, results: unordered }), /Event order violated in 1 sequences/);
 
   // NONDETERMINISTIC groups list after every other class, even when more frequent
   const noisy = results.map((r) => ({ ...r, divergences: [...r.divergences, ...[1, 2, 3, 4].map((step) => ({ seq: r.seq, step, path: "$.created", cls: "NONDETERMINISTIC" as const }))] }));
@@ -85,4 +89,5 @@ test("markdown report has every required section; the invalid-score warning depe
   assert.equal(json.results.length, 3);
   assert.equal(json.score.overall.L4.n, 3);
   assert.equal(json.rules.length, RULES.length);
+  assert.equal(json.method, "m2");
 });

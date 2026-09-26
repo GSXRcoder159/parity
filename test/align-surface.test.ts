@@ -94,7 +94,7 @@ test("align surface: scores <commit>^ and the working tree on the oracle, logs o
   assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 1 });
   const [e] = readJsonl<LogEntry>(logPath(data));
   assert.deepEqual([e!.kind, e!.runId], ["patch", "run-surface"]);
-  assert.deepEqual(e!.data, { class: "surface-added", status: "applied", note: "customer tax_exempt", commit, head, normalization: NORMALIZATION_VERSION, before: s.before, after: s.after, oracle: provenance(join(data, "oracle.jsonl")) });
+  assert.deepEqual(e!.data, { class: "surface-added", status: "applied", note: "customer tax_exempt", commit, head, normalization: NORMALIZATION_VERSION, method: "m2", before: s.before, after: s.after, oracle: provenance(join(data, "oracle.jsonl")) });
   assert.deepEqual(Object.keys(s.before), ["train", "heldOut", "trainDivergences"]);
 
   const text = surfaceText(s);

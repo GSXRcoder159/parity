@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { METHOD } from "../bench/compare.ts";
 import { NORMALIZATION_VERSION } from "../bench/normalize.ts";
 import type { LevelScores } from "../bench/score.ts";
 import { evalOf, scores, scoreTwinIn, type Scores } from "./gate.ts";
@@ -20,8 +21,9 @@ export interface Surface {
   head: string;
   before: Scores;
   after: Scores;
-  /** Both sides are scored by HEAD's harness (checked), under this normalization. */
+  /** Both sides are scored by HEAD's harness (checked), under this normalization and compare method. */
   normalization: string;
+  method: string;
   oracle: Provenance;
   log: string;
 }
@@ -67,8 +69,9 @@ export function surface(o: { repo: string; dataDir: string; runId: string; note:
   }
   const after = scores(evalOf(scoreTwinIn(o.repo, oraclePath, []).json));
   const normalization = NORMALIZATION_VERSION;
-  appendLog(log, o.runId, [{ kind: "patch", data: { class: "surface-added", status: "applied", note: o.note, commit, head, normalization, before, after, oracle } }]);
-  return { runId: o.runId, note: o.note, commit, head, before, after, normalization, oracle, log };
+  const method = METHOD.version;
+  appendLog(log, o.runId, [{ kind: "patch", data: { class: "surface-added", status: "applied", note: o.note, commit, head, normalization, method, before, after, oracle } }]);
+  return { runId: o.runId, note: o.note, commit, head, before, after, normalization, method, oracle, log };
 }
 
 const signed = (x: number, digits: number): string => `${x >= 0 ? "+" : ""}${x.toFixed(digits)}`;
@@ -80,7 +83,7 @@ export function surfaceText(s: Surface): string {
     `before (${s.commit.slice(0, 12)}^): ${split(s.before)}`,
     `after (working tree at ${s.head.slice(0, 12)}): ${split(s.after)}`,
     `delta: train ${deltas(s.before.train, s.after.train)} pts (${signed(s.after.trainDivergences - s.before.trainDivergences, 0)} divergences) · held-out ${deltas(s.before.heldOut, s.after.heldOut)} pts`,
-    `logged: patch surface-added (applied, commit ${s.commit}, normalization ${s.normalization}) in ${s.log}; the next nightly curve point annotates it`,
+    `logged: patch surface-added (applied, commit ${s.commit}, normalization ${s.normalization}, method ${s.method}) in ${s.log}; the next nightly curve point annotates it`,
     `next: commit and push the data repo (git -C ${dirname(dirname(s.log))} add align && git commit && git push): the nightly reads the log from there`,
   ].join("\n");
 }

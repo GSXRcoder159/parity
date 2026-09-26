@@ -3,6 +3,7 @@
     "sample": true,
     "date": "2026-10-01",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.809, "lo": 0.764, "hi": 0.847, "n": 340 },
       "L2": { "p": 0.659, "lo": 0.607, "hi": 0.707, "n": 340 },
@@ -79,6 +80,7 @@
     "sample": true,
     "date": "2026-10-02",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.859, "lo": 0.818, "hi": 0.892, "n": 340 },
       "L2": { "p": 0.709, "lo": 0.658, "hi": 0.755, "n": 340 },
@@ -155,6 +157,7 @@
     "sample": true,
     "date": "2026-10-03",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.909, "lo": 0.873, "hi": 0.935, "n": 340 },
       "L2": { "p": 0.759, "lo": 0.711, "hi": 0.801, "n": 340 },
@@ -231,6 +234,7 @@
     "sample": true,
     "date": "2026-10-04",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.959, "lo": 0.932, "hi": 0.975, "n": 340 },
       "L2": { "p": 0.809, "lo": 0.764, "hi": 0.847, "n": 340 },
@@ -307,6 +311,7 @@
     "sample": true,
     "date": "2026-10-05",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.94, "lo": 0.912, "hi": 0.959, "n": 400 },
       "L2": { "p": 0.79, "lo": 0.747, "hi": 0.827, "n": 400 },
@@ -397,6 +402,7 @@
     "sample": true,
     "date": "2026-10-06",
     "normalization": "v1.2",
+    "method": "m1",
     "overall": {
       "L1": { "p": 0.993, "lo": 0.978, "hi": 0.997, "n": 400 },
       "L2": { "p": 0.843, "lo": 0.804, "hi": 0.875, "n": 400 },
@@ -485,6 +491,7 @@
     "sample": true,
     "date": "2026-10-07",
     "normalization": "v1.3",
+    "method": "m1",
     "overall": {
       "L1": { "p": 1, "lo": 0.99, "hi": 1, "n": 400 },
       "L2": { "p": 0.898, "lo": 0.864, "hi": 0.924, "n": 400 },
@@ -573,6 +580,7 @@
     "sample": true,
     "date": "2026-10-08",
     "normalization": "v1.3",
+    "method": "m2",
     "overall": {
       "L1": { "p": 1, "lo": 0.99, "hi": 1, "n": 400 },
       "L2": { "p": 0.953, "lo": 0.927, "hi": 0.969, "n": 400 },
@@ -617,7 +625,7 @@
       "L3": { "p": 0.663, "lo": 0.609, "hi": 0.712, "n": 320 },
       "L4": { "p": 0.438, "lo": 0.323, "hi": 0.559, "n": 64 }
     },
-    "events": [],
+    "events": ["method change: causal event order (sample)"],
     "noise": {
       "overall": {
         "L1": { "p": 1, "lo": 0.99, "hi": 1, "n": 400 },

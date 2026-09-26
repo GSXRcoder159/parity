@@ -3,8 +3,8 @@
 //
 // Data contract. Public-safe only (decision 0001 C3): scores, counts, strata, templates, paths and classes; no values, no ids.
 //   Levels   {L1, L2, L3, L4}, each a 95% Wilson interval {p, lo, hi, n} (src/bench/score.ts).
-//   curve.json   [{date: "YYYY-MM-DD", normalization, overall: Levels, byStratum: {name: Levels}, heldOut: Levels,
-//                  train: Levels, events: ["surface-added: …", "oracle expanded: 88→120", …],
+//   curve.json   [{date: "YYYY-MM-DD", normalization, method?, overall: Levels, byStratum: {name: Levels}, heldOut: Levels,
+//                  train: Levels, events: ["surface-added: …", "oracle expanded: 88→120", "method change: …", …],
 //                  noise?: {overall?: Levels, byStratum: {name: Levels}, coverage?: Coverage},
 //                  patches?: {automatic, assisted}, oracleRefreshed?: boolean, oracleSeqs?: number, sample?: true}]
 //                noise = agreement of two real sandbox recordings of the same sequences: ceiling = noise p, floor = 1 − p.
@@ -14,7 +14,9 @@
 //                patches = align-loop patches since the scaffold freeze (cumulative sealed-log totals, decision 0002 §3):
 //                  automatic applied, assisted merged.
 //                oracleRefreshed = tonight's sandbox slice was recorded; oracleSeqs = sequences in the scored oracle.
-//   scores/<date>.json  {date, normalization, overall: Split, byStratum: {name: Split}, noiseCoverage?: Coverage, sample?: true},
+//                method = the compare method (src/bench/compare.ts METHOD; absent = m1): m1 event-type sets, m2 plus causal
+//                  event order. A change is annotated by the nightly ("method change: causal event order").
+//   scores/<date>.json  {date, normalization, method?, overall: Split, byStratum: {name: Split}, noiseCoverage?: Coverage, sample?: true},
 //                Split = {train: Levels, heldOut: Levels, noise?: Levels}
 //   drift.json   [{date, endpoint, template, path, cls, sample?: true}]
 // test/site.test.ts imports this module in Node, so everything above main() is DOM-free.
@@ -297,6 +299,7 @@ async function main() {
   for (const id of ["meta", "curve", "table", "automation"]) $(id).hidden = false;
   $("latest").textContent = last.date;
   $("norm").textContent = last.normalization;
+  $("method").textContent = last.method ?? "m1";
   $("invalid").hidden = Boolean(last.noise?.overall);
   const cov = coverageText(last);
   $("coverage").hidden = !cov;

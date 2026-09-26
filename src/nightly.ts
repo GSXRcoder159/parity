@@ -13,7 +13,7 @@ import { scoreTwinIn } from "./align/gate.ts";
 import { align, noiseFromRuns, planText } from "./align/index.ts";
 import type { Env } from "./align/llm.ts";
 import { appendLog, logPath, provenance, type LogEntry, type Provenance } from "./align/log.ts";
-import type { SeqResult } from "./bench/compare.ts";
+import { METHOD, type SeqResult } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
 import { contaminated } from "./bench/oracle.ts";
@@ -137,6 +137,7 @@ function publicFiles(o: {
   const { date } = o;
   const s = o.score;
   const normalization = NORMALIZATION_VERSION;
+  const method = METHOD.version;
   const templatesOf = (rs: SeqResult[]) => new Set(rs.map((r) => r.template));
   const whole = (rs: SeqResult[]) => [...templatesOf(rs)].every((t) => o.noise!.templates.has(t));
   const strata = Object.keys(s.byStratum).filter((k) => o.noise && whole(o.results.filter((r) => r.stratum === k)));
@@ -153,14 +154,14 @@ function publicFiles(o: {
     byStratum: Object.fromEntries(strata.map((k) => [k, o.noise!.byStratum[k]!])),
     coverage,
   };
-  const point = { date, normalization, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
+  const point = { date, normalization, method, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
   const byStratum = Object.keys(s.byStratum)
     .sort()
     .map((k) => {
       const t = score(o.results.filter((r) => r.stratum === k));
       return [k, { train: t.train, heldOut: t.heldOut, noise: noise?.byStratum[k] }];
     });
-  const scores = { date, normalization, overall: { train: s.train, heldOut: s.heldOut, noise: noise?.overall }, byStratum: Object.fromEntries(byStratum), ...(coverage && { noiseCoverage: coverage }) };
+  const scores = { date, normalization, method, overall: { train: s.train, heldOut: s.heldOut, noise: noise?.overall }, byStratum: Object.fromEntries(byStratum), ...(coverage && { noiseCoverage: coverage }) };
   return { point, scores };
 }
 
@@ -301,7 +302,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const noise = noiseFloor(data);
   const commit = run("git", ["rev-parse", "HEAD"], o.repo);
   const logged = noise && { overall: noise.overall, byStratum: noise.byStratum, pair: noise.pair, seqs: noise.seqs, inSample: noise.inSample };
-  appendLog(log, runId, [{ kind: "score", data: { label: "nightly", date, commit, normalization: NORMALIZATION_VERSION, score: json.score, ...(logged && { noise: logged }), oracleRefreshed, oracle } }]);
+  appendLog(log, runId, [{ kind: "score", data: { label: "nightly", date, commit, normalization: NORMALIZATION_VERSION, method: METHOD.version, score: json.score, ...(logged && { noise: logged }), oracleRefreshed, oracle } }]);
 
   // 4. align --apply (mechanical); plan only on a dry run. Its commit is pushed at once and as is (the sealed log cites
   // its hash, so it is never rebased): up to date with origin first, and a rejected push stops the night before the data
@@ -331,10 +332,16 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const curveFile = join(root, "site/data/curve.json");
   // A second run on the same date replaces that date's point (one point per night on the chart) and keeps its
   // annotations: the first run's surface-added entries precede its publish entry, so surfaceAdded() no longer returns them.
-  const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; events?: string[] }[]) : [];
+  const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; method?: string; events?: string[] }[]) : [];
   const curve = points.filter((p) => p.date !== date);
   const last = curve.at(-1)?.oracleSeqs; // points before W4 do not carry it: no comparison
-  const fresh = [...surfaceAdded(log), ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : [])];
+  // A compare method change moves every score: annotated like a surface change (points without `method` are m1).
+  const methodChanged = curve.length > 0 && (curve.at(-1)!.method ?? "m1") !== METHOD.version;
+  const fresh = [
+    ...surfaceAdded(log),
+    ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : []),
+    ...(methodChanged ? [`method change: ${METHOD.change}`] : []),
+  ];
   const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
   const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
   writeJson(curveFile, [...curve, point]);

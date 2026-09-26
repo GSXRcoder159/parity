@@ -14,6 +14,8 @@ export interface ReportInput {
   /** How much of the oracle the noise floor covers: the ceiling holds for those sequences only. */
   noiseCoverage?: { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number };
   normalization: string;
+  /** compare.ts METHOD.version: what L4 checks of the events. */
+  method: string;
   results: SeqResult[];
 }
 
@@ -33,11 +35,11 @@ export function renderMarkdown(input: ReportInput): string {
   const md: string[] = [
     `# ${input.title}`,
     "",
-    `Date: ${input.date} · Target: \`${input.target}\` · Oracle: \`${input.oracle}\` · Normalization: ${input.normalization}`,
+    `Date: ${input.date} · Target: \`${input.target}\` · Oracle: \`${input.oracle}\` · Normalization: ${input.normalization} · Method: ${input.method}`,
     "",
-    `**Summary:** ${LEVELS.map((l) => `${l} ${cell(score.overall[l])}`).join(" · ")} — L1 status, L2 shape, L3 value (per step), L4 sequence pass; 95% Wilson intervals.`,
+    `**Summary:** ${LEVELS.map((l) => `${l} ${cell(score.overall[l])}`).join(" · ")} — L1 status, L2 shape, L3 value (per step), L4 sequence pass (every step at L3, the same event types, no causal-order violation); 95% Wilson intervals.`,
     "",
-    `Event check skipped for ${results.filter((r) => r.eventsSkipped).length} of ${results.length} sequences (the oracle's event collection failed; their L4 rests on the steps alone. A target whose collection failed fails the event check instead).`,
+    `Event checks skipped for ${results.filter((r) => r.eventsSkipped).length} of ${results.length} sequences (the oracle's event collection failed; their L4 rests on the steps alone. A target whose collection failed fails the event check instead). Event order violated in ${results.filter((r) => r.divergences.some((d) => d.cls === "EVENT_ORDER_MISMATCH")).length} sequences (method ${input.method}: every oracle event of type A created strictly before every one of type B, and the target creates a B strictly before an A; ties never count).`,
     "",
     "## Noise floor and ceiling",
     "",

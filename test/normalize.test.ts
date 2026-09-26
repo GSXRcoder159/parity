@@ -109,7 +109,7 @@ test("timestamps: hour offsets from t0 = first created in step order", () => {
           expires_at: 42, // out of epoch range
         }),
       ],
-      [{ id: "evt_1AbcDEFghijk", type: "customer.created", created: T0 + 10, data: { object: {} } }],
+      [{ id: "evt_1AbcDEFghijk", type: "customer.created", created: T0 + 10, data: { object: { created: T0 + 10 } } }],
     ),
   );
   assert.equal(body(r, 1).created, "<t:~0>"); // own key before children: anchor is T0, not T0+5
@@ -124,7 +124,9 @@ test("timestamps: hour offsets from t0 = first created in step order", () => {
     amount: T0,
     expires_at: 42,
   });
-  assert.equal(r.events[0]!.created as unknown, "<t:~0>");
+  // An event's own created stays raw (compare's causal-order check, method m2); its object's is normalized.
+  assert.equal(r.events[0]!.created, T0 + 10);
+  assert.equal(r.events[0]!.data.object.created, "<t:~0>");
   assert.equal(r.events[0]!.id, "<id:evt>");
 });
 

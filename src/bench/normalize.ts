@@ -15,7 +15,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "timestamps",
     rationale:
-      "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset.",
+      "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset. Not applied to an event's own top-level `created`: events are compared by type set and causal order (compare method m2), never by value, and the order check needs the raw times.",
   },
   {
     name: "run-nonce",
@@ -158,7 +158,8 @@ export function normalizeRecording(r: Recording): Recording {
 
   const out = structuredClone(r);
   for (const s of out.steps) s.body = walk(s.body);
-  out.events = walk(out.events) as Recording["events"];
+  // An event's own `created` stays raw: compare orders events by it (method m2), and events are never compared by value.
+  out.events = out.events.map((e) => ({ ...(walk(e) as Recording["events"][number]), created: e.created }));
   return out;
 }
 

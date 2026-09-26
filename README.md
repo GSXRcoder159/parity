@@ -103,7 +103,9 @@ cd python/parity_verifiers && uv run --locked pytest -q
 | L1 status | same HTTP status | step |
 | L2 shape | same type skeleton of the body | step |
 | L3 value | same normalized body | step |
-| L4 sequence | every step agrees at L3, and the same multiset of event types | sequence |
+| L4 sequence | every step agrees at L3, the same multiset of event types, and no causal-order violation (below) | sequence |
+
+**Event order (compare method m2).** Stripe does not guarantee event order, so events are compared as sets plus causal-order constraints, never as a strict sequence. From the oracle recording, event type A precedes type B when every A event was created strictly before every B event; the target violates that pair when it creates some B strictly before some A (divergence class `EVENT_ORDER_MISMATCH`). Events created in the same second never violate. The method version (m1: event-type sets only; m2: plus causal order) is published next to the normalization version with every score, and the curve marks the change.
 
 **Confidence intervals.** Every number is a 95% Wilson interval, reported with its n. L1–L3 pool steps across sequences as if they were independent; steps of one sequence are correlated (one wrong state affects later steps), so those intervals are narrower than they should be. L4 counts whole sequences and has no such bias.
 

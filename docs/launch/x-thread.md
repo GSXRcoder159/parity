@@ -19,7 +19,7 @@ How faithful are mocks of the Stripe API? As far as I can find, nobody publishes
 So I built ParityBench: an open harness that replays API sequences against any Stripe-compatible server and against the real Stripe sandbox, then scores the difference.
 
 **2/**
-Four levels, each a 95% Wilson interval: L1 status, L2 shape, L3 value after versioned normalization, L4 the whole sequence with its event types.
+Four levels, each a 95% Wilson interval: L1 status, L2 shape, L3 value after versioned normalization, L4 the whole sequence, event order too.
 
 30 templates in 10 strata (6 held out), 600 sequences. The oracle records 26 templates so far; the 4 test-clock ones are unvalidated.
 

@@ -2,6 +2,7 @@
   "sample": true,
   "date": "2026-10-08",
   "normalization": "v1.3",
+  "method": "m2",
   "overall": {
     "train": {
       "L1": { "p": 1, "lo": 0.988, "hi": 1, "n": 320 },

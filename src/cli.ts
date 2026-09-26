@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { TEMPLATES } from "../templates/index.ts";
 import { appendLedger, readLedger, rollingGets, type LedgerEntry } from "./bench/budget.ts";
-import { compareRecordings, noiseKeys } from "./bench/compare.ts";
+import { compareRecordings, METHOD, noiseKeys } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION, normalizeRaw, normalizeRecording } from "./bench/normalize.ts";
 import { buildOracle, contaminated, dataDir } from "./bench/oracle.ts";
@@ -328,7 +328,7 @@ export function compareSets(
   target: Side,
   noise: Side | undefined,
   raw: boolean,
-): Pick<ReportInput, "score" | "noise" | "noiseCoverage" | "normalization" | "results"> {
+): Pick<ReportInput, "score" | "noise" | "noiseCoverage" | "normalization" | "method" | "results"> {
   const norm = raw ? normalizeRaw : normalizeRecording;
   const oracle = oracleRecs.map(norm);
   const paired = ([name, recs]: Side, os: Recording[]): Recording[] => {
@@ -344,7 +344,7 @@ export function compareSets(
   const floor = n && paired([noise![0], n.clean], noiseOracle!).map((c, i) => compareRecordings(noiseOracle![i]!, c));
   const keys = floor && noiseKeys(floor);
   const results = paired(target, oracle).map((t, i) => compareRecordings(oracle[i]!, t, keys));
-  return { score: score(results), noise: floor && score(floor), ...(n && { noiseCoverage: n.coverage }), normalization: raw ? "raw" : NORMALIZATION_VERSION, results };
+  return { score: score(results), noise: floor && score(floor), ...(n && { noiseCoverage: n.coverage }), normalization: raw ? "raw" : NORMALIZATION_VERSION, method: METHOD.version, results };
 }
 
 const side = (path: string): Side => [path, readJsonl<Recording>(path)];
@@ -363,7 +363,7 @@ function compareFiles(oraclePath: string, targetPath: string, noisePath: string 
   writeFileSync(`${out}.json`, JSON.stringify(toJson(input), null, 2) + "\n");
   const o = input.score.overall;
   const pct = (l: keyof typeof o): string => `${l} ${(o[l].p * 100).toFixed(1)}%`;
-  console.log(`${input.results.length} sequences · ${pct("L1")} · ${pct("L2")} · ${pct("L3")} · ${pct("L4")} (${input.normalization})`);
+  console.log(`${input.results.length} sequences · ${pct("L1")} · ${pct("L2")} · ${pct("L3")} · ${pct("L4")} (${input.normalization}, method ${input.method})`);
   console.log(`wrote ${out}.md and ${out}.json`);
 }
 

@@ -100,11 +100,12 @@ export type DivergenceClass =
   | "EXTRA_FIELD"
   | "VALUE_MISMATCH"
   | "EVENT_SET_MISMATCH"
+  | "EVENT_ORDER_MISMATCH"
   | "NONDETERMINISTIC";
 
 export interface Divergence {
   seq: string;
-  step: number; // -1 for event-set divergences
+  step: number; // -1 for event-set and event-order divergences
   path: string; // JSON path, e.g. "$.items.data[0].price.unit_amount"
   cls: DivergenceClass;
   expected?: unknown; // oracle (normalized)
