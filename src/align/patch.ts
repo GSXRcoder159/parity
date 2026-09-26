@@ -1,6 +1,7 @@
 // Mechanical candidates (decision 0002 §3), from train sequences only: data-file edits whose value the oracle shows
-// deterministically — the same normalized value at every train occurrence, none of them in the noise set. Every other
-// train locus is returned as not mechanical, with the reason (input to the assisted pass).
+// deterministically — the same normalized value at every train occurrence, none of them in the noise set — and that
+// holds beyond this oracle: no account- or date-derived field, no message quoting the request. Every other train locus is
+// returned as not mechanical, with the reason (input to the assisted pass).
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
 import type { Recording, StepRecord } from "../types.ts";
@@ -36,6 +37,18 @@ const PLACEHOLDER = /<(?:id:[^>]*|t:[^>]*|number:[^>]*|url:[^>]*|run|opaque|secr
 const computed = (v: unknown): boolean => PLACEHOLDER.test(JSON.stringify(v) ?? "");
 const pointer = (keys: (string | number)[]): string => keys.map((k) => `/${String(k).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
 const ERROR_FIELDS = new Set(["status", "type", "code", "param", "message"]);
+/**
+ * Fields set by the sandbox account (country, name, statement descriptor) or by the recording date (a test card's
+ * expiry), not by API semantics: constant within one oracle, wrong for another account or month. Never automatic.
+ */
+// ponytail: fixed name list; drop a name once the rolling oracle spans accounts/months and the determinism check rejects it on its own.
+const ACCOUNT_OR_TIME = new Set(["account_country", "account_name", "calculated_statement_descriptor", "exp_month", "exp_year"]);
+const keysIn = (v: unknown): string[] => (Array.isArray(v) ? v.flatMap(keysIn) : isObj(v) ? Object.entries(v).flatMap(([k, x]) => [k, ...keysIn(x)]) : []);
+/** Request param leaves as text (numbers too); booleans and values under 3 characters are too common to mean an echo. */
+const requestValues = (v: unknown): string[] =>
+  typeof v === "string" || typeof v === "number" ? (String(v).length >= 3 ? [String(v).toLowerCase()] : []) : Array.isArray(v) || isObj(v) ? Object.values(v).flatMap(requestValues) : [];
+/** The message quotes a value the request sent (e.g. the expand path): it depends on the request, so it is never a constant. */
+const echoes = (message: string, params: unknown): boolean => requestValues(params).some((s) => message.toLowerCase().includes(s));
 
 /** Value at `segs` under `v` (absent when any step is missing). */
 function at(v: unknown, segs: (string | number)[]): { present: boolean; value?: unknown } {
@@ -147,6 +160,7 @@ export function propose(
       else if (present.length < occ.length) no("absent from some occurrences");
       else if (!present.every((o) => isDeepStrictEqual(o.at.value, value))) no("varies across sequences");
       else if (computed(value)) no("computed: the value holds a normalization placeholder");
+      else if ([...segs.map(String), ...keysIn(value)].some((k) => ACCOUNT_OR_TIME.has(k))) no("account- or time-derived: constant only within one account or month");
       else candidates.push({ ...edit, op: "set", value, locus, ids });
     } else {
       const entry = data.catalog[locus.errorKey];
@@ -170,6 +184,7 @@ export function propose(
       else {
         const tpl = values.map((m, i) => messageTemplate(m as string, twinVars(entry, occ[i]!.t)));
         if (tpl.some((m) => m === undefined)) no("computed: the message holds placeholders no twin var renders");
+        else if (tpl.some((m, i) => echoes(m!, occ[i]!.o.params))) no("request-derived: the message quotes a request parameter value");
         else if (!tpl.every((m) => m === tpl[0])) no("varies across sequences");
         else candidates.push({ ...edit, op: "set", value: tpl[0], locus, ids });
       }

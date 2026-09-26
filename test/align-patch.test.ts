@@ -182,3 +182,40 @@ test("not mechanical: no template for the type, a field inside an array element,
   assert.deepEqual(candidates, []);
   assert.deepEqual(notMechanical.map((n) => n.reason), ["no template src/twin/shapes/list.json", "inside an array element", "absent from some occurrences"]);
 });
+
+test("constant only in this oracle: a message quoting the request, an account- or date-derived field are never seeded", () => {
+  const path = "a.b.c.d.e";
+  const oracle = [1, 2].map((n) =>
+    rec(`e#${n}`, false, [
+      { ...st(0, 400, { error: { type: "invalid_request_error", message: `Too deep: ${path}` } }), params: { expand: [path] } },
+      { ...st(1, 402, { error: { type: "card_error", message: "Your card was declined." } }), params: { customer: `cus_${n}abc`, confirm: true, metadata: { tag: "de" } } },
+      st(2, 200, customer({ address: { country: "US" }, invoice_settings: { card: { exp_month: 9 } }, account_country: "US" })),
+    ]),
+  );
+  const twin = [1, 2].map((n) => rec(`e#${n}`, false, [st(0, 400, {}, "expand_too_deep"), st(1, 402, {}, "card_declined"), st(2, 200, {})]));
+  const cat: Catalog = { ...catalog, expand_too_deep: { status: 400, type: "invalid_request_error", message: "parity: expand_too_deep" } };
+  const seqs = ["e#1", "e#2"];
+  const { candidates, notMechanical } = propose(
+    [
+      ...seqs.map((s) => div(s, 0, "$.error.message", "VALUE_MISMATCH", error("expand_too_deep", "message"))),
+      ...seqs.map((s) => div(s, 1, "$.error.message", "VALUE_MISMATCH", error("card_declined", "message"))),
+      ...seqs.map((s) => div(s, 2, "$.address", "MISSING_FIELD", field("address"))),
+      ...seqs.map((s) => div(s, 2, "$.invoice_settings", "MISSING_FIELD", field("invoice_settings"))), // parent holding exp_month
+      ...seqs.map((s) => div(s, 2, "$.account_country", "MISSING_FIELD", field("account_country"))),
+    ],
+    oracle,
+    twin,
+    new Set(),
+    { ...data, catalog: cat },
+  );
+  // The declined message quotes no request value (short and boolean leaves never count); the address is API semantics.
+  assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
+    ["/card_declined/message", "Your card was declined."],
+    ["/address", { country: "US" }],
+  ]);
+  assert.deepEqual(notMechanical.map((n) => n.reason), [
+    "request-derived: the message quotes a request parameter value",
+    "account- or time-derived: constant only within one account or month",
+    "account- or time-derived: constant only within one account or month",
+  ]);
+});
