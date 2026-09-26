@@ -77,7 +77,7 @@ All twin tests and `npx tsc` pass.
 - `assist.ts`:
   - For the top K non-mechanical divergence clusters (default 3 per run), each grouped by locus, pick the smallest train sequence showing it.
   - Truncate that sequence after its earliest divergent step. `// ponytail:` step-dropping minimization needs new oracle runs and is deferred until the read budget allows.
-  - Build a prompt: the behavior module source (the file owning the route); the normalized oracle vs twin step bodies up to the divergence; the divergence list;  the instruction to return a full replacement of exactly one file under `src/twin/` (resources or `billing.ts`); and the clean-room rule (no third-party twin code).
+  - Build a prompt: the behavior module source (the file owning the route); the normalized oracle vs twin step bodies up to the divergence; the divergence list (never `templates-validation.md`, which documents held-out behavior); the instruction to return a full replacement of exactly one file under `src/twin/` (resources or `billing.ts`); and the clean-room rule (no third-party twin code).
   - Apply the reply in a temp copy and run the gate. On pass: create a branch `align/assisted-<date>-<n>`, commit, and open a **draft PR** with `gh pr create --draft` (private repo) carrying the counterexample (normalized), the before/after scores and `cost_usd`. Log a `patch` entry with `class: "assisted", status: "proposed"`. **Never merge.**
   - Merging is a review step; see `docs/plan/STATUS.md` for who reviews.
 - `paritybench align --assist` runs the mechanical pass, then the assisted pass within the cost cap.
