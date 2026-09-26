@@ -71,11 +71,13 @@ const USAGE = `usage:
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
     and writes the public files to a temp dir.
   agree: runs the command once per target (--runs order) with STRIPE_API_BASE and STRIPE_API_KEY set: twin = an in-process
-    twin on an ephemeral port with sk_test_parity, sandbox = https://api.stripe.com with STRIPE_API_KEY (refused when the
-    read budget is already exceeded; the command's own requests are not ledgered). Outcomes come from the JUnit XML the command
-    writes to --junit, else from node --test TAP on stdout (pass --test-reporter=tap; top-level tests only). Reports per-test
-    outcomes, agreement with a Wilson 95% CI and the disagreeing tests (names and outcomes only) to stdout, and to
-    <out>.md + <out>.json with --out. The suite's contract: send requests to STRIPE_API_BASE. Example: examples/agree-suite.
+    twin on an ephemeral port with sk_test_parity, sandbox = STRIPE_API_KEY and a local metered proxy to
+    https://api.stripe.com (refused when the read budget is already reached; the proxy holds 20 req/s, ledgers the
+    command's requests, and halts the run, with no report, when the rolling GETs reach the budget or after 10 consecutive
+    429s). Outcomes come from the JUnit XML the command writes to --junit, else from node --test TAP on stdout (pass
+    --test-reporter=tap; top-level tests only). Reports per-test outcomes, agreement with a Wilson 95% CI and the
+    disagreeing tests (names and outcomes only) to stdout, and to <out>.md + <out>.json with --out. The suite's contract:
+    send requests to STRIPE_API_BASE. Example: examples/agree-suite.
   compare/bench/score-twin outputs contain raw expected/actual values (Stripe data, decision 0001 C3): never commit them.`;
 
 export const LEDGER = "budget/reads.jsonl";

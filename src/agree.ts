@@ -3,13 +3,14 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname } from "node:path";
-import { readLedger } from "./bench/budget.ts";
+import { appendLedger, readLedger, rollingGets } from "./bench/budget.ts";
 import { dataDir } from "./bench/oracle.ts";
-import { sandboxTarget } from "./bench/run.ts";
+import { createLimiter, sandboxTarget, type Target } from "./bench/run.ts";
 import { wilson, type Wilson } from "./bench/score.ts";
-import { budgetRefusal, readsLedger, Refused } from "./cli.ts";
+import { budgetRefusal, newRunId, readsLedger, Refused } from "./cli.ts";
 
 export type Outcome = "pass" | "fail" | "skip";
 export interface AgreeTarget {
@@ -132,49 +133,125 @@ export function agreeText(r: AgreeReport): string {
   ].join("\n");
 }
 
+/** Consecutive 429 answers that halt a metered run (the harness's BREAKER in src/bench/run.ts). */
+const BREAKER = 10;
+// Hop-by-hop headers, and content-encoding: fetch hands back the decoded body, so the upstream's gzip header must not follow it.
+const HOP = new Set(["host", "connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding"]);
+
+export interface Metered {
+  baseUrl: string;
+  /** Rolling 30-day GETs in the ledger when the proxy started. */
+  rolling: number;
+  /** Stops the proxy and appends this run's counts to the read ledger; `aborted` says why the run was halted, if it was. */
+  close: () => Promise<{ gets: number; posts: number; deletes: number; aborted?: string }>;
+}
+
 /**
- * The CLI's `agree`: the sandbox (budget-gated) and an in-process twin on an ephemeral port, in `runs` order;
- * writes `<out>.md` + `<out>.json` when `out` is given and returns the Markdown report.
+ * The sandbox half's STRIPE_API_BASE: a local proxy to `upstream` under the harness's controls (decision 0001 C2/R7). Every
+ * request waits on the limiter (upstream.rps; 20 req/s for the sandbox) and is counted by method before it is forwarded.
+ * The run halts once the rolling 30-day GETs reach `budget` or after BREAKER consecutive 429s: every later request is
+ * answered here with a 503 and never forwarded. close() ledgers the counts. Headers (the child's Authorization included)
+ * and bodies pass through untouched and are never kept.
+ * ponytail: 429s are passed back, not retried (the suite owns its retry policy; the limiter caps its rate). Counts are
+ * ledgered at close, so a killed run loses its entry, as recordCorpus's current chunk does.
  */
-export async function agreeRuns(o: { cmd: string; junit?: string; runs: ("twin" | "sandbox")[]; out?: string }): Promise<string> {
+export async function meteredProxy(upstream: Target, o: { ledger: string; budget: number; runId: string }): Promise<Metered> {
+  const take = createLimiter(upstream.rps ?? 1000);
+  const rolling = rollingGets(readLedger(o.ledger), new Date().toISOString());
+  const n = { gets: 0, posts: 0, deletes: 0 };
+  let streak = 0;
+  let aborted: string | undefined;
+  const local = (res: ServerResponse, status: number, message: string): void =>
+    void res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: { type: "api_error", message: `parity agree: ${message}` } }));
+  const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    if (!aborted) await take();
+    if (rolling + n.gets >= o.budget) aborted ??= `run halted: the rolling 30-day sandbox GETs reached the read budget ${o.budget} (decision 0001 C2)`;
+    if (aborted) return local(res, 503, `not sent to the sandbox: ${aborted}`);
+    const method = req.method ?? "GET";
+    n[method === "GET" ? "gets" : method === "DELETE" ? "deletes" : "posts"]++; // per attempt, before fetch, as the harness counts
+    const headers = Object.fromEntries(Object.entries(req.headers).filter((e): e is [string, string] => !HOP.has(e[0]) && typeof e[1] === "string"));
+    let r: Response;
+    try {
+      r = await fetch(upstream.baseUrl + req.url, { method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined });
+    } catch (e) {
+      return local(res, 502, `sandbox unreachable: ${(e as Error).message}`);
+    }
+    const body = Buffer.from(await r.arrayBuffer());
+    streak = r.status === 429 ? streak + 1 : 0;
+    if (streak >= BREAKER) aborted ??= `circuit breaker: ${BREAKER} consecutive sandbox answers were 429 (decision 0001 R7)`;
+    const out: Record<string, string> = {};
+    r.headers.forEach((v, k) => void (HOP.has(k) || (out[k] = v)));
+    res.writeHead(r.status, out).end(body);
+  };
+  const server = createServer((req, res) => void handle(req, res).catch(() => res.destroy())).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    rolling,
+    close: async () => {
+      server.closeAllConnections();
+      server.close();
+      const date = new Date().toISOString();
+      appendLedger(o.ledger, { date, account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: upstream.name, runId: o.runId, ...n, charges: 0 });
+      return { ...n, aborted };
+    },
+  };
+}
+
+/**
+ * The CLI's `agree`: the sandbox (budget-gated, through meteredProxy) and an in-process twin on an ephemeral port, in
+ * `runs` order; writes `<out>.md` + `<out>.json` when `out` is given and returns the Markdown report. A halted sandbox run
+ * is ledgered and throws Refused: no report. `sandbox` replaces the sandbox upstream (tests only; the CLI never sets it).
+ */
+export async function agreeRuns(o: { cmd: string; junit?: string; runs: ("twin" | "sandbox")[]; out?: string; sandbox?: Target }): Promise<string> {
   // Gate the sandbox before anything runs, so a refusal costs nothing.
   const key = process.env.STRIPE_API_KEY;
-  if (o.runs.includes("sandbox")) {
+  const ledger = o.runs.includes("sandbox") ? readsLedger(dataDir()) : "";
+  const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
+  if (ledger) {
     if (!key) throw new Error("STRIPE_API_KEY is not set (put it in .env)");
-    const ledger = readsLedger(dataDir());
-    const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
-    // ponytail: the command talks to api.stripe.com directly, so its GETs are neither projected nor ledgered and no circuit
-    // breaker watches its 429s; this only refuses an account already over its read budget. Route it through a counting proxy
-    // if agree runs on the sandbox routinely.
-    const refusal = budgetRefusal(readLedger(ledger), 0, new Date().toISOString(), budget, ledger);
+    // Projected 1: the proxy halts the run when the total reaches the budget, so the gate only needs room for one GET.
+    const refusal = budgetRefusal(readLedger(ledger), 1, new Date().toISOString(), budget, ledger);
     if (refusal) throw new Refused(refusal);
   }
-  let close = (): void => {};
+  let closeTwin = (): void => {};
+  let proxy: Metered | undefined;
+  let halted: string | undefined;
+  let report: AgreeReport;
   const targets: AgreeTarget[] = [];
   try {
     for (const run of o.runs) {
       if (run === "sandbox") {
-        targets.push(sandboxTarget(key!));
+        const upstream = o.sandbox ?? sandboxTarget(key!);
+        proxy = await meteredProxy(upstream, { ledger, budget, runId: newRunId() });
+        console.error(`agree: sandbox via a metered proxy ${proxy.baseUrl} -> ${upstream.baseUrl} (${upstream.rps ?? "unlimited"} req/s; ${proxy.rolling}/${budget} GETs used in 30 days)`);
+        targets.push({ name: "sandbox", baseUrl: proxy.baseUrl, apiKey: key! });
         continue;
       }
       const { createTwin } = await import("./twin/server.ts"); // loads every resource and the pruned spec: only when needed
       const server = await createTwin().listen(0);
-      close = () => {
+      closeTwin = () => {
         server.closeAllConnections();
         server.close();
       };
       targets.push({ name: "twin", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity" });
     }
-    const report = await agree({ cmd: o.cmd, junit: o.junit, targets, log: (l) => console.error(l) });
-    const text = agreeText(report);
-    if (o.out) {
-      mkdirSync(dirname(o.out), { recursive: true });
-      writeFileSync(`${o.out}.md`, text + "\n");
-      writeFileSync(`${o.out}.json`, JSON.stringify(report, null, 2) + "\n");
-      console.error(`agree: wrote ${o.out}.md and ${o.out}.json`);
-    }
-    return text;
+    report = await agree({ cmd: o.cmd, junit: o.junit, targets, log: (l) => console.error(l) });
   } finally {
-    close();
+    closeTwin();
+    const m = await proxy?.close();
+    if (m) console.error(`agree: sandbox: ${m.gets} GET, ${m.posts} POST, ${m.deletes} DELETE ledgered to ${ledger}${m.aborted ? `; HALTED: ${m.aborted}` : ""}`);
+    halted = m?.aborted;
   }
+  if (halted) throw new Refused(`agree: the sandbox run was halted, so there is no report: ${halted}`);
+  const text = agreeText(report);
+  if (o.out) {
+    mkdirSync(dirname(o.out), { recursive: true });
+    writeFileSync(`${o.out}.md`, text + "\n");
+    writeFileSync(`${o.out}.json`, JSON.stringify(report, null, 2) + "\n");
+    console.error(`agree: wrote ${o.out}.md and ${o.out}.json`);
+  }
+  return text;
 }

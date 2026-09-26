@@ -2,10 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agree, agreeText, parseJunit, parseTap } from "../src/agree.ts";
+import { gzipSync } from "node:zlib";
+import { agree, agreeRuns, agreeText, meteredProxy, parseJunit, parseTap } from "../src/agree.ts";
+import { readLedger } from "../src/bench/budget.ts";
+import type { Target } from "../src/bench/run.ts";
 import { createTwin } from "../src/twin/server.ts";
 
 const CLI = join(import.meta.dirname, "../src/cli.ts");
@@ -165,7 +169,7 @@ test("agree: a command that prints no TAP is an error", () => {
   assert.match(r.stderr, /no TAP test lines on stdout \(exit code 3\)/);
 });
 
-test("agree sandbox: refused without a key or over the read budget, before any command runs", () => {
+test("agree sandbox: refused without a key or at the read budget, before any command runs", () => {
   const dir = tmp();
   const marker = join(dir, "ran");
   const cmd = `${node} -e "require('fs').writeFileSync('ran', '')"`;
@@ -174,11 +178,12 @@ test("agree sandbox: refused without a key or over the read budget, before any c
   assert.match(noKey.stderr, /STRIPE_API_KEY is not set/);
 
   mkdirSync(join(dir, "data/budget"), { recursive: true });
-  const entry = { date: new Date().toISOString(), account: "acct_test", target: "sandbox", runId: "r1", gets: 60, posts: 0, deletes: 0, charges: 0 };
+  // Exactly at the budget is refused too: R7 halts a run when the total reaches it.
+  const entry = { date: new Date().toISOString(), account: "acct_test", target: "sandbox", runId: "r1", gets: 50, posts: 0, deletes: 0, charges: 0 };
   writeFileSync(join(dir, "data/budget/reads.jsonl"), JSON.stringify(entry) + "\n");
-  const over = cli(["agree", "--cmd", cmd, "--runs", "twin,sandbox"], dir, { STRIPE_API_KEY: "sk_test_fake", PARITY_READ_BUDGET: "50" });
-  assert.equal(over.status, 1);
-  assert.match(over.stderr, /refusing to run: 60 sandbox GETs in the last 30 days/);
+  const at = cli(["agree", "--cmd", cmd, "--runs", "twin,sandbox"], dir, { STRIPE_API_KEY: "sk_test_fake", PARITY_READ_BUDGET: "50" });
+  assert.equal(at.status, 1);
+  assert.match(at.stderr, /refusing to run: 50 sandbox GETs in the last 30 days \+ 1 projected/);
   assert.equal(existsSync(marker), false);
 });
 
@@ -189,4 +194,130 @@ test("agree: --cmd is required and --runs takes only twin and sandbox", () => {
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--runs must be twin, sandbox or both/);
   assert.equal(cli(["agree", "--cmd", "true", "--runs", "twin,twin"], dir).status, 2);
+});
+
+/** A stand-in for api.stripe.com: records what reaches it and answers `status` with a gzipped JSON body. */
+async function fakeUpstream(): Promise<{ target: Target; hits: { method: string; url: string; headers: IncomingHttpHeaders; body: string }[]; status: { v: number }; server: Server }> {
+  const hits: { method: string; url: string; headers: IncomingHttpHeaders; body: string }[] = [];
+  const status = { v: 200 };
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const c of req) body += c;
+    hits.push({ method: req.method!, url: req.url!, headers: req.headers, body });
+    res.writeHead(status.v, { "content-type": "application/json", "content-encoding": "gzip", "request-id": `req_${hits.length}` });
+    res.end(gzipSync(JSON.stringify({ n: hits.length })));
+  }).listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  return { target: { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "unused", rps: 1000 }, hits, status, server };
+}
+const ledgerWith = (dir: string, gets: number): string => {
+  const path = join(dir, "reads.jsonl");
+  if (gets) writeFileSync(path, JSON.stringify({ date: new Date().toISOString(), account: "acct_test", target: "sandbox", runId: "r0", gets, posts: 0, deletes: 0, charges: 0 }) + "\n");
+  return path;
+};
+
+test("meteredProxy: forwards requests with their headers and body, decodes gzip, counts by method, ledgers on close", async () => {
+  const up = await fakeUpstream();
+  const ledger = ledgerWith(tmp(), 0);
+  const p = await meteredProxy(up.target, { ledger, budget: 100, runId: "r1" });
+  try {
+    const auth = { Authorization: "Bearer sk_test_child" };
+    const g = await fetch(`${p.baseUrl}/v1/customers?limit=1`, { headers: auth });
+    assert.equal(g.status, 200);
+    assert.deepEqual(await g.json(), { n: 1 });
+    assert.equal(g.headers.get("request-id"), "req_1");
+    const post = await fetch(`${p.baseUrl}/v1/customers`, { method: "POST", headers: { ...auth, "Content-Type": "application/x-www-form-urlencoded" }, body: "email=a%40b.c" });
+    assert.deepEqual(await post.json(), { n: 2 });
+    await (await fetch(`${p.baseUrl}/v1/customers/cus_1`, { method: "DELETE", headers: auth })).text();
+    assert.deepEqual(up.hits.map((h) => [h.method, h.url, h.headers.authorization, h.body]), [
+      ["GET", "/v1/customers?limit=1", "Bearer sk_test_child", ""],
+      ["POST", "/v1/customers", "Bearer sk_test_child", "email=a%40b.c"],
+      ["DELETE", "/v1/customers/cus_1", "Bearer sk_test_child", ""],
+    ]);
+  } finally {
+    const m = await p.close();
+    up.server.close();
+    assert.deepEqual(m, { gets: 1, posts: 1, deletes: 1, aborted: undefined });
+  }
+  const [row] = readLedger(ledger);
+  assert.deepEqual({ ...row, date: undefined }, { date: undefined, account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: "sandbox", runId: "r1", gets: 1, posts: 1, deletes: 1, charges: 0 });
+});
+
+test("meteredProxy: halts the run when the rolling GETs reach the budget; nothing after it is forwarded", async () => {
+  const up = await fakeUpstream();
+  const ledger = ledgerWith(tmp(), 49);
+  const p = await meteredProxy(up.target, { ledger, budget: 50, runId: "r2" });
+  assert.equal(p.rolling, 49);
+  const statuses = [];
+  for (const method of ["GET", "POST", "GET"]) statuses.push((await fetch(`${p.baseUrl}/v1/customers`, { method })).status);
+  const m = await p.close();
+  up.server.close();
+  assert.deepEqual(statuses, [200, 503, 503]);
+  assert.equal(up.hits.length, 1);
+  assert.match(m.aborted!, /reached the read budget 50/);
+  assert.deepEqual(readLedger(ledger).map((e) => e.gets), [49, 1]);
+});
+
+test("meteredProxy: the circuit breaker halts the run after 10 consecutive 429s", async () => {
+  const up = await fakeUpstream();
+  up.status.v = 429;
+  const p = await meteredProxy(up.target, { ledger: ledgerWith(tmp(), 0), budget: 100, runId: "r3" });
+  const statuses = [];
+  for (let i = 0; i < 12; i++) statuses.push((await fetch(`${p.baseUrl}/v1/customers`)).status);
+  const m = await p.close();
+  up.server.close();
+  assert.deepEqual(statuses, [...Array(10).fill(429), 503, 503]);
+  assert.equal(up.hits.length, 10);
+  assert.match(m.aborted!, /circuit breaker: 10 consecutive/);
+});
+
+test("agreeRuns sandbox: the command gets the proxy as its base and the .env key; its requests are ledgered; a halted run throws", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const dir = tmp();
+  // An existing (empty) ledger, so readsLedger never seeds it from this repo's budget/reads.jsonl.
+  mkdirSync(join(dir, "data/budget"), { recursive: true });
+  const ledger = join(dir, "data/budget/reads.jsonl");
+  writeFileSync(ledger, "");
+  const probe = join(dir, "probe.mjs");
+  writeFileSync(
+    probe,
+    `const { STRIPE_API_BASE: b, STRIPE_API_KEY: k } = process.env;
+console.log((/^http:\\/\\/127\\.0\\.0\\.1:\\d+$/.test(b) ? "ok" : "not ok") + " 1 - proxy base");
+let s;
+for (let i = 0; i < Number(process.argv[2]); i++) s = (await fetch(b + "/v1/customers", { headers: { Authorization: "Bearer " + k } })).status;
+console.log((s === 200 ? "ok" : "not ok") + " 2 - reads through the proxy");
+`,
+  );
+  const up = await fakeUpstream();
+  const saved = { PARITY_DATA_DIR: process.env.PARITY_DATA_DIR, STRIPE_API_KEY: process.env.STRIPE_API_KEY, PARITY_READ_BUDGET: process.env.PARITY_READ_BUDGET };
+  Object.assign(process.env, { PARITY_DATA_DIR: join(dir, "data"), STRIPE_API_KEY: "sk_test_env", PARITY_READ_BUDGET: "100" });
+  try {
+    const text = await agreeRuns({ cmd: `${node} "${probe}" 2`, runs: ["sandbox"], sandbox: up.target });
+    assert.match(text, /\| proxy base \| pass \|\n\| reads through the proxy \| pass \|/);
+    assert.deepEqual(up.hits.map((h) => h.headers.authorization), ["Bearer sk_test_env", "Bearer sk_test_env"]);
+    assert.deepEqual(readLedger(ledger).map((e) => e.gets), [2]);
+
+    up.status.v = 429;
+    await assert.rejects(agreeRuns({ cmd: `${node} "${probe}" 12`, runs: ["sandbox"], sandbox: up.target }), /sandbox run was halted.*circuit breaker/);
+    assert.equal(up.hits.length, 12);
+    assert.deepEqual(readLedger(ledger).map((e) => e.gets), [2, 10]);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    up.server.close();
+  }
+});
+
+test("meteredProxy: requests wait on the upstream's limiter (rps)", async () => {
+  const up = await fakeUpstream();
+  const p = await meteredProxy({ ...up.target, rps: 5 }, { ledger: ledgerWith(tmp(), 0), budget: 100, runId: "r4" });
+  const t0 = performance.now();
+  for (let i = 0; i < 8; i++) await (await fetch(`${p.baseUrl}/v1/customers`)).text();
+  const ms = performance.now() - t0;
+  await p.close();
+  up.server.close();
+  // A bucket of 5 at 5/s: the first 5 go at once, the next 3 wait ~200 ms each.
+  assert.ok(ms >= 500, `8 requests at 5 req/s took ${ms.toFixed(0)} ms`);
 });
