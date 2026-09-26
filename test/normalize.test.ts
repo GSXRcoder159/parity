@@ -197,7 +197,7 @@ test("v1.2: request_log_url dropped under error only; updated is a timestamp; ca
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {
   const refund = (card: Record<string, unknown>) => ({ id: "re_Abcdefghij12", object: "refund", created: T0, destination_details: { type: "card", card } });
   const pending = refund({ reference_status: "pending", reference_type: "acquirer_reference_number", type: "refund" });
-  const available = refund({ reference: "2263411961024116", reference_status: "available", reference_type: "acquirer_reference_number", type: "refund" });
+  const available = refund({ reference: "1234567890123456", reference_status: "available", reference_type: "acquirer_reference_number", type: "refund" });
   const other = { object: "payout", destination_details: { card: { reference: "r1" } } };
   const ev = { id: "evt_1AbcDEFghijk", type: "charge.refund.updated", created: T0, data: { object: available } };
   const a = normalizeRecording(rec([step(0, pending), step(1, { object: "list", data: [pending] }), step(2, other)], [ev]));
