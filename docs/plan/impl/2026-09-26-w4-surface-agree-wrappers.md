@@ -12,6 +12,7 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §2.1, §3.1 (`parit
 - **Held-out integrity.**
   - Implementers never open recordings of held-out templates #7, #9, #12, #18 or #21 (in `../parity-data` or `recordings/`), and never read their rows in `templates-validation.md` while implementing.
   - Tests may run held-out templates against the twin only through `score-twin`, and only to report the score, never to tune it.
+- **Sealed log persistence:** after every `align surface`, commit and push the data repo (`git -C ../parity-data add align/log.jsonl && git -C ../parity-data commit -m ... && git -C ../parity-data push`). Otherwise the CI nightly forks the hash chain.
 - **Sandbox:** the claimable key is refused until B1. Nothing in this plan records on the sandbox. Clock templates and live validations that need the sandbox are written and dry-run against the twin, then marked "unvalidated until B1" in their reports. The budget gate and circuit breaker stay in force.
 - **LLM spend** (H4 only): every call goes through `src/align/llm.ts` and the ledger `budget/llm.jsonl`. H4's total cap is $50. Without `ANTHROPIC_API_KEY` there are no live runs; state that plainly.
 - Nothing public: no npm publish, no Hub listing, no Pages. Everything public waits for the launch gate in `docs/plan/STATUS.md`.
@@ -57,13 +58,17 @@ Spec (authority): `docs/plan/2026-09-25-parity-mvp-plan.md` §2.1, §3.1 (`parit
 
 ## Task 3 (surface-added): Invoice lifecycle
 
-**Paths:** `src/twin/resources/invoices.ts`, `src/twin/billing.ts`, `src/twin/errors.json` (status/type/code/param only), `test/twin-invoices.test.ts`
+**Paths:** `src/twin/resources/invoices.ts`, `src/twin/billing.ts`, `src/twin/validate.ts`, `src/twin/resources/subscriptions.ts`, `src/twin/errors.json` (status/type/code/param only), `test/twin-invoices.test.ts`, `test/twin-proration.test.ts`
 **Depends on:** Task 2.
 
 - `POST /v1/invoices/{id}/finalize`, `/pay` (incl. `paid_out_of_band=true`; paying with the default payment method), `/void`; `send_invoice` subscriptions (`days_until_due`, `due_date`).
 - `POST /v1/invoices/{id}` (update `metadata`/`description` on draft/open) and `DELETE` (draft only) where train #11 and #19 exercise them.
 - Status machine: `draft` → `open` → `paid` | `void` | `uncollectible`, with error statuses for invalid transitions (train recordings or docs).
 - Validate on train #19 and #11. Log surface-added.
+- **Also (gaps found by H4, W4 Task 8):**
+  - (a) Form booleans also accept `True`/`False`, which the official stripe-python 11.x sends (captured by H4). This change is in `src/twin/validate.ts`; add that file to your paths. Mark it "unvalidated until B1" in the report.
+  - (b) Subscription price swaps across billing intervals (e.g. monthly → annual) reset the billing cycle anchor to now and prorate per the docs. This is in `src/twin/resources/subscriptions.ts` and `src/twin/billing.ts`; add those paths.
+  - Log both in the same surface-added entry.
 
 ## Task 4 (surface-added): Test clocks and clock templates #27–#30
 
