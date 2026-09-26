@@ -38,9 +38,17 @@ All twin tests and `npx tsc` pass.
 
 ## Task 2: Align core: triage, localization, mechanical patches, held-out gate, sealed log
 
-**Paths:** `src/align/triage.ts`, `src/align/patch.ts`, `src/align/gate.ts`, `src/align/log.ts`, `src/align/index.ts`, `src/cli.ts`, `test/align-*.test.ts`
+**Paths:** `src/align/triage.ts`, `src/align/patch.ts`, `src/align/gate.ts`, `src/align/log.ts`, `src/align/index.ts`, `src/cli.ts`, `src/bench/run.ts`, `src/twin/build.ts`, `test/align-*.test.ts`, `test/run.test.ts`, `test/twin-core.test.ts`, `reports/`
 
-- **Step 0: day-0 and freeze.** Run `score-twin` on the current `<dataDir>/oracle.jsonl` (Ruling 2026-09-26: 88 sequences, all 26 templates, until B1 lets the 520-sequence oracle be recorded; label it "oracle v0 (88 seq)" everywhere and annotate the curve "oracle expanded" when v1 lands) and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Log it as the first `score` entry. Then tag `twin-scaffold-v0` with `git tag -a`.
+- **Step 0a, pre-freeze scaffold fixes:**
+  - (i) `build()` deep-merges plain objects. Arrays and non-plain values are replaced. A handler's computed nested object (e.g. `invoice_settings`, `billing_mode`) must no longer wipe the template's nested defaults, or template patches under computed parents would have no effect.
+  - (ii) `bench`/`runCorpus` against a target where `headersFor` sets `Parity-Now`: the event sweep window starts at `min(Parity-Now over the corpus) − 60`, not wall clock minus 60. Today every twin recording made through `bench` comes back with `events: []`.
+  - Both get tests. Re-run the twin suite.
+- **Step 0, day-0 and freeze.** Run `score-twin` on the current `<dataDir>/oracle.jsonl` (Ruling 2026-09-26: 88 sequences, all 26 templates, until B1 lets the 520-sequence oracle be recorded; label it "oracle v0 (88 seq)" everywhere and annotate the curve "oracle expanded" when v1 lands) and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Log it as the first `score` entry. The day-0 report must state two known limitations:
+  - **Held-out is only partly held out at day 0.** The scaffold's own tests exercised held-out templates (#7, #9), and `templates-validation.md` documents their behavior. Held-out therefore measures post-freeze generalization only.
+  - **Oracle v0 has 88 sequences.**
+
+  Then tag `twin-scaffold-v0` with `git tag -a`.
 - **Triage** (deterministic, `triage.ts`). Input: SeqResults of twin vs oracle, plus noise keys. For each divergence, record its class (existing classes; `NONDETERMINISTIC` if in noise) and its **locus**:
   - **Object field:** walk the oracle body from the divergent path up to the nearest object with an `object` field. That gives `{objectType, fieldPath}`, e.g. `subscription` + `billing_mode.type`.
   - **Error field:** the twin's `parity-error-key` header plus the error field (`message`, `code`, `param`, `type`, status).
@@ -56,7 +64,7 @@ All twin tests and `npx tsc` pass.
   - Accept iff **held-out L3 does not drop** AND **the train divergence count strictly falls**.
   - Apply candidates greedily in batches per file; bisect a failing batch down to single edits.
   - Return accepted edits with before/after scores (train and held-out, L1–L4).
-- **Sealed log** (`log.ts`): append-only JSONL at `<dataDir>/align/log.jsonl`. Each entry is `{ts, runId, kind: "score" | "patch" | "gate" | "publish" | "note", data, prev, hash}` where `hash = sha256(prev + JSON(data) + ts + kind)`. A `verifyLog()` function recomputes the chain. Patch entries carry `class: "automatic" | "assisted" | "surface-added"`, the edit or diff, the evidence, and the gate scores.
+- **Sealed log** (`log.ts`): append-only JSONL at `<dataDir>/align/log.jsonl`. Each entry is `{ts, runId, kind: "score" | "patch" | "gate" | "publish" | "note", data, prev, hash}` where `hash = sha256(prev + JSON(data) + ts + kind)`. A `verifyLog()` function recomputes the chain. Every entry carries oracle provenance `{oracleSeqs, oracleSha}`, the sha256 of `oracle.jsonl`. Patch entries carry `class: "automatic" | "assisted" | "surface-added"`, the edit or diff, the evidence, and the gate scores. A candidate that passes the determinism check but has no effect in the gate (train divergences unchanged) is logged as `blocked-by-code`, with its locus, and is never dropped silently. These are inputs for the assisted pass and for the ratio's denominator discussion.
 - **`paritybench align [--apply] [--max-batches N]`**. It scores the twin against the latest oracle, triages, builds mechanical candidates, and gates them. Without `--apply` it prints the plan. With `--apply` it writes the accepted edits to the data files, logs them, and commits the parity repo (`align: N automatic patches (train Δ, held-out Δ)`).
 - **Tests:** triage locus on fixtures; the determinism check rejects a field that varies across sequences and one present in noise; placeholder values are never seeded; held-out sequences never feed candidates; gate acceptance and rejection with fake scores; log chain verifies and detects tampering.
 - **Live check:** run `align --apply` once on oracle v1 and report how many automatic patches landed and the train/held-out curve before and after, in `reports/<date>-align-first-run.md` (public-safe).
@@ -69,7 +77,7 @@ All twin tests and `npx tsc` pass.
 - `assist.ts`:
   - For the top K non-mechanical divergence clusters (default 3 per run), each grouped by locus, pick the smallest train sequence showing it.
   - Truncate that sequence after its earliest divergent step. `// ponytail:` step-dropping minimization needs new oracle runs and is deferred until the read budget allows.
-  - Build a prompt: the behavior module source (the file owning the route); the normalized oracle vs twin step bodies up to the divergence; the divergence list; the relevant `templates-validation.md` notes; the instruction to return a full replacement of exactly one file under `src/twin/` (resources or `billing.ts`); and the clean-room rule (no third-party twin code).
+  - Build a prompt: the behavior module source (the file owning the route); the normalized oracle vs twin step bodies up to the divergence; the divergence list;  the instruction to return a full replacement of exactly one file under `src/twin/` (resources or `billing.ts`); and the clean-room rule (no third-party twin code).
   - Apply the reply in a temp copy and run the gate. On pass: create a branch `align/assisted-<date>-<n>`, commit, and open a **draft PR** with `gh pr create --draft` (private repo) carrying the counterexample (normalized), the before/after scores and `cost_usd`. Log a `patch` entry with `class: "assisted", status: "proposed"`. **Never merge.**
   - Merging is a review step; see `docs/plan/STATUS.md` for who reviews.
 - `paritybench align --assist` runs the mechanical pass, then the assisted pass within the cost cap.
@@ -96,6 +104,8 @@ All twin tests and `npx tsc` pass.
 - `.github/workflows/ci.yml` runs `npm ci`, `npx tsc`, and `node --test` on push and PR.
 - `.github/workflows/nightly.yml` is a cron at 07:00 UTC plus `workflow_dispatch`. It uses secrets `STRIPE_API_KEY`, `ANTHROPIC_API_KEY` (optional) and `PARITY_DATA_TOKEN` (a fine-grained PAT with contents read/write on `GSXRcoder159/parity-data`). It checks out both repos, runs `paritybench nightly`, and pushes. Commits from the workflow use a bot identity.
 - **Tests** (`test/nightly.test.ts`): a produced curve point and scores file pass through `load()`, `series()` and `automation()` from `site/app.js` with a non-null ceiling and a non-empty automation series; the merge counter logs each merged `align/assisted-*` PR exactly once across two runs and ignores open and non-`align/assisted-` PRs.
+- **Degraded path, required.** Until B1, the claimable key is refused on every request. `nightly` must still complete twin scoring on the existing oracle, align, drift (a no-op with a `note`), and publish when the sandbox recording aborts on the circuit breaker or budget gate. It logs a `note` entry and marks the curve point `oracleRefreshed: false`. The live check exercises and reports exactly this path.
+- **CI timing tests:** wall-clock-bound tests (twin drain/boot/reset, limiter) multiply their upper bounds by 3 when `process.env.CI` is set. Lower bounds stay as they are.
 - **Local verification:** run `paritybench nightly --dry-run` end to end locally; it records nothing and writes nothing outside a temp dir. Run it once for real if the budget allows (slice ≈ 75 sequences). Validate the workflow YAML with `actionlint` if available via `npx` or `brew`; otherwise run a careful manual review and say so.
 
 ## Task 5: Score page, README, CI Action
