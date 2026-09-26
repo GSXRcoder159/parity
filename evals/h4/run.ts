@@ -46,6 +46,7 @@ export interface Task {
   scripted: { tool: string; input: Record<string, unknown> }[];
   checks: Check[];
 }
+/** error = not measured: the setup failed, or the harness or an LLM call threw (the agent's verdict is unknown). */
 export type Outcome = "pass" | "fail" | "error";
 export interface TaskResult {
   outcome: Outcome;
@@ -60,10 +61,14 @@ export interface H4Report {
   model: string | null;
   runs: string[];
   tasks: { id: string; stratum: Stratum; outcomes: Record<string, Outcome>; turns?: Record<string, number> }[];
-  /** Tasks with the same outcome on every target; null with a single target. */
+  /** Tasks with the same outcome on every target, among the tasks with no error on any target; null with a single
+   * target or when no task was measured. */
   agreement: Wilson | null;
+  /** None while any task errored on some target: H4 is defined over the whole suite. */
   verdict: string;
   costUsd: number;
+  /** Why the run stopped before every task ran (an LLM cap, a dead bridge); the rest are `error` ("not run"). */
+  stopped?: string;
 }
 
 /** tasks.json with each setup's fixture names ("subscribed") expanded to their steps. */
@@ -76,6 +81,8 @@ export function loadTasks(path = TASKS): Task[] {
 function fail(msg: string): never {
   throw new Error(msg);
 }
+/** The toolkit bridge exited: every later tool call would fail, so the run stops. */
+class BridgeDied extends Error {}
 
 interface ToolDef {
   name: string;
@@ -101,7 +108,7 @@ async function startBridge(t: Target): Promise<Bridge> {
   const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
   const read = async (): Promise<unknown> => {
     const r = await lines.next();
-    if (r.done) throw new Error(`the toolkit bridge exited${spawnError} (it runs \`uv run --locked --script ${TOOLKIT}\`; needs uv)`);
+    if (r.done) throw new BridgeDied(`the toolkit bridge exited${spawnError} (it runs \`uv run --locked --script ${TOOLKIT}\`; needs uv)`);
     return JSON.parse(r.value);
   };
   const { tools } = (await read()) as { tools: ToolDef[] };
@@ -247,22 +254,25 @@ async function runTask(task: Task, t: Target, act: (instruction: string, r: (v: 
   return { outcome: "pass", turns };
 }
 
-export function verdict(a: Wilson | null): string {
+export function verdict(a: Wilson | null, errored = 0): string {
+  if (errored) return `none: ${errored} task(s) errored on some target, so they were not measured; fix and re-run for the H4 number`;
   if (!a) return "n/a: H4 needs both the twin and the sandbox runs";
   if (a.p >= 0.95) return "confirm (>=95%)";
   if (a.p < 0.9) return "stop (<90%): fix before any pricing conversation";
   return "inconclusive (90-95%)";
 }
 
-/** Outcomes of every task on every run -> the report (agreement = the same outcome on every target). */
-export function report(o: { tasks: Task[]; runs: string[]; results: Map<string, Map<string, TaskResult>>; agent: "scripted" | "llm"; costUsd: number }): H4Report {
+/** Outcomes of every task on every run -> the report (agreement = the same outcome on every target, over the tasks
+ * with no error on any target). */
+export function report(o: { tasks: Task[]; runs: string[]; results: Map<string, Map<string, TaskResult>>; agent: "scripted" | "llm"; costUsd: number; stopped?: string }): H4Report {
   const tasks = o.tasks.map((t) => {
     const rs = o.runs.map((run): [string, TaskResult] => [run, o.results.get(run)!.get(t.id)!]);
     const turns = rs.filter(([, x]) => x.turns !== undefined).map(([run, x]) => [run, x.turns!]);
     return { id: t.id, stratum: t.stratum, outcomes: Object.fromEntries(rs.map(([run, x]) => [run, x.outcome])), ...(turns.length ? { turns: Object.fromEntries(turns) } : {}) };
   });
-  const agreeing = tasks.filter((t) => new Set(Object.values(t.outcomes)).size === 1).length;
-  const agreement = o.runs.length > 1 ? wilson(agreeing, tasks.length) : null;
+  const measured = tasks.filter((t) => !Object.values(t.outcomes).includes("error"));
+  const agreeing = measured.filter((t) => new Set(Object.values(t.outcomes)).size === 1).length;
+  const agreement = o.runs.length > 1 && measured.length ? wilson(agreeing, measured.length) : null;
   return {
     date: new Date().toISOString().slice(0, 10),
     agent: o.agent,
@@ -270,16 +280,19 @@ export function report(o: { tasks: Task[]; runs: string[]; results: Map<string, 
     runs: o.runs,
     tasks,
     agreement,
-    verdict: verdict(agreement),
+    verdict: o.runs.length > 1 ? verdict(agreement, tasks.length - measured.length) : verdict(null),
     costUsd: o.costUsd,
+    ...(o.stopped ? { stopped: o.stopped } : {}),
   };
 }
 
 /**
  * Runs `tasks` on each of `runs` in order: twin = an in-process twin on an ephemeral port; sandbox = STRIPE_API_KEY
  * through agree's metered proxy (refused at the read budget; halted at the budget or after 10 consecutive 429s, and a
- * halted run throws Refused: no report). Setup, tools and checks of the sandbox run all go through the proxy.
- * `sandbox` replaces the sandbox upstream (tests only).
+ * halted run throws Refused: no report). Setup, tools and checks of the sandbox run all go through the proxy, after one
+ * preflight GET (also through a proxy) that refuses the run before anything else when the sandbox does not answer 200.
+ * A task that throws is recorded as `error` and the run goes on; an LLM cap refusal or a dead bridge stops the run and
+ * the rest are `error` ("not run"): either way the report covers what ran. `sandbox` replaces the sandbox upstream (tests only).
  */
 export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; agent: "scripted" | "llm"; capUsd?: number; ledger?: string; sandbox?: Target; log?: (line: string) => void }): Promise<H4Report> {
   const log = o.log ?? ((l: string) => console.error(l));
@@ -287,19 +300,28 @@ export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; ag
   const key = process.env.STRIPE_API_KEY;
   const readsPath = o.runs.includes("sandbox") ? readsLedger(dataDir()) : "";
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
+  const runId = newRunId();
+  const upstream = o.sandbox ?? sandboxTarget(key ?? "");
   if (readsPath) {
     if (!key) throw new Error("STRIPE_API_KEY is not set (put it in .env)");
     const refusal = budgetRefusal(readLedger(readsPath), 1, new Date().toISOString(), budget, readsPath);
     if (refusal) throw new Refused(refusal);
+    // One authenticated GET before anything runs: a refused key (the state until B1) or an unreachable sandbox then
+    // costs one ledgered read, not the twin half's LLM spend followed by a sandbox half of setup errors.
+    const proxy = await meteredProxy(upstream, { ledger: readsPath, budget, runId });
+    const seq: Sequence = { id: "h4:preflight", template: "h4:preflight", stratum: "refunds", seed: 0, heldOut: false, steps: [{ method: "GET", path: "/v1/customers", params: { limit: 1 } }] };
+    const probe = (await runSequence(seq, { name: "sandbox", baseUrl: proxy.baseUrl, apiKey: key, eventWaitMs: 0 }, { take: createLimiter(1000), runId })).steps[0]!;
+    const m = await proxy.close();
+    if (probe.status !== 200) throw new Refused(`sandbox preflight GET /v1/customers -> ${probe.error ?? probe.status}${m.aborted ? ` (${m.aborted})` : ""}: nothing ran (a refused key waits for B1)`);
   }
-  const runId = newRunId();
   const llm: LlmOpts = { ledger: o.ledger ?? LLM_LEDGER, runId, capUsd: o.capUsd ?? 10, spent: { usd: 0 } };
   const results = new Map<string, Map<string, TaskResult>>();
+  let stopped: string | undefined;
   for (const run of o.runs) {
+    if (stopped) break;
     let target: Target;
     let close: () => Promise<string | undefined>;
     if (run === "sandbox") {
-      const upstream = o.sandbox ?? sandboxTarget(key!);
       const proxy = await meteredProxy(upstream, { ledger: readsPath, budget, runId });
       log(`h4: sandbox via a metered proxy ${proxy.baseUrl} -> ${upstream.baseUrl} (${proxy.rolling}/${budget} GETs used in 30 days)`);
       target = { name: "sandbox", baseUrl: proxy.baseUrl, apiKey: key! };
@@ -336,9 +358,16 @@ export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; ag
                 }
                 return undefined;
               };
-        const res = await runTask(task, target, act, runId);
+        let res: TaskResult;
+        try {
+          res = await runTask(task, target, act, runId);
+        } catch (e) {
+          res = { outcome: "error", why: (e as Error).message };
+          if (e instanceof CapRefused || e instanceof BridgeDied) stopped = res.why;
+        }
         out.set(task.id, res);
         log(`h4: ${run}: ${task.id}: ${res.outcome}${res.turns === undefined ? "" : ` (${res.turns} turns)`}${res.why ? `: ${res.why}` : ""}`);
+        if (stopped) break;
       }
     } finally {
       await bridge?.close();
@@ -346,7 +375,14 @@ export async function runH4(o: { tasks: Task[]; runs: ("twin" | "sandbox")[]; ag
     }
     if (halted) throw new Refused(`the sandbox run was halted, so there is no report: ${halted}`);
   }
-  return report({ tasks: o.tasks, runs: o.runs, results, agent: o.agent, costUsd: llm.spent.usd });
+  if (stopped) {
+    log(`h4: stopped early: ${stopped}`);
+    for (const run of o.runs) {
+      const out = results.get(run) ?? results.set(run, new Map()).get(run)!;
+      for (const t of o.tasks) if (!out.has(t.id)) out.set(t.id, { outcome: "error", why: "not run: the run stopped early" });
+    }
+  }
+  return report({ tasks: o.tasks, runs: o.runs, results, agent: o.agent, costUsd: llm.spent.usd, stopped });
 }
 
 const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
@@ -354,16 +390,20 @@ const pct = (x: number): string => `${(x * 100).toFixed(1)}%`;
 export function h4Text(r: H4Report): string {
   const a = r.agreement;
   const count = (run: string, x: Outcome) => r.tasks.filter((t) => t.outcomes[run] === x).length;
-  const disagreeing = r.tasks.filter((t) => new Set(Object.values(t.outcomes)).size > 1);
+  const errored = r.tasks.filter((t) => Object.values(t.outcomes).includes("error"));
+  const disagreeing = r.tasks.filter((t) => !errored.includes(t) && new Set(Object.values(t.outcomes)).size > 1);
+  const row = (t: H4Report["tasks"][number]) => `- ${t.id}: ${r.runs.map((run) => `${run} ${t.outcomes[run]}`).join(", ")}`;
   return [
     `# H4 sim-to-real: ${r.runs.join(" vs ")}`,
     "",
     `${r.date} · ${r.tasks.length} tasks · agent ${r.agent}${r.model ? ` (${r.model}, at most ${MAX_TURNS} turns)` : " (fixed tool calls, no LLM)"} · LLM cost $${r.costUsd.toFixed(4)}`,
     "",
-    r.runs.map((run) => `${run}: ${count(run, "pass")} pass, ${count(run, "fail")} fail, ${count(run, "error")} setup error`).join(" · "),
+    r.runs.map((run) => `${run}: ${count(run, "pass")} pass, ${count(run, "fail")} fail, ${count(run, "error")} error`).join(" · "),
+    ...(r.stopped ? ["", `**Stopped early:** ${r.stopped}`] : []),
     "",
-    a ? `**Agreement: ${pct(a.p)}** (${a.k}/${a.n} tasks; 95% Wilson CI ${pct(a.lo)}–${pct(a.hi)}) → ${r.verdict}` : `Agreement: ${r.verdict}`,
-    ...(a ? ["", `## Disagreeing tasks (${disagreeing.length})`, "", ...(disagreeing.length ? disagreeing.map((t) => `- ${t.id}: ${r.runs.map((run) => `${run} ${t.outcomes[run]}`).join(", ")}`) : ["none"])] : []),
+    a ? `**Agreement: ${pct(a.p)}** (${a.k}/${a.n} measured tasks; 95% Wilson CI ${pct(a.lo)}–${pct(a.hi)}) → ${r.verdict}` : `Agreement: ${r.verdict}`,
+    ...(a ? ["", `## Disagreeing tasks (${disagreeing.length})`, "", ...(disagreeing.length ? disagreeing.map(row) : ["none"])] : []),
+    ...(errored.length ? ["", `## Not measured: an error on some target (${errored.length})`, "", ...errored.map(row)] : []),
     "",
     "## Tasks",
     "",
@@ -406,7 +446,7 @@ async function main(argv: string[]): Promise<number> {
       writeFileSync(`${out}.json`, JSON.stringify(r, null, 2) + "\n");
       console.error(`h4: wrote ${out}.md and ${out}.json`);
     }
-    return 0;
+    return r.stopped ? 1 : 0;
   } catch (e) {
     console.error(`h4: ${(e as Error).message}`);
     return 1;

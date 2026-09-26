@@ -13,15 +13,27 @@ plan §6.4, for use when no partner suite exists. It is an agent run, not a gym 
 - `toolkit.py` is the agent's tools. It runs the pinned Python `stripe-agent-toolkit==0.6.1` with `stripe.api_base`
   set to the target (W0 verifications §10), as a JSON-lines server under `uv run --script`.
 - `run.ts` is the runner. It runs every task on the twin and on the sandbox, then reports:
-  - per-task pass/fail on each target;
+  - per-task pass, fail or error on each target;
   - the agreement, with a Wilson 95% CI, and the verdict;
   - the model and the LLM cost.
+- **Errors are not outcomes.** A task is `error` when its setup failed or the harness or an LLM call threw (a 529, a
+  dead bridge): the agent's result is unknown. Such a task is listed under "Not measured" and left out of the agreement's
+  k/n, and while any task errored there is no verdict, because H4 is defined over the whole suite. Re-run for the number.
+- **Early stop.** An LLM cap refusal or a dead toolkit bridge stops the run; the tasks not reached are `error`
+  ("not run"), the partial report is still printed and written, and the exit code is 1.
+- **Preflight.** When the sandbox is in `--runs`, one authenticated `GET /v1/customers?limit=1` goes through the metered
+  proxy before anything else. Any answer but 200 (a refused key, as until B1) refuses the run, so the twin half's LLM
+  spend is not wasted.
 
 ```sh
 node evals/h4/run.ts --runs twin --agent scripted          # harness validation: no LLM, no sandbox
 node evals/h4/run.ts --runs twin --agent llm --cap-usd 10  # needs ANTHROPIC_API_KEY
-node evals/h4/run.ts --agent llm --out reports/h4-<date>   # the H4 number: twin + sandbox (after B1)
+PARITY_LLM_MODEL=claude-sonnet-4-6 node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
+                                                           # the H4 number: twin + sandbox (after B1); see Temperature
 ```
+
+A full twin + sandbox run is up to 40 × 12 = 480 model calls. The per-run default of $10 may not cover it, and the daily
+cap ($15 per UTC day, shared with other LLM spend) can still stop it; the result is then a partial report with no verdict.
 
 ## Status (2026-09-26)
 
@@ -44,8 +56,14 @@ node evals/h4/run.ts --agent llm --out reports/h4-<date>   # the H4 number: twin
 - **Model.** `claude-sonnet-5` by default (`PARITY_LLM_MODEL` overrides it). The loop allows at most 12 model calls. Every
   tool call the model makes is run. A reply without a tool call ends the task. The outcome is the checks on the final
   state, however the loop ended.
-- **Temperature.** The brief asks for temperature 0, but `claude-sonnet-5` rejects sampling parameters (see `PRICES` in
-  `src/align/llm.ts`), so temperature is not sent to it. Runs of that model are not deterministic.
+- **Temperature, and why it biases H4.** The brief asks for `claude-sonnet-5` at temperature 0, but that model rejects
+  sampling parameters (see `PRICES` in `src/align/llm.ts`), so no temperature is sent to it and its runs are not
+  deterministic. Each task gets one independent attempt per target, so the agreement mixes the agent's own run-to-run
+  variance with twin infidelity, and it biases H4 toward "stop": an agent that repeats its own outcome only 90% of the
+  time reads "stop" even against a perfect twin. For the H4 measurement, set `PARITY_LLM_MODEL=claude-sonnet-4-6`:
+  `PRICES` marks it `temperature0`, so temperature 0 is sent. That lowers the variance but does not remove it, since
+  the API does not guarantee identical outputs at temperature 0. There is no noise-floor control run (`--runs` takes
+  each target once). Which model the H4 number uses is the plan owner's call.
 - **Spend.** Every call is written to `budget/llm.jsonl` (purpose `h4`), using `src/align/llm.ts`'s prices, entry shape and
   daily cap. A call is refused before it is sent if it would pass any of three caps:
   - the daily cap;

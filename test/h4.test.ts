@@ -48,7 +48,7 @@ test("scripted agent on the twin: every task passes but the twin's known gaps (h
   assert.equal(r.agreement, null);
   assert.equal(r.model, null);
   assert.equal(r.costUsd, 0);
-  assert.match(h4Text(r), /twin: 19 pass, 1 fail, 0 setup error/);
+  assert.match(h4Text(r), /twin: 19 pass, 1 fail, 0 error/);
 });
 
 test("an agent that does nothing fails every task: no predicate holds on the setup state alone", async () => {
@@ -56,8 +56,8 @@ test("an agent that does nothing fails every task: no predicate holds on the set
   assert.deepEqual(r.tasks.filter((t) => t.outcomes.twin !== "fail").map((t) => t.id), []);
 });
 
-/** A fake Messages API: `reply(body, n)` answers the n-th call (1-based); every request is kept. */
-async function fakeAnthropic(reply: (body: any, n: number) => { content: unknown[]; stop_reason: string }) {
+/** A fake Messages API: `reply(body, n)` answers the n-th call (1-based; a `status` other than 200 is an API error); every request is kept. */
+async function fakeAnthropic(reply: (body: any, n: number) => { content: unknown[]; stop_reason: string } | { status: number }) {
   const calls: { headers: Record<string, unknown>; body: any }[] = [];
   const server = createServer(async (req, res) => {
     let raw = "";
@@ -65,6 +65,7 @@ async function fakeAnthropic(reply: (body: any, n: number) => { content: unknown
     const body = JSON.parse(raw);
     calls.push({ headers: req.headers, body });
     const r = reply(body, calls.length);
+    if ("status" in r) return void res.writeHead(r.status, { "content-type": "application/json" }).end('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}');
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...r, usage: { input_tokens: 1000, output_tokens: 100 } }));
   }).listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
@@ -124,24 +125,55 @@ test("llm agent: stops after 12 model calls; tool errors reach the model as is_e
   }
 });
 
-test("llm agent: refused before any call without a key, over this run's cap, or over the H4 total cap", async () => {
+test("llm agent: refused before any call without a key; a cap refusal stops the run and still reports (sandbox half not run)", async () => {
   const fake = await fakeAnthropic(() => ({ content: [], stop_reason: "end_turn" }));
   const one = [task("refund-full")];
+  const upstream = await createTwin().listen(0);
+  const dir = tmp();
+  mkdirSync(join(dir, "budget"));
+  writeFileSync(join(dir, "budget/reads.jsonl"), "");
+  const sandbox = { name: "sandbox", baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, apiKey: "unused", rps: 1000 };
   let restore = withEnv({ ANTHROPIC_API_KEY: undefined });
   try {
     await assert.rejects(runH4({ tasks: one, runs: ["twin"], agent: "llm", log: quiet }), /ANTHROPIC_API_KEY is not set: no live LLM runs/);
   } finally {
     restore();
   }
-  restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined });
+  restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined, PARITY_DATA_DIR: dir, STRIPE_API_KEY: "sk_test_env", PARITY_READ_BUDGET: "1000" });
   try {
     // A call's worst case is > $0.08 (8192 output tokens at $10/M), so a $0.05 run cap refuses the first call.
-    await assert.rejects(runH4({ tasks: one, runs: ["twin"], agent: "llm", capUsd: 0.05, ledger: join(tmp(), "llm.jsonl"), log: quiet }), /this run's cap \(--cap-usd\)/);
+    const two = [task("refund-full"), task("cancel-now")];
+    const r = await runH4({ tasks: two, runs: ["twin", "sandbox"], agent: "llm", capUsd: 0.05, ledger: join(tmp(), "llm.jsonl"), sandbox, log: quiet });
+    assert.match(r.stopped!, /this run's cap \(--cap-usd\)/);
+    assert.deepEqual(r.tasks.map((t) => t.outcomes), two.map(() => ({ twin: "error", sandbox: "error" })));
+    assert.deepEqual([r.agreement, r.verdict], [null, "none: 2 task(s) errored on some target, so they were not measured; fix and re-run for the H4 number"]);
+    assert.match(h4Text(r), /\*\*Stopped early:\*\* LLM this run's cap/);
+    // The sandbox half never started: its only ledger row is the preflight's one GET.
+    assert.deepEqual(readLedger(join(dir, "budget/reads.jsonl")).map((e) => [e.gets, e.posts, e.deletes]), [[1, 0, 0]]);
     const ledger = join(tmp(), "llm.jsonl");
     const old: LlmEntry = { date: "2026-09-01T00:00:00.000Z", runId: "r0", purpose: "h4", model: "claude-sonnet-5", input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, cost_usd: 49.99, stop_reason: "end_turn" };
     writeFileSync(ledger, JSON.stringify(old) + "\n");
-    await assert.rejects(runH4({ tasks: one, runs: ["twin"], agent: "llm", ledger, log: quiet }), /H4 total cap: \$49\.9900 spent/);
+    const capped = await runH4({ tasks: one, runs: ["twin"], agent: "llm", ledger, log: quiet });
+    assert.match(capped.stopped!, /H4 total cap: \$49\.9900 spent/);
     assert.equal(fake.calls.length, 0);
+  } finally {
+    restore();
+    fake.close();
+    upstream.close();
+  }
+});
+
+test("llm agent: an API error (529) errors that task only; the run goes on and reports it as not measured", async () => {
+  const fake = await fakeAnthropic((_, n) => (n === 1 ? { status: 529 } : { content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" }));
+  const restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined });
+  const lines: string[] = [];
+  try {
+    const r = await runH4({ tasks: [task("refund-full"), task("cancel-now")], runs: ["twin"], agent: "llm", ledger: join(tmp(), "llm.jsonl"), log: (l) => lines.push(l) });
+    assert.deepEqual(r.tasks.map((t) => t.outcomes.twin), ["error", "fail"]); // the do-nothing reply fails cancel-now
+    assert.equal(r.stopped, undefined);
+    assert.equal(fake.calls.length, 2);
+    assert.ok(lines.includes("h4: twin: refund-full: error: LLM HTTP 529: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"));
+    assert.match(h4Text(r), /## Not measured: an error on some target \(1\)\n\n- refund-full: twin error/);
   } finally {
     restore();
     fake.close();
@@ -160,7 +192,8 @@ test("sandbox half: setup, tools and checks all go through the metered proxy (fa
     const r = await runH4({ tasks: three, runs: ["twin", "sandbox"], agent: "scripted", sandbox, log: quiet });
     assert.deepEqual(r.tasks.map((t) => t.outcomes), three.map(() => ({ twin: "pass", sandbox: "pass" })));
     assert.deepEqual([r.agreement!.k, r.agreement!.n, r.verdict], [3, 3, "confirm (>=95%)"]);
-    const [row] = readLedger(join(dir, "budget/reads.jsonl"));
+    const [preflight, row] = readLedger(join(dir, "budget/reads.jsonl"));
+    assert.deepEqual([preflight!.gets, preflight!.posts, preflight!.deletes], [1, 0, 0]);
     // GETs: each task's setup lists its payment intents, then 2 check reads. POSTs: setups 4 + 4 + 5, the refund and
     // the update. DELETE: the cancel. Nothing reached the upstream except through the proxy's counter.
     assert.deepEqual([row!.gets, row!.posts, row!.deletes], [3 * 3, 13 + 2, 1]);
@@ -182,7 +215,7 @@ test("sandbox half: a run the proxy halts (read budget reached mid-run) is ledge
       runH4({ tasks: [task("refund-full")], runs: ["sandbox"], agent: "scripted", sandbox, log: quiet }),
       /the sandbox run was halted, so there is no report: run halted: the rolling 30-day sandbox GETs reached the read budget 2/,
     );
-    assert.equal(readLedger(join(dir, "budget/reads.jsonl"))[0]!.gets, 2);
+    assert.deepEqual(readLedger(join(dir, "budget/reads.jsonl")).map((e) => e.gets), [1, 1]); // preflight, then the run up to the budget
   } finally {
     restore();
     upstream.close();
@@ -208,11 +241,39 @@ test("sandbox half: refused before anything runs without a key or at the read bu
   }
 });
 
+test("sandbox half: a key the sandbox refuses (401, the state until B1) stops the run at the preflight GET, before the twin half", async () => {
+  const seen: string[] = [];
+  const upstream = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    res.writeHead(401, { "content-type": "application/json" }).end('{"error":{"type":"invalid_request_error","message":"Invalid API Key provided"}}');
+  }).listen(0, "127.0.0.1");
+  await new Promise((r) => upstream.once("listening", r));
+  const dir = tmp();
+  mkdirSync(join(dir, "budget"));
+  writeFileSync(join(dir, "budget/reads.jsonl"), "");
+  const restore = withEnv({ PARITY_DATA_DIR: dir, STRIPE_API_KEY: "sk_test_env", PARITY_READ_BUDGET: "1000" });
+  const lines: string[] = [];
+  try {
+    const sandbox = { name: "sandbox", baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, apiKey: "unused", rps: 1000 };
+    await assert.rejects(
+      runH4({ tasks: [task("refund-full"), task("cancel-now")], runs: ["twin", "sandbox"], agent: "scripted", sandbox, log: (l) => lines.push(l) }),
+      /sandbox preflight GET \/v1\/customers -> 401: nothing ran/,
+    );
+    assert.deepEqual(seen, ["GET /v1/customers?limit=1"]);
+    assert.deepEqual(lines, []); // no twin task ran
+    assert.deepEqual(readLedger(join(dir, "budget/reads.jsonl")).map((e) => e.gets), [1]);
+  } finally {
+    restore();
+    upstream.close();
+  }
+});
+
 test("agreement: same outcome on both targets; >=95% confirms, <90% stops; the report holds ids and outcomes only", () => {
   assert.equal(verdict(null), "n/a: H4 needs both the twin and the sandbox runs");
   assert.equal(verdict(wilson(19, 20)), "confirm (>=95%)");
   assert.equal(verdict(wilson(18, 20)), "inconclusive (90-95%)");
   assert.equal(verdict(wilson(17, 20)), "stop (<90%): fix before any pricing conversation");
+  assert.match(verdict(wilson(19, 19), 1), /^none: 1 task\(s\) errored/); // H4 is over the whole suite
 
   const res = (outcome: TaskResult["outcome"]): TaskResult => ({ outcome, why: "check 0: expected 2000, got 1500" });
   const tasks = TASKS.slice(0, 3);
@@ -221,10 +282,16 @@ test("agreement: same outcome on both targets; >=95% confirms, <90% stops; the r
     ["sandbox", new Map([[tasks[0]!.id, res("pass")], [tasks[1]!.id, res("fail")], [tasks[2]!.id, res("error")]])],
   ]);
   const r = report({ tasks, runs: ["twin", "sandbox"], results, agent: "scripted", costUsd: 0 });
-  assert.deepEqual([r.agreement!.k, r.agreement!.n], [2, 3]);
+  // An error is not an outcome: the errored task leaves k/n, and there is no verdict until it is measured.
+  assert.deepEqual([r.agreement!.k, r.agreement!.n], [2, 2]);
+  assert.match(r.verdict, /^none: 1 task\(s\) errored/);
   const text = h4Text(r);
-  assert.match(text, /\*\*Agreement: 66\.7%\*\* \(2\/3 tasks/);
-  assert.match(text, new RegExp(`## Disagreeing tasks \\(1\\)\\n\\n- ${tasks[2]!.id}: twin fail, sandbox error`));
+  assert.match(text, /\*\*Agreement: 100\.0%\*\* \(2\/2 measured tasks.*→ none: 1 task/);
+  assert.match(text, /## Disagreeing tasks \(0\)\n\nnone/);
+  assert.match(text, new RegExp(`## Not measured: an error on some target \\(1\\)\\n\\n- ${tasks[2]!.id}: twin fail, sandbox error`));
+  // Errors on every task: nothing measured, no agreement.
+  const allErr = new Map([...results].map(([run, m]) => [run, new Map([...m].map(([id]) => [id, res("error")]))]));
+  assert.equal(report({ tasks, runs: ["twin", "sandbox"], results: allErr, agent: "scripted", costUsd: 0 }).agreement, null);
   assert.doesNotMatch(JSON.stringify(r) + text, /expected 2000/);
 });
 
