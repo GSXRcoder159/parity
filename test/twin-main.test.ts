@@ -29,8 +29,11 @@ test("boots to a first successful request in under 1 s and exits 0 on SIGTERM", 
   assert.equal(((await res.json()) as { object: string }).object, "list");
   assert.ok(ms < 1000, `boot to first request took ${Math.round(ms)} ms`);
 
+  // fetch keeps its socket alive: an idle connection is closed at once, not at the 5 s deadline.
+  const t1 = performance.now();
   child.kill("SIGTERM");
   assert.deepEqual(await once(child, "exit"), [0, null]);
+  assert.ok(performance.now() - t1 < 1000, `exit took ${Math.round(performance.now() - t1)} ms after SIGTERM`);
 });
 
 test("POST /_parity/reset over HTTP clears 1,000 objects in under 50 ms", { timeout: 10_000 }, async (t) => {
