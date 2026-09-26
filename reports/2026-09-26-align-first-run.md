@@ -4,12 +4,18 @@ Date: 2026-09-26 (UTC) · Twin: `twin-scaffold-v0` · Harness: `paritybench alig
 
 The report lists data-file paths, JSON pointers, operations, loci, classes, counts and scores. It contains no response values or seeded values (decision 0001 C3).
 
-## Result: 174 automatic patches pass the gate, and none has landed yet
+## Result: 174 automatic patches pass the gate and have landed (commit `8bbf612`)
 
 - **What ran.** `paritybench align` ran on oracle v0 in plan mode. Wall time was 7.5 s, including 13 `score-twin` runs in temp copies of the repo: 1 baseline and 12 gate runs.
 - **The gate result.** Triage produced 175 mechanical candidates. The held-out gate accepted 174, blocked 0 as blocked-by-code, and rejected 1 (see "The 175 candidates").
-- **Why `align --apply` was not run on the repo.** Applying any template patch fails an existing scaffold test. The test is `test/twin-shapes.test.ts`, "generator is deterministic and the committed templates are current". It asserts that `src/twin/shapes/*.json` equals `scripts/gen-shapes.ts` output byte for byte. That was the W2 invariant, from decision 0002 §4.1. After the freeze, the align loop edits these files by design (0002 §3), so the invariant had to become "the generator reproduces the templates at `twin-scaffold-v0`". That change has landed (commit `ea2103c`, pushed with the tag, which is now on origin). The apply itself has not run yet: it writes the data files and appends permanent sealed-log entries, so it waits for a maintainer to run the one command, `node src/cli.ts align --apply`.
-- **Dry run of the apply.**
+- **Why the invariant changed before the apply.** Applying any template patch failed an existing scaffold test. The test is `test/twin-shapes.test.ts`, "generator is deterministic and the committed templates are current". It asserts that `src/twin/shapes/*.json` equals `scripts/gen-shapes.ts` output byte for byte. That was the W2 invariant, from decision 0002 §4.1. After the freeze, the align loop edits these files by design (0002 §3), so the invariant had to become "the generator reproduces the templates at `twin-scaffold-v0`". That change landed first (commit `ea2103c`, pushed with the tag, which is on origin).
+- **The apply.** `node src/cli.ts align --apply` then ran on the repo, on the same oracle (same sha256) and the same harness code as the plan run.
+  - Candidates 175 (44 set, 131 delete), 72 loci not mechanical. Gate: 12 `score-twin` runs after the baseline, 174 accepted (43 set, 131 delete), 0 blocked-by-code, 1 rejected (the `errors.json` `/expand_too_deep/code` set).
+  - Commit `8bbf612`: `align: 174 automatic patches (train Δ -7458 divergences, L3 +14.9 pts; held-out Δ L3 +8.8 pts)`. It touches the 11 shape files (78 insertions, 398 deletions) and not `errors.json`.
+  - Sealed log (private data repo, `align/log.jsonl`): 175 new entries, 174 `patch` (all class `automatic`, status `applied`) and 1 `gate`, each naming `8bbf612`. `verifyLog` passes on all 176 entries (kinds: 1 `score`, 174 `patch`, 1 `gate`).
+  - Train divergences 8,881 → 1,423. Train L1/L2/L3/L4 94.3/20.0/3.8/0.0% → 94.3/34.9/18.8/5.6%. Held-out 91.2/21.2/0.0/0.0% → 91.2/30.1/8.8/0.0%. These equal the plan run's gate figures in the curve table below.
+  - Afterwards the shapes test (now against the tag) passes, the full suite passes and `tsc` is clean.
+- **Dry run of the apply (before it landed).**
   - The 174 accepted edits were applied in a temp copy of the repo (the gate's own `score-twin` path).
   - `score-twin` there reproduces the gate's "after" exactly: 1,423 train divergences, train L3 at 93 of 495 steps, held-out L3 at 10 of 113, train L4 at 4 of 72.
   - **Full rehearsal of the ruling, 174-edit set.** It ran in a scratch clone of the repo at this report's harness commit, which carries the `twin-scaffold-v0` tag, against a copy of the data repo. There the shapes test was changed to compare the generator against the templates at the tag. Then `node src/cli.ts align --apply` ran. The real trees were not touched.
@@ -17,15 +23,15 @@ The report lists data-file paths, JSON pointers, operations, loci, classes, coun
     - The log gained 175 entries: 174 `patch` (all `automatic`) and 1 `gate`, each carrying the commit's sha. `verifyLog` passes on all 176 entries.
     - The full suite then passes: 165 tests, 163 pass, 0 fail, 1 skipped (live-only), 1 todo. `tsc` is clean.
     - With the old shapes test, the patched tree fails exactly that one test. That is why the test changed first.
-  - On the real repo, `--apply` should first commit `align: 174 automatic patches (train Δ -7458 divergences, L3 +14.9 pts; held-out Δ L3 +8.8 pts)`, then append 175 sealed-log entries (174 `patch` + 1 `gate`, each naming that commit), 176 in total with the day-0 `score` entry. The `gate` entry records the rejected candidate with its scores.
-  - **A second run on the patched tree** starts from 1,423 train divergences and proposes 3 candidates. It accepts 0, and so leaves nothing to apply.
+  - The real apply reproduced the rehearsal exactly: same commit subject, same 11 files, same 175 new entries.
+  - **A second run on the patched tree** (rehearsed, then repeated in plan mode on the repo after the apply, with the same result) starts from 1,423 train divergences and proposes 3 candidates. It accepts 0, and so leaves nothing to apply.
     - 1 is rejected, as before: the `errors.json` `/expand_too_deep/code` set.
     - 2 are blocked-by-code: the `price.json` `/currency_options` and `/tiers` deletes. The first run accepts both.
     - Why the 2 are blocked: each has 61 remaining train divergences, and those come from the `price` default nested in `src/twin/shapes/subscription_item.json`. The triage locus maps a field to the template of its own `object` type, so it cannot reach a default nested in a parent's template. Deleting `/price/currency_options` and `/price/tiers` in `subscription_item.json` removes those 122 train divergences and leaves held-out L3 unchanged (checked in the scratch clone; not applied).
     - The CLI labels such candidates "handler code decides the value". The label is wrong for these two. The sealed log records only the edit, the locus, the evidence and the count.
     - This is a localization gap, left for a later fix. A fix would land as its own automatic-patch commit on a later run.
 
-## Curve, before → after the gated patches (projected; not landed)
+## Curve, before → after the gated patches (landed at `8bbf612`)
 
 | Split | When | L1 | L2 | L3 | L4 |
 |---|---|---|---|---|---|

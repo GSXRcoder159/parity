@@ -156,7 +156,8 @@ Across every route:
 - Subscription item, price and quantity changes, proration, trials, billing anchors and discounts: any create or update parameter outside the lists above.
 - Cancel with `invoice_now` or `prorate`.
 - Webhook endpoints with `connect`.
-- Test clocks.
+
+Test clocks are not in the twin yet: their routes answer `404 unrecognized_url`.
 
 ## License and pledge
 
