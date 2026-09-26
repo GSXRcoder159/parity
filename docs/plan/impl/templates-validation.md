@@ -261,7 +261,8 @@ These are the extra seeds for branches that seeds 1–2 miss:
 - Create returns `secret` (`whsec_…`, which the `ids` rule normalizes); retrieve does not. `api_version` is null when none is given. `disabled=true` gives `status: disabled`.
 - Delete returns `{id, object, deleted: true}`. Retrieving the endpoint afterwards gives **404** `resource_missing` with `param: webhook_endpoint`. Customers behave differently and return a tombstone.
 - Webhook endpoint CRUD emits no events.
-- #24 subscribes only to event types that no template produces (disputes, early-fraud warnings). This means nothing is delivered to example.com, and concurrent sequences' events keep `pending_webhooks: 0`.
+- #24 subscribes only to event types that no template produces (disputes, early-fraud warnings), so nothing is delivered to example.com. It does not change `pending_webhooks`.
+- **Observed `pending_webhooks`:** every recorded event carries `pending_webhooks: 1`, both before #24 existed and after. The W0 D run (`w0-d-c8-20260926T000140-m0x6`) has 627 events, all with 1. The final runs `20260926T012758-uxv2` and `20260926T012914-57wc` have 219 + 97 = 316 events, all with 1. No event showed 0. The account already has something that counts as a pending webhook; what that is was not identified. A twin should emit 1 here, not 0. Scores do not depend on it, because `compare.ts` compares only event types.
 - An aborted run can leave an endpoint behind. Stripe's docs cap an account at 16 endpoints; this was not checked live.
 
 **Idempotency on failures**
