@@ -40,7 +40,7 @@ All twin tests and `npx tsc` pass.
 
 **Paths:** `src/align/triage.ts`, `src/align/patch.ts`, `src/align/gate.ts`, `src/align/log.ts`, `src/align/index.ts`, `src/cli.ts`, `test/align-*.test.ts`
 
-- **Step 0: day-0 and freeze.** Once `<dataDir>/oracle.jsonl` holds oracle v1 (≥500 sequences, from the W1b plan), run `score-twin` on it and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Log it as the first `score` entry. Then tag `twin-scaffold-v0` with `git tag -a`.
+- **Step 0: day-0 and freeze.** Run `score-twin` on the current `<dataDir>/oracle.jsonl` (Ruling 2026-09-26: 88 sequences, all 26 templates, until B1 lets the 520-sequence oracle be recorded; label it "oracle v0 (88 seq)" everywhere and annotate the curve "oracle expanded" when v1 lands) and record the **day-0 scaffold score** (L1–L4 per stratum, train vs held-out) in `reports/<date>-twin-day0.md`, public-safe. Log it as the first `score` entry. Then tag `twin-scaffold-v0` with `git tag -a`.
 - **Triage** (deterministic, `triage.ts`). Input: SeqResults of twin vs oracle, plus noise keys. For each divergence, record its class (existing classes; `NONDETERMINISTIC` if in noise) and its **locus**:
   - **Object field:** walk the oracle body from the divergent path up to the nearest object with an `object` field. That gives `{objectType, fieldPath}`, e.g. `subscription` + `billing_mode.type`.
   - **Error field:** the twin's `parity-error-key` header plus the error field (`message`, `code`, `param`, `type`, status).
@@ -83,15 +83,19 @@ All twin tests and `npx tsc` pass.
 - `paritybench nightly [--dry-run]`, in order:
   1. Record today's sandbox slice (`--slice <dayOfWeek>/7`, budget-gated, ≤10 req/s).
   2. Run `oracle build`.
-  3. Run `score-twin` on the full corpus: log a `score` entry and append a public-safe point to `site/data/curve.json` of the form `{date, normalization, overall: {L1..L4 p/lo/hi/n}, byStratum, heldOut, train, events: [annotations such as "surface-added: …"]}`.
+  3. Run `score-twin` on the full corpus and log a `score` entry. Then compute the noise floor from the latest weekly noise pair (0002 §1): on one fixed weekday, step 1 also records a fixed ~50-sequence subset twice back-to-back (`record --templates … --seeds …`, the selection fixed in `nightly.ts`, `--name noise-a` then `--name noise-b`), budget-gated like the slice. Every night runs `compare --oracle <noise-a> --target <noise-b>` on the latest pair into a temp dir (tonight's normalization) and keeps only its `score` (`{overall, byStratum}`). Do not pass the pair as `score-twin --noise`: that flag needs a recording of every oracle sequence and throws on a subset.
   4. Run `align --apply` (mechanical).
-  5. Run `align --assist` if a key is present.
-  6. Run drift.
-  7. Commit and push the data repo, then commit the public-safe artifacts to the parity repo.
-  8. Print a summary.
+  5. Run `align --assist` if a key is present. Then log assisted merges: `gh pr list --state merged --json number,headRefName,mergedAt --limit 200` through Task 3's injectable command runner, keep PRs whose `headRefName` starts with `align/assisted-` (`--head` is exact-match, so filter in code), and append one sealed-log `patch` entry `{class: "assisted", status: "merged", pr}` per PR not already logged (idempotent by PR number). The page's ratio counts merges, never proposals (0002 §3).
+  6. Write two public-safe files from step 3's scores (Levels = `{L1..L4}`, each a Wilson `{p, lo, hi, k, n}` from `src/bench/score.ts`; contract at `site/app.js:4-14`, exemplars in `site/data/sample/`, never write `sample: true`):
+     - Append a point to `site/data/curve.json`: `{date, normalization, overall, byStratum, heldOut, train, events, noise, patches}`. `overall`, `byStratum`, `heldOut`, `train` are step 3's `Score`. `events` holds annotations such as `"surface-added: …"` (never counted in `patches`). `noise = {overall, byStratum}` from step 3's pair `compare`; a night with no pair omits `noise` and the page marks it invalid; a stratum the subset does not cover is absent from `noise.byStratum` and gets no ceiling. `patches = {automatic, assisted}`: this run's `automatic` patch entries from step 4 and the `status: "merged"` entries appended in step 5.
+     - Write `site/data/scores/<date>.json`: `{date, normalization, overall: Split, byStratum: {stratum: Split}}` with `Split = {train, heldOut, noise}`. `overall = {train: s.train, heldOut: s.heldOut, noise: noise.overall}`; per stratum k, `t = score(results.filter((r) => r.stratum === k))` and `{train: t.train, heldOut: t.heldOut, noise: noise.byStratum[k]}` (no change to the `Score` type).
+  7. Run drift.
+  8. Commit and push the data repo, then commit the public-safe artifacts to the parity repo.
+  9. Print a summary.
 - `drift.ts` compares today's slice against the previous recording of the same sequences, normalized, excluding paths in the noise set. For any remaining divergence it writes `drift/YYYY-MM-DD.md`: endpoints, templates, paths and classes only, no values. It also appends to `site/data/drift.json`. If there is nothing to report, it writes no file and records a `note` entry.
 - `.github/workflows/ci.yml` runs `npm ci`, `npx tsc`, and `node --test` on push and PR.
 - `.github/workflows/nightly.yml` is a cron at 07:00 UTC plus `workflow_dispatch`. It uses secrets `STRIPE_API_KEY`, `ANTHROPIC_API_KEY` (optional) and `PARITY_DATA_TOKEN` (a fine-grained PAT with contents read/write on `GSXRcoder159/parity-data`). It checks out both repos, runs `paritybench nightly`, and pushes. Commits from the workflow use a bot identity.
+- **Tests** (`test/nightly.test.ts`): a produced curve point and scores file pass through `load()`, `series()` and `automation()` from `site/app.js` with a non-null ceiling and a non-empty automation series; the merge counter logs each merged `align/assisted-*` PR exactly once across two runs and ignores open and non-`align/assisted-` PRs.
 - **Local verification:** run `paritybench nightly --dry-run` end to end locally; it records nothing and writes nothing outside a temp dir. Run it once for real if the budget allows (slice ≈ 75 sequences). Validate the workflow YAML with `actionlint` if available via `npx` or `brew`; otherwise run a careful manual review and say so.
 
 ## Task 5: Score page, README, CI Action
