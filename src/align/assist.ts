@@ -118,7 +118,7 @@ const userPrompt = (files: { path: string; source: string }[], ce: Counterexampl
 
 /** `FILE: <path>` plus one fenced block; the path must be one of `allowed` (the files shown). */
 export function parseReply(text: string, allowed: string[]): { file: string; content: string } | { error: string } {
-  const files = [...text.matchAll(/^FILE:\s*(\S+)\s*$/gm)].map((m) => m[1]!);
+  const files = [...text.matchAll(/^FILE:[ \t]*(\S+)[ \t]*$/gm)].map((m) => m[1]!);
   const blocks = [...text.matchAll(/^```[\w-]*\n([\s\S]*?)^```[ \t]*$/gm)].map((m) => m[1]!);
   if (files.length !== 1 || blocks.length !== 1) return { error: `expected one FILE line and one fenced block, got ${files.length} and ${blocks.length}` };
   if (!allowed.includes(files[0]!)) return { error: `${files[0]} is not one of the files shown (${allowed.join(", ")})` };
@@ -153,7 +153,8 @@ function openDraftPr(repo: string, run: Run, date: string, file: string, content
   ];
   const n = Math.max(0, ...names.filter((x) => x.startsWith(prefix)).map((x) => Number(x.slice(prefix.length))).filter(Number.isInteger)) + 1;
   const branch = `${prefix}${n}`;
-  const wt = join(mkdtempSync(join(tmpdir(), "parity-assist-wt-")), "wt");
+  const tmp = mkdtempSync(join(tmpdir(), "parity-assist-wt-"));
+  const wt = join(tmp, "wt");
   git("worktree", "add", "-q", "-b", branch, wt, "HEAD"); // the main working tree is never checked out elsewhere
   try {
     writeFileSync(join(wt, file), content);
@@ -164,6 +165,7 @@ function openDraftPr(repo: string, run: Run, date: string, file: string, content
     return { branch, commit, pr };
   } finally {
     git("worktree", "remove", "--force", wt);
+    rmSync(tmp, { recursive: true, force: true });
   }
 }
 

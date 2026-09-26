@@ -117,6 +117,7 @@ test("parseReply: one FILE line naming a file shown plus one fenced block, else 
   assert.deepEqual(parseReply("FILE: ../../etc/passwd\n```\nx\n```", allowed), { error: "../../etc/passwd is not one of the files shown (src/twin/resources/customers.ts, src/twin/billing.ts)" });
   assert.match((parseReply("FILE: src/twin/billing.ts\nFILE: src/twin/resources/customers.ts\n```ts\nx\n```\n```ts\ny\n```", allowed) as { error: string }).error, /got 2 and 2/);
   assert.match((parseReply("FILE: src/twin/billing.ts\nno fence", allowed) as { error: string }).error, /got 1 and 0/);
+  assert.match((parseReply("FILE:\n```ts\nx\n```", allowed) as { error: string }).error, /got 0 and 1/, "a bare FILE: line names nothing");
   assert.deepEqual(parseReply("FILE: src/twin/billing.ts\n```ts\n  \n```", allowed), { error: "empty file" });
 });
 
