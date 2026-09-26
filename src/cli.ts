@@ -62,11 +62,11 @@ const USAGE = `usage:
     merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
     call's tokens and cost_usd go to <dataDir>/budget/llm.jsonl; daily cap $15 (UTC) per ledger, PARITY_LLM_CAP_USD may
     only lower it. The nightly pushes its ledger to the data repo: pull it before a local LLM run so both count.
-  align surface: log a surface-added twin change (decision 0002 §3; not counted as alignment): score-twin on the oracle for a
-    temp checkout of <commit>^ (--commit default HEAD) and for the working tree, then a sealed-log patch entry
-    {class: "surface-added", note, commit, normalization, before, after}; prints the deltas. The next nightly point
-    annotates it. Refused unless src/twin/, templates/ and package.json are committed, <commit> is an ancestor of HEAD,
-    the harness (src/bench/, src/cli.ts) is the same at <commit>^ and in the working tree, and the sealed log verifies.
+  align surface: log a surface-added twin change (decision 0002 §3; not counted as alignment): score-twin on the oracle for
+    <commit>^'s twin (--commit default HEAD; src/twin/ of <commit>^ in a copy of the working tree, so one harness scores
+    both sides) and for the working tree, then a sealed-log patch entry {class: "surface-added", note, commit, head,
+    normalization, method, before, after}; prints the deltas. The next nightly point annotates it. Refused unless
+    src/twin/, templates/ and package.json are committed, <commit> is an ancestor of HEAD, and the sealed log verifies.
     Then commit and push the data repo: the nightly reads the log from there.
   nightly: record today's slice (--slice <UTC day of week>/7 of templates x seeds 1-20) on the sandbox at <=10 req/s, and on
     Sundays (UTC) the noise pair (all templates x seeds 1-2, --name noise-a then noise-b); oracle build; score-twin (a

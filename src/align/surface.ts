@@ -2,7 +2,7 @@
 // nor assisted (new surface such as proration, invoices, test clocks) is scaffold work. It is logged in the sealed log with
 // the score before and after, so the curve annotates it ("surface-added: <note>") and its jump is never read as alignment.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { METHOD } from "../bench/compare.ts";
@@ -21,19 +21,18 @@ export interface Surface {
   head: string;
   before: Scores;
   after: Scores;
-  /** Both sides are scored by HEAD's harness (checked), under this normalization and compare method. */
+  /** Both sides are scored by the working tree's harness, templates and oracle, under this normalization and method. */
   normalization: string;
   method: string;
   oracle: Provenance;
   log: string;
 }
 
-/** The scorer: `before` runs `<commit>^`'s copy of these, `after` the working tree's, so they must be the same code. */
-const HARNESS = ["src/bench", "src/cli.ts"];
-
 /**
- * score-twin on <dataDir>/oracle.jsonl for a temp checkout of `<commit>^` (before) and for the working tree (after), then
- * one sealed-log `patch` entry {class: "surface-added", status: "applied", note, commit, head, before, after} with provenance.
+ * score-twin on <dataDir>/oracle.jsonl for `<commit>^`'s twin (before) and for the working tree (after), then one
+ * sealed-log `patch` entry {class: "surface-added", status: "applied", note, commit, head, before, after} with provenance.
+ * `before` is a copy of the working tree with src/twin replaced by `<commit>^`'s: one harness, one set of templates and
+ * one oracle score both sides, so the delta is the twin's alone, however the harness changed inside the range.
  */
 export function surface(o: { repo: string; dataDir: string; runId: string; note: string; commit?: string }): Surface {
   // "after" is the working tree while the entry names commits: the twin's own inputs must be committed. Other src/ files
@@ -48,10 +47,6 @@ export function surface(o: { repo: string; dataDir: string; runId: string; note:
   } catch {
     throw new Error(`refusing align surface: ${commit} is not an ancestor of HEAD ${head}`);
   }
-  // A harness change inside the range would score before and after with different scorers (a normalization bump
-  // would show up as a surface delta): the harness must be the same at <commit>^, HEAD and in the working tree.
-  const harness = git(o.repo, "diff", "--name-only", `${commit}^`, "--", ...HARNESS);
-  if (harness) throw new Error(`refusing align surface: the harness (${HARNESS.join(", ")}) differs between ${commit.slice(0, 12)}^ and the working tree:\n${harness}\ncommit the harness change before the surface commits, or log from a later --commit`);
   const log = logPath(o.dataDir);
   const v = verifyLog(log);
   if (!v.ok) throw new Error(`refusing align surface: the sealed log is broken: ${v.error}`); // before minutes of scoring
@@ -61,7 +56,9 @@ export function surface(o: { repo: string; dataDir: string; runId: string; note:
   let before: Scores;
   try {
     // git archive, not a checkout: the repo's index, HEAD and worktrees are never touched.
-    const tar = execFileSync("git", ["-C", o.repo, "archive", `${commit}^`, "src", "templates", "package.json"], { maxBuffer: 1 << 30 });
+    const tar = execFileSync("git", ["-C", o.repo, "archive", `${commit}^`, "src/twin"], { maxBuffer: 1 << 30 });
+    for (const p of ["src", "templates", "package.json"]) cpSync(join(o.repo, p), join(tmp, p), { recursive: true });
+    rmSync(join(tmp, "src/twin"), { recursive: true });
     execFileSync("tar", ["-x", "-C", tmp], { input: tar });
     before = scores(evalOf(scoreTwinIn(tmp, oraclePath, []).json));
   } finally {
