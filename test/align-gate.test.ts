@@ -96,23 +96,37 @@ test("gate: accepts a batch whose every edit helps; bisects a failing batch to t
   assert.deepEqual([ptr(capped.accepted), capped.notGated.map((c) => c.pointer)], [["/b1", "/b2", "/b3", "/b4"], ["/a1", "/a2", "/c1", "/c2"]]);
 });
 
-test("scoreTwinIn: the score-twin child (gate and assisted pass) gets PATH, HOME, NODE_*, PARITY_DATA_DIR and CI only", () => {
-  // A stand-in repo whose src/cli.ts writes its own env where score-twin writes its JSON (--json is the last argument).
+test("scoreTwinIn: the score-twin child (gate and assisted pass) gets PATH, HOME and CI only, and reads only its copy and the oracle", () => {
+  // A stand-in repo whose src/cli.ts writes its env, and what it could read and write, where score-twin writes its JSON
+  // (--json is the last argument).
   const repo = mkdtempSync(join(tmpdir(), "pb-child-env-"));
   mkdirSync(join(repo, "src"));
   mkdirSync(join(repo, "templates"));
   writeFileSync(join(repo, "package.json"), '{ "type": "module" }\n');
-  writeFileSync(join(repo, "src/cli.ts"), 'import { writeFileSync } from "node:fs";\nwriteFileSync(process.argv.at(-1)!, JSON.stringify({ score: process.env, results: [] }));\n');
-  const set = { ANTHROPIC_API_KEY: "sk-ant-leak", GH_TOKEN: "ghp_leak", STRIPE_API_KEY: "sk_test_leak", PARITY_DATA_TOKEN: "github_pat_leak", PARITY_LLM_MODEL: "x", PARITY_DATA_DIR: "/data", CI: "1", NODE_ENV: "test" };
+  const secret = join(repo, "secret.txt"); // outside the copy: like the data repo, or a checkout's .git/config
+  writeFileSync(secret, "token\n");
+  writeFileSync(join(repo, "oracle.jsonl"), "{}\n");
+  const probe = (expr: string) => `(() => { try { return ${expr}; } catch (e) { return String(e.code); } })()`;
+  writeFileSync(
+    join(repo, "src/cli.ts"),
+    [
+      'import { readFileSync, writeFileSync } from "node:fs";',
+      "const oracle = process.argv[process.argv.indexOf(\"--oracle\") + 1]!;",
+      `const reads = { oracle: ${probe("readFileSync(oracle, 'utf8')")}, secret: ${probe(`readFileSync(${JSON.stringify(secret)}, 'utf8')`)}, write: ${probe(`writeFileSync(${JSON.stringify(join(repo, "planted.txt"))}, 'x')`)} };`,
+      "writeFileSync(process.argv.at(-1)!, JSON.stringify({ score: { env: process.env, reads }, results: [] }));",
+    ].join("\n"),
+  );
+  const set = { ANTHROPIC_API_KEY: "sk-ant-leak", GH_TOKEN: "ghp_leak", STRIPE_API_KEY: "sk_test_leak", PARITY_DATA_TOKEN: "github_pat_leak", PARITY_LLM_MODEL: "x", PARITY_DATA_DIR: "/data", CI: "1", NODE_OPTIONS: "--no-warnings" };
   const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
   Object.assign(process.env, set);
   try {
-    const env = scoreTwinIn(repo, join(repo, "oracle.jsonl"), []).json.score as unknown as Record<string, string>;
-    const kept = Object.keys(process.env).filter((k) => ["PATH", "HOME", "PARITY_DATA_DIR", "CI"].includes(k) || k.startsWith("NODE_"));
+    const { env, reads } = scoreTwinIn(repo, join(repo, "oracle.jsonl"), []).json.score as unknown as { env: Record<string, string>; reads: Record<string, string | undefined> };
+    const kept = Object.keys(process.env).filter((k) => ["PATH", "HOME", "CI"].includes(k));
     // macOS itself adds __CF_USER_TEXT_ENCODING (a locale code) to every process it starts.
     assert.deepEqual(Object.keys(env).filter((k) => k !== "__CF_USER_TEXT_ENCODING").sort(), kept.sort());
-    assert.deepEqual([env.PARITY_DATA_DIR, env.CI, env.NODE_ENV, env.PATH], ["/data", "1", "test", process.env.PATH]);
-    for (const k of ["ANTHROPIC_API_KEY", "GH_TOKEN", "STRIPE_API_KEY", "PARITY_DATA_TOKEN"]) assert.equal(env[k], undefined, k);
+    assert.deepEqual([env.CI, env.PATH], ["1", process.env.PATH]);
+    for (const k of ["ANTHROPIC_API_KEY", "GH_TOKEN", "STRIPE_API_KEY", "PARITY_DATA_TOKEN", "PARITY_DATA_DIR", "NODE_OPTIONS"]) assert.equal(env[k], undefined, k);
+    assert.deepEqual(reads, { oracle: "{}\n", secret: "ERR_ACCESS_DENIED", write: "ERR_ACCESS_DENIED" });
   } finally {
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];

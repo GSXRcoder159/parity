@@ -2,7 +2,7 @@
 // iff held-out L3 does not drop AND the train divergence count strictly falls. Greedy per-file batches; a batch that
 // fails is split (by which edits removed their own divergences, else in halves) down to single edits.
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { SeqResult } from "../bench/compare.ts";
@@ -54,23 +54,32 @@ export interface ScoreJson {
 }
 
 /**
- * The score-twin child's whole env. It runs code an LLM may have written (the assisted pass), so no secret reaches it:
- * no ANTHROPIC_API_KEY, GH_TOKEN, STRIPE_API_KEY or PARITY_DATA_TOKEN.
+ * The score-twin child's whole env: no secret (ANTHROPIC_API_KEY, GH_TOKEN, STRIPE_API_KEY, PARITY_DATA_TOKEN) and no
+ * PARITY_DATA_DIR. NODE_OPTIONS is dropped too: it could lift the permission flags below.
  */
-const childEnv = (): NodeJS.ProcessEnv =>
-  Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "PARITY_DATA_DIR", "CI"].includes(k) || k.startsWith("NODE_")));
+const childEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
 
 /**
  * `score-twin` on `oraclePath` from a temp copy of `repo` (src/, templates/, package.json) with `edits` applied, in a
  * child process with childEnv(); with `recordings`, also the twin's raw recordings.
+ *
+ * The child runs code an LLM may have written (the assisted pass), so it runs under Node's permission model: it reads
+ * only the temp copy and the oracle file and writes only the temp copy, so it cannot read the data repo, other
+ * recordings, git credentials in either checkout's .git/config, or /proc/<parent>/environ, and it cannot spawn
+ * processes. ponytail: the permission model does not restrict the network, and the child needs the oracle (held-out
+ * sequences included) to score: a hostile patch could send the oracle out. A container with --network none closes that
+ * when the assisted pass runs unattended with a real key (B2).
  */
 export function scoreTwinIn(repo: string, oraclePath: string, edits: Edit[], recordings = false): { json: ScoreJson; twin?: Recording[] } {
   const tmp = mkdtempSync(join(tmpdir(), "parity-gate-"));
   try {
     for (const p of ["src", "templates", "package.json"]) cpSync(join(repo, p), join(tmp, p), { recursive: true });
     applyEdits(tmp, edits);
-    const args = [join(tmp, "src/cli.ts"), "score-twin", "--oracle", resolve(oraclePath), "--json", join(tmp, "score.json")];
-    if (recordings) args.push("--recordings", join(tmp, "twin.jsonl"));
+    const oracle = existsSync(oraclePath) ? realpathSync(oraclePath) : resolve(oraclePath);
+    const root = realpathSync(tmp); // the permission model compares resolved paths (macOS: /var -> /private/var)
+    const sandbox = ["--permission", `--allow-fs-read=${root}`, `--allow-fs-read=${oracle}`, `--allow-fs-write=${root}`];
+    const args = [...sandbox, join(root, "src/cli.ts"), "score-twin", "--oracle", oracle, "--json", join(root, "score.json")];
+    if (recordings) args.push("--recordings", join(root, "twin.jsonl"));
     try {
       execFileSync(process.execPath, args, { cwd: tmp, env: childEnv(), stdio: ["ignore", "ignore", "pipe"] });
     } catch (e) {
