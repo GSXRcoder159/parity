@@ -329,10 +329,17 @@ Seeds 1 and 2 ran through `runCorpus` against a listening twin, with the templat
 7. Declined renewal: the subscription goes `past_due` and the invoice stays `open` with `attempt_count=1` and some `next_payment_attempt`. The twin's retries are a `ponytail:` fixed stand-in for the Smart Retries default ("8 tries within 2 weeks"): a retry every 2 days, then the subscription is canceled with `cancellation_details.reason=payment_failed`.
 8. Trials: whether the first invoice is $0 and paid without a payment intent, and whether at trial end the subscription turns `active` immediately (the twin does) with a `subscription_cycle` draft.
 9. Error shapes: an advance to a time not later than the frozen time, an advance too far ahead, a 4th customer on a clock, and an unknown `test_clock`. The twin's keys are `test_clock_frozen_time_not_after`, `test_clock_advance_too_far`, `test_clock_customer_limit` and `resource_missing_400`. The `param`s (`frozen_time`, `test_clock`) are guesses. Also whether the sandbox refuses requests on a clock's objects, or a second advance, while the clock is advancing (the twin refuses neither).
-10. Customer lists: the twin leaves a clock's customers out of `GET /v1/customers` unless `test_clock` is given, as the docs say.
+10. Customer and subscription lists: the twin leaves a clock's customers out of `GET /v1/customers` unless `test_clock` is given, and a clock's subscriptions out of `GET /v1/subscriptions` unless `test_clock` or `customer` is given, as the spec's parameter text says.
 
 ### Deviations and gaps (#27–#30)
 
 - **Advance limit.** The docs (and the spec's parameter text) say two intervals of the **shortest** subscription interval, or two years without subscriptions. The twin follows the docs; the task brief said "longest".
 - `score-twin` strips `waitMs`, so twin recordings of #27–#30 show `advancing` on every clock retrieve. The oracle will likely show `ready` there, which is a divergence the twin cannot fix. The runner or `score-twin` (`src/cli.ts`) must keep clock waits for these templates to compare, or the twin needs an injectable delay.
 - Not built (each is a `ponytail:` or refusal in the twin): `incomplete` → `incomplete_expired` after 23 h; `trial_will_end` for trials of 3 days or less; `trial_end` at create; attaching an existing customer to a new clock (the `customer` param answers `not_implemented`); the 3-subscriptions-per-customer cap; item changes during a trial; `invoice.upcoming`.
+
+### Held-out exposure during W4 Task 4: pending a human ruling
+
+While writing this section, the Task 4 implementer ran a `grep` over this file's table lines. It printed the rows of held-out templates #7, #9 and #12 (intended steps and results, cut at 160 characters) into the implementer's context. This breaks the W4 plan's held-out rule ("never read their rows in `templates-validation.md` while implementing"). The rows of #18 and #21 and all held-out recordings were not opened.
+
+- What suggests the rows were not used (circumstantial only): Task 4 changes no code path of those templates. The held-out score is the same before and after Task 4 (L1 94.7 / L2 30.1 / L3 8.8 / L4 0.0; sealed-log entry `20260926T133009-sx3t`, data repo 580be4b), and the same again after fix round 1.
+- **Open:** a human or ledger ruling (decision 0002 §4.5) on whether #7, #9 and #12 stay valid held-out templates. The Task 4 gate stays open until it is recorded. This note does not make that ruling.

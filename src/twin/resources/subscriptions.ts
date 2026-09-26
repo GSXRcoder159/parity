@@ -316,7 +316,8 @@ export const routes: Route[] = [
         status === "all" || (status === "ended" ? s === "canceled" || s === "incomplete_expired" : status ? s === status : s !== "canceled");
       const hit = (s: Obj) =>
         (!customer || s.customer === customer) &&
-        (!test_clock || s.test_clock === test_clock) &&
+        // Docs: a clock's subscriptions are listed only with its test_clock or their customer.
+        (test_clock ? s.test_clock === test_clock : customer || !s.test_clock) &&
         hasStatus(s.status) &&
         (!price || ((s.items as Obj).data as Obj[]).some((i) => (i.price as Obj).id === price));
       return { body: list(ctx.all("subscription").filter(hit), params, "/v1/subscriptions") };

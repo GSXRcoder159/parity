@@ -90,6 +90,15 @@ test("a clock's subscription, invoice and payment run at the clock's frozen time
   const at = Object.fromEntries(t.store.events.map((e) => [e.type, e.created]));
   assert.deepEqual([at["product.created"], at["price.created"]], [T0, T0]);
   for (const type of ["customer.created", "payment_method.attached", "customer.subscription.created", "invoice.paid", "charge.succeeded"]) assert.equal(at[type], F0, type);
+
+  // Spec: the list leaves out a clock's subscriptions unless given its test_clock or their customer.
+  const plain = (await call(t, "POST", "/v1/customers", {})).body;
+  const pm = (await call(t, "POST", "/v1/payment_methods/pm_card_visa/attach", { customer: plain.id })).body;
+  const p = (await call(t, "POST", "/v1/subscriptions", { customer: plain.id, items: [{ price: price.id }], default_payment_method: pm.id })).body;
+  const ids = async (params?: Obj) => (await get(t, "/v1/subscriptions", params)).data.map((x: Obj) => x.id);
+  assert.deepEqual(await ids(), [p.id]);
+  assert.deepEqual(await ids({ customer: c.id }), [s.id]);
+  assert.deepEqual(await ids({ test_clock: c.test_clock }), [s.id]);
 });
 
 test("advance: later than the frozen time, at most two intervals of the shortest price ahead (two years without subscriptions)", async () => {
