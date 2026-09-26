@@ -10,6 +10,7 @@ Sender notes:
 - Fill every `{{…}}`. Scope names the customer's own APIs and call shapes. Nothing on the plan §2.3 cut list is sold.
 - An LOI counts toward the H3 target only at ≥$200/month (`funnel.md`).
 - Keep signed copies out of this repository: it goes public at the launch gate. Log only the date, company and price in `funnel.md`.
+- Send only the letter below the rule.
 
 ---
 
@@ -23,7 +24,7 @@ To: {{TBD: provider legal entity, when incorporated}} ("Parity"), attn. Adam Kuc
 1. **Purpose.** Customer intends to buy the service in section 2 once it is available, on the terms below. This letter records that intent. It is not a contract.
 
 2. **Service.**
-   - *Private alignment.* Parity aligns its twin to Customer's own account configuration and call shapes (section 3). Every sandbox run for this uses a Stripe sandbox in Customer's account and Customer's key, never Parity's account. Changes derived from Customer's calls stay private to Customer and are not added to the public twin.
+   - *Private alignment.* Parity aligns its twin to Customer's own call shapes (section 3). Every sandbox run for this uses a Stripe sandbox in Customer's account and Customer's key, never Parity's account. Changes derived from Customer's calls stay private to Customer and are not added to the public twin.
    - *`paritybench agree` in Customer's CI.* Customer's suite runs on the aligned twin and on Customer's sandbox. The report gives per-test pass/fail on each and their agreement.
 
 3. **Scope.**

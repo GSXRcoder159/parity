@@ -8,6 +8,8 @@ Before sending:
 - [ ] "Measured so far" is gated on B5, counsel review (decision 0001 C7). Until B5 clears, send the offer without that section.
 - [ ] `paritybench agree` has landed (W4, Task 5 in `docs/plan/impl/2026-09-26-w4-surface-agree-wrappers.md`). Until it has, cut the 48 h promise.
 - [ ] Re-read each number in its cited report. The twin numbers move with every align run.
+- [ ] For partner runs, set `PARITY_DATA_DIR` to a directory outside any git repository. The default is `../parity-data`, a git repo (README, Reproduce).
+- [ ] Remove these sender notes, and the "Gated on B5" line, before sending.
 
 ---
 
@@ -29,20 +31,22 @@ For the sandbox half: a Stripe sandbox in your own account (see "What we never d
 
 - **Run your workloads on our Stripe account.** Every sandbox run for you uses your account and your key (decision 0001 C8). Either you run the command I send, or you create a sandbox for this (an account can hold up to five, `docs/plan/STATUS.md`), give me its key, and delete the sandbox when we are done.
 - **Publish your data.** Not your name, tests, scenarios, call shapes, recordings or results, unless you agree in writing. Recordings stay in a private store, never in a repository, and are deleted when you ask.
-- **Patch the twin from your calls.** With your OK, your call shapes join a private held-out set that the twin is scored on and never repaired against (plan §3.1). The twin's data files are public (decision 0002 §5), so a patch derived from your calls would publish them.
+- **Patch the public twin from your calls.** With your OK, your call shapes join a private held-out set that the twin is scored on and never repaired against (plan §3.1). The twin's data files are public (decision 0002 §5), so a patch derived from your calls would publish them.
 
-## What the twin covers (plan §2.1)
+## The twin's v0 surface (plan §2.1)
+
+Test clocks, proration and subscription updates are being added now (W4, `docs/plan/STATUS.md`). Check STATUS.md before sending.
 
 - **Covered:** Customers, PaymentMethods (`pm_card_*` test tokens), Products and Prices, Subscriptions, Invoices (preview, pay, void), Refunds, Charges and PaymentIntents (retrieve only), Events and webhook endpoints, and test clocks. Also idempotency keys and the error envelope.
 - **Not covered:** Quotes, Subscription Schedules, Coupons and Promotion codes, Tax, Checkout, Connect, Billing Portal, Meters, Disputes.
 
 ## Measured so far
 
-Gated on B5 (see "Before sending"). Intervals are 95% Wilson. "Sequence agreement" means every step matches the sandbox after normalization and the sequence emits the same event types.
+Gated on B5 (see "Before sending"). Intervals are 95% Wilson. Train sequences are the ones the align loop learns from; held-out ones it is never shown. "Sequence agreement" means every step matches the sandbox after normalization and the sequence emits the same event types.
 
-Every number comes from **oracle v0: 88 sandbox sequences from 26 templates, out of 520 planned.** The rest wait on claiming our sandbox (B1), because the claimable key's quota stopped recording (`reports/2026-09-26-baseline.md`).
+Every number below comes from **oracle v0: 88 sandbox sequences from 26 templates, out of 520 planned.** The rest wait on claiming our sandbox (B1), because the claimable key's quota stopped recording (`reports/2026-09-26-baseline.md`).
 
-- **Existing mocks: 0% sequence agreement (H1 confirmed).** Source: `reports/2026-09-26-baseline.md`.
+- **Existing mocks: 0% sequence agreement.** Source: `reports/2026-09-26-baseline.md`.
   - stripe-mock 0.205.0 (pinned image): 0.0% [0.0–4.2] over 88 sequences. Its status codes match on 80.9% of steps. This is as documented: its README says it is stateless.
   - localstripe 1.15.10: 0.0% [0.0–16.1] over the 20 sequences inside the routes it serves (6 of 26 templates).
 - **The sandbox against itself:** 100.0% sequence agreement [94.0–100.0] over 60 pairs recorded 28 minutes apart (templates #1–#15), so the noise floor is 0.0%. This is in-sample: normalization v1.2 was written from this pair. Source: `reports/2026-09-26-baseline.md`.
