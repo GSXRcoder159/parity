@@ -179,6 +179,15 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     refused.push({ step, error: e.message });
     return e.message;
   };
+  // Tonight's run files and read-ledger entries are pushed as soon as each recording ends (and when one fails), so a later
+  // failure or a killed run cannot lose them: the next night's budget gate counts those reads (decision 0001 C2).
+  const persist = (): void => {
+    const paths = ["runs", "budget"].filter((p) => existsSync(join(data, p)));
+    if (o.dryRun || !paths.length || !run("git", ["status", "--porcelain", "--", ...paths], data)) return;
+    run("git", ["add", "-A", "--", ...paths], data);
+    run("git", ["commit", "-q", "-m", `nightly ${date} run ${runId}: recordings and read ledger`, "--", ...paths], data);
+    run("git", ["push", "-q"], data);
+  };
   try {
     if (!o.dryRun) {
       try {
@@ -187,6 +196,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
       } catch (e) {
         sliceRes.refused = refuse(`record slice ${spec}`, e);
       }
+      persist(); // before a Sunday's noise pair: the slice's reads must not wait ~104 more sequences
     }
     if (dow === NOISE_DAY) {
       const noiseSeqs = buildCorpus(TEMPLATES, NOISE_SEEDS);
@@ -202,14 +212,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
       }
     }
   } finally {
-    // Tonight's run files and read-ledger entries are pushed as soon as recording ends, so a later failure cannot lose
-    // them (the next night's budget gate counts those reads; decision 0001 C2).
-    const paths = ["runs", "budget"].filter((p) => existsSync(join(data, p)));
-    if (!o.dryRun && paths.length && run("git", ["status", "--porcelain", "--", ...paths], data)) {
-      run("git", ["add", "-A", "--", ...paths], data);
-      run("git", ["commit", "-q", "-m", `nightly ${date} run ${runId}: recordings and read ledger`, "--", ...paths], data);
-      run("git", ["push", "-q"], data);
-    }
+    persist();
   }
   const oracleRefreshed = !o.dryRun && !sliceRes.refused;
 
