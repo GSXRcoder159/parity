@@ -19,9 +19,9 @@ How faithful are mocks of the Stripe API? As far as I can find, nobody publishes
 So I built ParityBench: an open harness that replays API sequences against any Stripe-compatible server and against the real Stripe sandbox, then scores the difference.
 
 **2/**
-Four levels, each a 95% Wilson interval: L1 status, L2 shape, L3 value after versioned normalization, L4 the whole sequence including its event types.
+Four levels, each a 95% Wilson interval: L1 status, L2 shape, L3 value after versioned normalization, L4 the whole sequence with its event types.
 
-26 templates in 9 strata: lifecycle, cancellation, refunds, errors, idempotency, events, pagination, proration, boundaries.
+30 templates in 10 strata (6 held out), 600 sequences. The oracle records 26 templates so far; the 4 test-clock ones are unvalidated.
 
 **3/**
 First, the sandbox against itself. Two clean runs of 60 sequences, 28 min apart: every status matched; raw bodies differed on 419 of 420 steps (ids, timestamps).

@@ -11,7 +11,7 @@ import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.t
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
-import { logMerged, nightly, nightlyText } from "../src/nightly.ts";
+import { ceilingText, logMerged, nightly, nightlyText } from "../src/nightly.ts";
 import { createTwin } from "../src/twin/server.ts";
 
 // site/app.js is browser JS with no build step; a computed specifier keeps tsc from asking for its types.
@@ -49,6 +49,15 @@ test("logMerged: each merged align/assisted-* PR is logged once across runs; ope
       ["night-2", "patch", "assisted", "merged", 13, "align/assisted-2026-10-02-2"],
     ],
   );
+});
+
+test("ceilingText: the public commit message names a pair's coverage, and a pair missing a template is no ceiling", () => {
+  const L3 = { p: 0.95, lo: 0.9, hi: 0.98, k: 57, n: 60 };
+  const noise = { seqs: 60, overall: { L1: L3, L2: L3, L3, L4: L3 } };
+  assert.equal(ceilingText(undefined, 88, false), "no noise pair");
+  assert.equal(ceilingText({ ...noise, seqs: 88 }, 88, true), "noise ceiling L3 95.0%");
+  assert.equal(ceilingText(noise, 88, true), "noise ceiling L3 95.0% (the pair covers 60 of 88 sequences)");
+  assert.equal(ceilingText(noise, 88, false), "no whole-corpus noise ceiling (the pair covers 60 of 88 sequences: L3 95.0% on those)");
 });
 
 test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits and pushes both repos (parity first); the next night annotates only what is new and replaces a same-date point", { timeout: 180_000 }, async () => {
@@ -241,6 +250,8 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.deepEqual(app.series(d2.curve, "all").map((row: { events: string[] }) => row.events), [["surface-added: test clocks"], ["surface-added: proration", "oracle expanded: 6→9"]]);
     assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").map((e) => [e.data.date, e.data.events]), [["2026-10-04", curve2[0].events], ["2026-10-05", curve2[1].events]]);
     assert.deepEqual(curve2[1].noise.coverage, { seqs: 6, oracleSeqs: 9, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
+    // The public commit message never prints the pair's number without its coverage.
+    assert.match(git(repo, "log", "-1", "--format=%s"), /; noise ceiling L3 [\d.]+% \(the pair covers 6 of 9 sequences\); oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);
 
     // A second run on the same date replaces that date's point.

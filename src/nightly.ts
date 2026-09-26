@@ -164,6 +164,18 @@ function publicFiles(o: {
   return { point, scores };
 }
 
+/**
+ * The public commit message's ceiling clause: the pair's number never goes out without its coverage, and without every
+ * scored template (`whole`: publicFiles published an overall ceiling) it is not called the ceiling.
+ */
+export function ceilingText(noise: { seqs: number; overall: LevelScores } | undefined, oracleSeqs: number, whole: boolean): string {
+  if (!noise) return "no noise pair";
+  const l3 = `${(noise.overall.L3.p * 100).toFixed(1)}%`;
+  const covers = `the pair covers ${noise.seqs} of ${oracleSeqs} sequences`;
+  if (!whole) return `no whole-corpus noise ceiling (${covers}: L3 ${l3} on those)`;
+  return `noise ceiling L3 ${l3}${noise.seqs < oracleSeqs ? ` (${covers})` : ""}`;
+}
+
 const writeJson = (file: string, v: unknown): void => {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(v, null, 2) + "\n");
@@ -347,7 +359,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     run("git", ["add", "--", ...files], o.repo);
     const msg =
       `nightly ${date}: curve point and scores (train L3 ${pct(json.score.train.L3)}, held-out L3 ${pct(json.score.heldOut.L3)}; ` +
-      `${noise ? `noise ceiling L3 ${pct(noise.overall.L3)}` : "no noise pair"}; oracle ${oracleRefreshed ? "refreshed" : "not refreshed"})` +
+      `${ceilingText(noise, oracle.oracleSeqs, Boolean(point.noise?.overall))}; oracle ${oracleRefreshed ? "refreshed" : "not refreshed"})` +
       `${d.file ? `; drift: ${d.items.length} paths` : ""}\n\nSealed log run ${runId} (data repo ${dataCommit}); oracle ${oracle.oracleSeqs} sequences, sha256 ${oracle.oracleSha}.`;
     run("git", ["commit", "-q", "-m", msg, "--", ...files], o.repo);
     // This commit is cited by nothing, so it may be rebased onto a main that moved during the night.
