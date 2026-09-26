@@ -12,8 +12,18 @@ The report lists data-file paths, JSON pointers, operations, loci, classes, coun
 - **Dry run of the apply.**
   - The 174 accepted edits were applied in a temp copy of the repo (the gate's own `score-twin` path).
   - `score-twin` there reproduces the gate's "after" exactly: 1,423 train divergences, train L3 at 93 of 495 steps, held-out L3 at 10 of 113, train L4 at 4 of 72.
-  - An earlier full rehearsal of the apply (176 edits, before this round's guards) ran the whole suite in a scratch clone: it failed exactly one test, the shapes-generator test above. It was not repeated for the 174-edit set.
+  - **Full rehearsal of the ruling, 174-edit set.** It ran in a scratch clone of the repo at this report's harness commit, which carries the `twin-scaffold-v0` tag, against a copy of the data repo. There the shapes test was changed to compare the generator against the templates at the tag. Then `node src/cli.ts align --apply` ran. The real trees were not touched.
+    - The commit subject was exactly the one below. The commit touched the 11 shape files and not `errors.json`.
+    - The log gained 175 entries: 174 `patch` (all `automatic`) and 1 `gate`, each carrying the commit's sha. `verifyLog` passes on all 176 entries.
+    - The full suite then passes: 165 tests, 163 pass, 0 fail, 1 skipped (live-only), 1 todo. `tsc` is clean.
+    - With the unchanged shapes test, the patched tree fails exactly that one test. So the ruling is still needed first.
   - After the ruling, `--apply` should first commit `align: 174 automatic patches (train Δ -7458 divergences, L3 +14.9 pts; held-out Δ L3 +8.8 pts)`, then append 175 sealed-log entries (174 `patch` + 1 `gate`, each naming that commit), 176 in total with the day-0 `score` entry. The `gate` entry records the rejected candidate with its scores.
+  - **A second run on the patched tree** starts from 1,423 train divergences and proposes 3 candidates. It accepts 0, and so leaves nothing to apply.
+    - 1 is rejected, as before: the `errors.json` `/expand_too_deep/code` set.
+    - 2 are blocked-by-code: the `price.json` `/currency_options` and `/tiers` deletes. The first run accepts both.
+    - Why the 2 are blocked: each has 61 remaining train divergences, and those come from the `price` default nested in `src/twin/shapes/subscription_item.json`. The triage locus maps a field to the template of its own `object` type, so it cannot reach a default nested in a parent's template. Deleting `/price/currency_options` and `/price/tiers` in `subscription_item.json` removes those 122 train divergences and leaves held-out L3 unchanged (checked in the scratch clone; not applied).
+    - The CLI labels such candidates "handler code decides the value". The label is wrong for these two. The sealed log records only the edit, the locus, the evidence and the count.
+    - This is a localization gap, left for a later fix. A fix would land as its own automatic-patch commit on a later run.
 
 ## Curve, before → after the gated patches (projected; not landed)
 
