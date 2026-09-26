@@ -10,7 +10,7 @@ import { readLedger } from "../src/bench/budget.ts";
 import { wilson } from "../src/bench/score.ts";
 import { createTwin } from "../src/twin/server.ts";
 import type { LlmEntry } from "../src/align/llm.ts";
-import { h4Text, loadTasks, MAX_TURNS, report, runH4, verdict, type TaskResult } from "../evals/h4/run.ts";
+import { h4Text, loadTasks, MAX_TURNS, report, runH4, verdict, type Run, type TaskResult } from "../evals/h4/run.ts";
 
 // These run the real bridge (evals/h4/toolkit.py under `uv run --script`, the pinned toolkit) against in-process twins.
 const RUN = join(import.meta.dirname, "../evals/h4/run.ts");
@@ -288,8 +288,8 @@ test("agreement: same outcome on twin and sandbox, beside the twin-vs-control fl
     ["control", new Map([[t0, res("pass")], [t1, res("pass")], [t2, res("fail")]])],
     ["sandbox", new Map([[t0, res("pass")], [t1, res("fail")], [t2, res("error")]])],
   ]);
-  const runs = ["twin", "control", "sandbox"] as const;
-  const r = report({ tasks, runs: [...runs], results, agent: "scripted", costUsd: 0 });
+  const runs: Run[] = ["twin", "control", "sandbox"];
+  const r = report({ tasks, runs, results, agent: "scripted", costUsd: 0 });
   // An error is not an outcome: the errored task leaves the twin-vs-sandbox k/n (not the control's, where it was
   // measured), and there is no verdict until it is measured.
   assert.deepEqual([r.agreement!.k, r.agreement!.n, r.control!.k, r.control!.n], [2, 2, 2, 3]);
@@ -302,11 +302,11 @@ test("agreement: same outcome on twin and sandbox, beside the twin-vs-control fl
   assert.match(text, new RegExp(`## Not measured: an error on some target \\(1\\)\\n\\n- ${t2}: twin fail, control fail, sandbox error`));
   // Measured everywhere: the verdict reads the twin-vs-sandbox agreement, and only with the control run beside it.
   results.get("sandbox")!.set(t2, res("fail"));
-  assert.equal(report({ tasks, runs: [...runs], results, agent: "scripted", costUsd: 0 }).verdict, "confirm (>=95%)");
+  assert.equal(report({ tasks, runs, results, agent: "scripted", costUsd: 0 }).verdict, "confirm (>=95%)");
   assert.match(report({ tasks, runs: ["twin", "sandbox"], results, agent: "scripted", costUsd: 0 }).verdict, /^none: no control run/);
   // Errors on every task: nothing measured, no agreement.
   const allErr = new Map([...results].map(([run, m]) => [run, new Map([...m].map(([id]) => [id, res("error")]))]));
-  const none = report({ tasks, runs: [...runs], results: allErr, agent: "scripted", costUsd: 0 });
+  const none = report({ tasks, runs, results: allErr, agent: "scripted", costUsd: 0 });
   assert.deepEqual([none.agreement, none.control], [null, null]);
   assert.doesNotMatch(JSON.stringify(r) + text, /expected 2000/);
 });

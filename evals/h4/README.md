@@ -24,7 +24,8 @@ plan §6.4, for use when no partner suite exists. It is an agent run, not a gym 
   against the control. A twin-vs-sandbox agreement near the control's is mostly agent variance, not twin infidelity.
 - **Errors are not outcomes.** A task is `error` when its setup failed or the harness or an LLM call threw (a 529 after
   two retries, a dead bridge): the agent's result is unknown. Such a task is listed under "Not measured" and left out of
-  the agreement's k/n, and while any task errored there is no verdict, because H4 is defined over the whole suite.
+  the k/n of each agreement whose pair of runs includes the error, and while any task errored on any run (the control
+  included) there is no verdict, because H4 is defined over the whole suite.
   Re-run for the number.
 - **Early stop.** An LLM cap refusal or a dead toolkit bridge stops the run; the tasks not reached are `error`
   ("not run"), the partial report is still printed and written, and the exit code is 1.
