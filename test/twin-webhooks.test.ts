@@ -8,6 +8,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { encodeForm } from "../src/bench/run.ts";
 import { build } from "../src/twin/build.ts";
 import { createTwin } from "../src/twin/server.ts";
+import { Store } from "../src/twin/store.ts";
+import { deliver } from "../src/twin/webhooks.ts";
 
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
@@ -21,7 +23,7 @@ const call = (t: Twin, method: string, path: string, params?: Obj, headers: Obj 
 
 /**
  * A local receiver. `script[path]` gives each attempt's status in turn (0 = destroy the socket: a network error;
- * a 3xx redirects to `<path>/`), then 200. `gate` holds every response until it resolves.
+ * -1 = never answer; a 3xx redirects to `<path>/`), then 200. `gate` holds every response until it resolves.
  */
 async function receiver(script: Record<string, number[]> = {}, gate?: Promise<void>) {
   const hits: { path: string; body: string; headers: http.IncomingHttpHeaders; at: number }[] = [];
@@ -31,6 +33,7 @@ async function receiver(script: Record<string, number[]> = {}, gate?: Promise<vo
     hits.push({ path: req.url!, body, headers: req.headers, at: Date.now() });
     const status = script[req.url!]?.shift() ?? 200;
     if (status === 0) return void req.socket.destroy();
+    if (status === -1) return; // closed by the after() hook
     await gate;
     res.writeHead(status, status >= 300 && status < 400 ? { Location: `${req.url}/` } : {}).end();
   });
@@ -137,6 +140,20 @@ test("delivery retries a network error and a non-2xx with backoff, then succeeds
   assert.equal(new Set(rx.hits.map((h) => h.body)).size, 1, "every attempt sends the same payload");
   const gaps = rx.at("/down").slice(1).map((h, i) => h.at - rx.at("/down")[i]!.at);
   gaps.forEach((g, i) => assert.ok(g >= [30, 60, 90][i]! - 5, `retry ${i + 1} waited ${g} ms`));
+});
+
+test("delivery: an attempt with no answer times out, counts as failed and is retried", { timeout: 5000 }, async () => {
+  const rx = await receiver({ "/hang": [-1] });
+  const store = new Store();
+  const meta = { now: 1, requestId: null, idempotencyKey: null };
+  const we = build("webhook_endpoint", { id: "we_1", url: `${rx.url}/hang`, status: "enabled", enabled_events: ["*"], secret: "whsec_1" });
+  store.apply({ puts: [we] }, meta);
+  const events = store.apply({ emits: [{ type: "customer.created", object: build("customer", { id: "cus_1" }) }] }, meta);
+  const t0 = Date.now();
+  deliver(store, events, [10], 100); // 100 ms timeout instead of 10 s
+  await until(() => events[0]!.pending_webhooks === 0);
+  assert.equal(rx.at("/hang").length, 2);
+  assert.ok(rx.at("/hang")[1]!.at - t0 >= 100, "the retry came after the timeout");
 });
 
 test("delivery does not follow a redirect: a 3xx is a failed attempt, retried, never re-sent to the Location", { timeout: 5000 }, async () => {

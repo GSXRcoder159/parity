@@ -3,7 +3,7 @@
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
-import { assign, diff, live } from "./customers.ts";
+import { assign, diff, live } from "../util.ts";
 import { newProduct } from "./products.ts";
 
 type Obj = Record<string, unknown>;

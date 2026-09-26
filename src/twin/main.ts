@@ -1,10 +1,14 @@
 // Twin entrypoint: `node src/twin/main.ts [--port 12111] [--host 127.0.0.1]` (port also from env PORT).
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { parseArgs } from "node:util";
 import { createTwin } from "./server.ts";
 import { API_VERSION } from "./store.ts";
 
-/** Serves the twin until SIGINT/SIGTERM, then resolves 0; bad flags print one line and resolve 2. */
+/** How long requests in flight at SIGINT/SIGTERM get to finish before their connections are cut. */
+const DRAIN_MS = 5000;
+
+/** Serves the twin until SIGINT/SIGTERM, then resolves 0; bad flags print one line and resolve 2, a failed bind resolves 1. */
 export async function main(argv: string[]): Promise<number> {
   let port: number;
   let host: string;
@@ -19,14 +23,21 @@ export async function main(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const server = await createTwin().listen(port, host);
+  let server: Server;
+  try {
+    server = await createTwin().listen(port, host);
+  } catch (e) {
+    console.error(`parity twin: ${(e as Error).message}`); // e.g. listen EADDRINUSE: address already in use 127.0.0.1:12111
+    return 1;
+  }
   console.log(`parity twin listening on http://${host}:${(server.address() as AddressInfo).port} (API ${API_VERSION})`);
 
   await new Promise<void>((resolve) => {
     const stop = () => {
       process.off("SIGINT", stop).off("SIGTERM", stop);
+      // Stops accepting and closes idle keep-alive sockets; requests in flight finish (and close their socket).
       server.close(() => resolve());
-      server.closeAllConnections(); // keep-alive sockets would hold close() open
+      setTimeout(() => server.closeAllConnections(), DRAIN_MS).unref();
     };
     process.on("SIGINT", stop).on("SIGTERM", stop);
   });

@@ -2,7 +2,7 @@
 // types). `secret` stays on the stored object, which delivery (webhooks.ts) signs with, but only create returns it.
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
-import { assign, live } from "./customers.ts";
+import { assign, live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
 

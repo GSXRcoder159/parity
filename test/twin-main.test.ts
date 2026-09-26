@@ -2,7 +2,9 @@ import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import http from "node:http";
 import { createInterface } from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import { build } from "../src/twin/build.ts";
 
 const MAIN = new URL("../src/twin/main.ts", import.meta.url).pathname;
@@ -51,4 +53,64 @@ test("takes the port from PORT and exits 0 on SIGINT", { timeout: 10_000 }, asyn
   assert.doesNotMatch(url, /:12111$/); // an ephemeral port, not the default
   child.kill("SIGINT");
   assert.deepEqual(await once(child, "exit"), [0, null]);
+});
+
+test("a port already in use prints one line and exits 1", { timeout: 10_000 }, async (t) => {
+  const { url } = await boot(t, ["--port", "0"]);
+  const child = spawn(process.execPath, [MAIN, "--port", new URL(url).port], { stdio: ["ignore", "pipe", "pipe"] });
+  t.after(() => child.kill("SIGKILL"));
+  let [out, err] = ["", ""];
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (err += d));
+  assert.deepEqual(await once(child, "close"), [1, null]);
+  assert.equal(out, "");
+  assert.match(err, /^parity twin: listen EADDRINUSE: address already in use 127\.0\.0\.1:\d+\n$/);
+});
+
+/** A keep-alive POST /v1/customers whose body is half sent, so it is in flight until `finish()`. */
+function halfSent(t: TestContext, url: string) {
+  const body = "email=drain%40example.com";
+  const agent = new http.Agent({ keepAlive: true });
+  t.after(() => agent.destroy());
+  const headers = { ...AUTH, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": body.length };
+  const req = http.request(`${url}/v1/customers`, { method: "POST", agent, headers });
+  req.on("error", () => {}); // `response` rejects with it
+  const response = once(req, "response") as Promise<[http.IncomingMessage]>;
+  req.write(body.slice(0, 5));
+  return { response, finish: () => req.end(body.slice(5)) };
+}
+
+test("SIGTERM stops accepting, lets a request in flight finish, then exits 0 without waiting for the deadline", { timeout: 10_000 }, async (t) => {
+  const { child, url } = await boot(t, ["--port", "0"]);
+  const inflight = halfSent(t, url);
+  await sleep(100); // the server has the request's headers
+  const t0 = performance.now();
+  child.kill("SIGTERM");
+  const exited = once(child, "exit");
+  await sleep(100);
+  await assert.rejects(fetch(`${url}/v1/customers`, { headers: AUTH }), "new connections are refused");
+
+  inflight.finish();
+  const [res] = await inflight.response;
+  let text = "";
+  for await (const chunk of res) text += chunk;
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(text).email, "drain@example.com");
+  assert.equal(res.headers.connection, "close");
+  assert.deepEqual(await exited, [0, null]);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2000, `exit took ${Math.round(ms)} ms after SIGTERM`);
+});
+
+test("SIGTERM with a request that never finishes: connections are cut at the 5 s deadline, exit 0", { timeout: 10_000 }, async (t) => {
+  const { child, url } = await boot(t, ["--port", "0"]);
+  const stalled = halfSent(t, url);
+  await sleep(100);
+  const t0 = performance.now();
+  child.kill("SIGTERM");
+  const cut = assert.rejects(stalled.response, /socket hang up/);
+  assert.deepEqual(await once(child, "exit"), [0, null]);
+  const ms = performance.now() - t0;
+  assert.ok(ms >= 4900 && ms < 7000, `exit took ${Math.round(ms)} ms after SIGTERM`);
+  await cut;
 });

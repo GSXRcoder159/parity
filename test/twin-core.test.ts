@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
 import { encodeForm } from "../src/bench/run.ts";
 import { build } from "../src/twin/build.ts";
-import { TwinError } from "../src/twin/errors.ts";
+import { CATALOG, TwinError, renderError } from "../src/twin/errors.ts";
 import { expand } from "../src/twin/expand.ts";
 import { parseForm } from "../src/twin/form.ts";
 import { list, search } from "../src/twin/list.ts";
@@ -130,11 +131,75 @@ test("unknown parameters are rejected at any depth with bracket names", async ()
       code: "parameter_unknown",
       param,
       message: "parity: parameter_unknown",
-      doc_url: "https://stripe.com/docs/error-codes/parameter_unknown",
+      doc_url: "https://stripe.com/docs/error-codes/parameter-unknown",
       request_log_url: `https://dashboard.stripe.com/test/logs/${r.headers["Request-Id"]}`,
     });
   }
   assert.equal(t.store.objects.size, 0);
+});
+
+/** The top-level argument texts of the call whose "(" is at `src[open]`. */
+function callArgs(src: string, open: number): string[] {
+  const out: string[] = [];
+  let [depth, start, quote] = [0, open + 1, ""];
+  for (let i = open; i < src.length; i++) {
+    const c = src[i]!;
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = "";
+    } else if (`"'\``.includes(c)) quote = c;
+    else if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && --depth === 0) return [...out, src.slice(start, i)];
+    else if (c === "," && depth === 1) {
+      out.push(src.slice(start, i));
+      start = i + 1;
+    }
+  }
+  throw new Error(`unbalanced call at ${open}`);
+}
+
+test("every catalog key the twin raises renders with the vars its call sites pass", () => {
+  // Scans src/twin for fail("key", vars) and TwinError("key", vars): a template placeholder its call site does
+  // not fill now throws, so a missing var here would be a 500 at runtime.
+  const dir = new URL("../src/twin/", import.meta.url);
+  const files = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts") && f !== "errors.ts");
+  const rendered = new Set<string>();
+  for (const f of files) {
+    const src = readFileSync(new URL(f, dir), "utf8");
+    for (const m of src.matchAll(/\b(?:fail|TwinError)\(/g)) {
+      const [arg0 = "", vars = "{}"] = callArgs(src, m.index + m[0].length - 1);
+      const keys = [...arg0.matchAll(/(?:^|[?:])\s*"(\w+)"/g)].map((k) => k[1]!); // a literal, or both arms of a ternary
+      assert.ok(keys.length > 0, `${f}: no literal catalog key in ${m[0]}${arg0}`);
+      // The vars: an object literal, or a const holding one (validate.ts passes `param`).
+      const obj = /^\s*\{/.test(vars) ? vars : new RegExp(`const ${vars.trim()} = (\\{[^}]*\\})`).exec(src)?.[1];
+      assert.ok(obj, `${f}: cannot read the vars of ${m[0]}${arg0}, ${vars})`);
+      const names = [...obj.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""').matchAll(/[{,]\s*(\w+)/g)].map((n) => n[1]!);
+      for (const key of keys) {
+        assert.ok(Object.hasOwn(CATALOG, key), `${f}: "${key}" is not in errors.json`);
+        const { error } = renderError(new TwinError(key, Object.fromEntries(names.map((n) => [n, "x"]))), "req_1").body;
+        assert.doesNotMatch(JSON.stringify(error), /\{\w+\}/, `${f}: ${key}`);
+        rendered.add(key);
+      }
+    }
+  }
+  // The scan is not vacuous: core, validation and resource keys, the ternary's both arms, and the direct TwinError.
+  for (const k of ["parameter_unknown", "parameter_invalid", "expand_invalid", "resource_missing_400", "payment_method_unattachable", "card_declined", "api_error"])
+    assert.ok(rendered.has(k), k);
+});
+
+test("renderError: doc_url hyphenates the code; an unfilled placeholder is a bug, not text", async (t) => {
+  const e = renderError(new TwinError("parameter_invalid_integer", { param: "limit" }), "req_1").body.error;
+  assert.equal(e.doc_url, "https://stripe.com/docs/error-codes/parameter-invalid-integer");
+  assert.equal(renderError(new TwinError("card_declined"), "req_1").body.error.doc_url, "https://stripe.com/docs/error-codes/card-declined");
+  assert.throws(() => renderError(new TwinError("resource_missing"), "req_1"), /errors.json "resource_missing": no value for \{param\}/);
+
+  // Through the server it is a logged 500, like any other handler bug.
+  const logged = t.mock.method(console, "error", () => {});
+  const tw = createTwin({ routes: [["GET", /^\/v1\/events$/, (ctx) => ctx.fail("resource_missing"), "get /v1/events"]] });
+  const r = await call(tw, "GET", "/v1/events");
+  assert.equal(r.status, 500);
+  assert.equal(r.body.error.type, "api_error");
+  assert.match(String(logged.mock.calls[0]?.arguments[0]), /no value for \{param\}/);
 });
 
 test("form strings are coerced to the schema's types; bad integers, enums and booleans are 400", async () => {
@@ -257,6 +322,17 @@ test("search: field and metadata clauses joined by AND", () => {
     url: "/v1/customers/search",
   });
   for (const q of ["email=x", "email:x", "", "email:'x' OR name:'y'"]) assert.equal(errorOf(() => search(items, q, "/x")).key, "search_query_invalid", q);
+
+  // 'null' is a literal string: it never matches a null or absent field, only a field holding "null".
+  const nulls = [
+    { id: "n", created: 1, email: null, metadata: { tier: "null" } },
+    { id: "s", created: 2, email: "null", metadata: {} },
+  ];
+  const hits = (q: string) => search(nulls, q, "/x").data.map((o) => o.id);
+  assert.deepEqual(hits("email:'null'"), ["s"]);
+  assert.deepEqual(hits("metadata['tier']:'null'"), ["n"]);
+  assert.deepEqual(hits("phone:'undefined'"), []);
+  assert.deepEqual(hits("metadata['nope']:'undefined'"), []);
 });
 
 test("expand: single path, list data. path, nested, too deep, invalid", () => {
@@ -280,6 +356,14 @@ test("expand: single path, list data. path, nested, too deep, invalid", () => {
   assert.equal(errorOf(() => expand(page, ["data.customer.a.b.c"], get)).key, "expand_too_deep");
   for (const p of ["email", "created", "nope"]) assert.equal(errorOf(() => expand(cus, [p], get)).key, "expand_invalid", p);
   assert.equal(errorOf(() => expand(page, ["customer"], get)).key, "expand_invalid", "list paths start with data.");
+
+  // Only a string that resolves to a stored object expands: never `id`, an unknown id, or a nested hash.
+  const withHash = { ...cus, invoice_settings: { default_payment_method: pm.id }, latest_invoice: "in_1A2b3C4d5E6f7G8h9I0j1K2l" };
+  for (const p of ["id", "latest_invoice", "invoice_settings", "data"]) assert.equal(errorOf(() => expand(withHash, [p], get)).key, "expand_invalid", p);
+  assert.deepEqual((expand(withHash, ["invoice_settings.default_payment_method"], get) as Obj).invoice_settings.default_payment_method, pm);
+  // A path given twice, or a prefix of another path in either order, expands once.
+  assert.deepEqual(expand(cus, ["default_payment_method", "default_payment_method"], get), one);
+  assert.deepEqual(expand(page, ["data.customer.default_payment_method", "data.customer"], get), out);
 });
 
 test("expand through the server resolves nested ids and an invalid path leaves no state", async () => {

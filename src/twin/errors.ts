@@ -29,7 +29,12 @@ export function fail(key: string, vars?: Record<string, string>, extra?: Record<
   throw new TwinError(key, vars, extra);
 }
 
-const fill = (s: string, vars: Record<string, string>) => s.replace(/\{(\w+)\}/g, (m, k: string) => vars[k] ?? m);
+/** Fills `{name}` from `vars`; a placeholder without a var is a bug at the call site, not text to render. */
+const fill = (key: string, s: string, vars: Record<string, string>) =>
+  s.replace(/\{(\w+)\}/g, (_, k: string) => {
+    if (!Object.hasOwn(vars, k)) throw new Error(`errors.json "${key}": no value for {${k}}`);
+    return vars[k]!;
+  });
 
 /** `{ error: { type, code?, param?, message, doc_url?, request_log_url } }` with the catalog entry's status. */
 export function renderError(e: TwinError, requestId: string): { status: number; body: { error: Record<string, unknown> } } {
@@ -38,9 +43,9 @@ export function renderError(e: TwinError, requestId: string): { status: number; 
   const { status, type, code, param, message } = entry;
   const error: Record<string, unknown> = { type };
   if (code) error.code = code;
-  if (param) error.param = fill(param, e.vars);
-  error.message = fill(message, e.vars);
-  if (code) error.doc_url = `https://stripe.com/docs/error-codes/${code}`;
+  if (param) error.param = fill(e.key, param, e.vars);
+  error.message = fill(e.key, message, e.vars);
+  if (code) error.doc_url = `https://stripe.com/docs/error-codes/${code.replaceAll("_", "-")}`; // card_declined -> card-declined (observed)
   error.request_log_url = `https://dashboard.stripe.com/test/logs/${requestId}`;
   return { status, body: { error: { ...error, ...e.extra } } };
 }

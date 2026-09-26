@@ -1,7 +1,7 @@
 // Refunds: create (by payment intent or charge; succeed synchronously and update the charge), retrieve, list.
 import { list } from "../list.ts";
 import type { Route } from "../server.ts";
-import { assign, diff, live } from "./customers.ts";
+import { assign, diff, live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
 

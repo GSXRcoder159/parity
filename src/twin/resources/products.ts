@@ -1,7 +1,7 @@
 // Products: create/retrieve/update/list. `newProduct` also serves prices' `product_data`.
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
-import { assign, diff, live } from "./customers.ts";
+import { assign, diff, live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
 

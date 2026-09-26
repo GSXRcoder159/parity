@@ -4,10 +4,9 @@ import { addInterval, attemptPayment, firstInvoice, paid } from "../billing.ts";
 import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
-import { assign, diff, live } from "./customers.ts";
+import { assign, checkAttached, diff, isHash, live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
-const isHash = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "subscription") ?? ctx.fail("resource_missing", { param: "id" });
 const cancellation = (reason: string | null): Obj => ({ comment: null, feedback: null, feedback_option: null, reason });
@@ -17,14 +16,6 @@ const CREATABLE = ["cancel_at_period_end", "collection_method", "customer", "day
 /** A spec-valid param the handler does not implement (trials, anchors, discounts, ...: W4) fails instead of being dropped. */
 function only(ctx: Ctx, o: Obj, keys: string[]): void {
   if (Object.entries(o).some(([k, v]) => v !== "" && !keys.includes(k))) ctx.fail("not_implemented");
-}
-
-/** A `default_payment_method` param must name a payment method attached to `customer`. */
-function checkPm(ctx: Ctx, pm: unknown, customer: unknown): void {
-  if (typeof pm !== "string" || pm === "") return;
-  const param = { param: "default_payment_method" };
-  const o = live(ctx, pm, "payment_method") ?? ctx.fail("resource_missing_400", param);
-  if (o.customer !== customer) ctx.fail("default_payment_method_not_attached", param);
 }
 
 /** The fields `cancel_at_period_end` sets (cancel at the item period end) or clears. */
@@ -81,7 +72,7 @@ export const routes: Route[] = [
       const collection = (params.collection_method as string) || "charge_automatically";
       if (collection === "send_invoice" && typeof params.days_until_due !== "number") ctx.fail("parameter_missing", { param: "days_until_due" });
       const customer = live(ctx, params.customer, "customer") ?? ctx.fail("resource_missing_400", { param: "customer" });
-      checkPm(ctx, params.default_payment_method, customer.id);
+      checkAttached(ctx, params.default_payment_method, customer.id);
 
       const now = ctx.now();
       const id = ctx.id("sub");
@@ -179,7 +170,7 @@ export const routes: Route[] = [
     (ctx, { pathParams, params }) => {
       const before = find(ctx, pathParams.id);
       only(ctx, params, ["expand", ...UPDATABLE]);
-      checkPm(ctx, params.default_payment_method, before.customer);
+      checkAttached(ctx, params.default_payment_method, before.customer);
       let after = assign(structuredClone(before), params, ["default_payment_method", "description", "metadata"]);
       const cape = params.cancel_at_period_end;
       if (typeof cape === "boolean" && cape !== before.cancel_at_period_end) after = { ...after, ...periodEndCancel(after, cape, ctx.now()) };

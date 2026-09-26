@@ -107,10 +107,15 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
       headers: { "Request-Id": requestId, "Stripe-Version": headers["stripe-version"] ?? API_VERSION, "Content-Type": "application/json", ...extra },
       body,
     });
+    // A bug (a non-TwinError, or a catalog entry the call site cannot render) is logged and becomes a 500.
     const error = (e: unknown): TwinResponse => {
       if (!(e instanceof TwinError)) console.error(e);
-      const { status, body } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
-      return respond(status, body);
+      try {
+        const { status, body } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
+        return respond(status, body);
+      } catch (bug) {
+        return error(bug);
+      }
     };
 
     try {
@@ -183,7 +188,11 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
   function listen(port = 0, host = "127.0.0.1"): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
       let body = "";
-      for await (const chunk of req) body += chunk;
+      try {
+        for await (const chunk of req) body += chunk;
+      } catch {
+        return; // the connection was cut mid-body (client gone, or the shutdown deadline): nobody to answer
+      }
       const url = req.url ?? "/";
       const q = url.indexOf("?");
       const r = await handle({
@@ -193,9 +202,16 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
         headers: req.headers,
         body,
       });
-      res.writeHead(r.status, r.headers).end(JSON.stringify(r.body, null, 2));
+      // After close() (shutdown), a request still in flight closes its keep-alive socket instead of idling on it.
+      res.writeHead(r.status, server.listening ? r.headers : { ...r.headers, Connection: "close" }).end(JSON.stringify(r.body, null, 2));
     });
-    return new Promise((resolve) => server.listen(port, host, () => resolve(server)));
+    return new Promise((resolve, reject) => {
+      server.once("error", reject); // e.g. EADDRINUSE
+      server.listen(port, host, () => {
+        server.off("error", reject);
+        resolve(server);
+      });
+    });
   }
 
   return { handle, listen, store };

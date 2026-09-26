@@ -46,8 +46,12 @@ export function search(items: Obj[], query: unknown, url: string, limit = 10) {
   const clauses = String(query ?? "")
     .split(" AND ")
     .map((c) => CLAUSE.exec(c.trim()) ?? fail("search_query_invalid"));
+  // A clause needs the field to hold a value: 'null' is the literal string, never a null or absent field.
   const hits = newestFirst(items).filter((o) =>
-    clauses.every(([, field, , key, , value]) => String(key === undefined ? o[field!] : (o[field!] as Obj | null)?.[key]) === value),
+    clauses.every(([, field, , key, , value]) => {
+      const v = key === undefined ? o[field!] : (o[field!] as Obj | null)?.[key];
+      return v != null && String(v) === value;
+    }),
   );
   // ponytail: no page tokens; next_page stays null even when has_more is true.
   return { object: "search_result", data: hits.slice(0, limit), has_more: hits.length > limit, next_page: null, url };

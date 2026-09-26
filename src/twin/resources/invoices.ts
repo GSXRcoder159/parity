@@ -2,7 +2,7 @@
 // finalize and create_preview are W4 and answer `not_implemented` (after the missing-invoice check).
 import { list } from "../list.ts";
 import type { Ctx, Handler, Route } from "../server.ts";
-import { live } from "./customers.ts";
+import { live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
 

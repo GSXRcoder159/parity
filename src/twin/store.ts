@@ -47,7 +47,7 @@ export class Store {
         api_version: API_VERSION,
         created: meta.now,
         data: previous_attributes ? { object: structuredClone(object), previous_attributes } : { object: structuredClone(object) },
-        pending_webhooks: this.endpointsFor(type),
+        pending_webhooks: this.endpointsFor(type).length,
         request: { id: meta.requestId, idempotency_key: meta.idempotencyKey },
         type,
       }) as StripeEvent;
@@ -62,14 +62,11 @@ export class Store {
     return out;
   }
 
-  /** Enabled webhook endpoints subscribed to `type`. */
-  private endpointsFor(type: string): number {
-    let n = 0;
-    for (const o of this.objects.values()) {
-      const on = o.enabled_events as string[] | undefined;
-      if (o.object === "webhook_endpoint" && o.status === "enabled" && on?.some((t) => t === "*" || t === type)) n++;
-    }
-    return n;
+  /** Enabled webhook endpoints subscribed to `type`: the one matcher behind `pending_webhooks` and delivery. */
+  endpointsFor(type: string): Obj[] {
+    return [...this.objects.values()].filter(
+      (o) => o.object === "webhook_endpoint" && o.status === "enabled" && (o.enabled_events as string[] | undefined)?.some((t) => t === "*" || t === type),
+    );
   }
 
   reset(): void {
