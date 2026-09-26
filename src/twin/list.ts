@@ -40,19 +40,28 @@ export function list(items: Obj[], params: Obj, url: string) {
 
 // field:'value' or metadata['key']:'value' (single or double quotes).
 const CLAUSE = /^(\w+)(?:\[(['"])((?:(?!\2).)*)\2\])?:(['"])((?:(?!\4).)*)\4$/;
+// field>n, field>=n, field<n, field<=n on a numeric field (docs: `created>=<epoch>` works in a customer search, #23).
+const RANGE = /^(\w+)(>=|<=|>|<)(-?\d+)$/;
+const OPS: Record<string, keyof typeof CMP> = { ">": "gt", ">=": "gte", "<": "lt", "<=": "lte" };
 
-/** Search query language subset: exact-match clauses joined by ` AND `. */
+/** Search query language subset: exact-match and numeric range clauses joined by ` AND `. */
 export function search(items: Obj[], query: unknown, url: string, limit = 10) {
   const clauses = String(query ?? "")
     .split(" AND ")
-    .map((c) => CLAUSE.exec(c.trim()) ?? fail("search_query_invalid"));
-  // A clause needs the field to hold a value: 'null' is the literal string, never a null or absent field.
-  const hits = newestFirst(items).filter((o) =>
-    clauses.every(([, field, , key, , value]) => {
-      const v = key === undefined ? o[field!] : (o[field!] as Obj | null)?.[key];
-      return v != null && String(v) === value;
-    }),
-  );
+    .map((c): ((o: Obj) => boolean) => {
+      const range = RANGE.exec(c.trim());
+      if (range) {
+        const [, field, op, n] = range;
+        return (o) => typeof o[field!] === "number" && CMP[OPS[op!]!]!(o[field!] as number, Number(n));
+      }
+      const [, field, , key, , value] = CLAUSE.exec(c.trim()) ?? fail("search_query_invalid");
+      // A clause needs the field to hold a value: 'null' is the literal string, never a null or absent field.
+      return (o) => {
+        const v = key === undefined ? o[field!] : (o[field!] as Obj | null)?.[key];
+        return v != null && String(v) === value;
+      };
+    });
+  const hits = newestFirst(items).filter((o) => clauses.every((hit) => hit(o)));
   // ponytail: no page tokens; next_page stays null even when has_more is true.
   return { object: "search_result", data: hits.slice(0, limit), has_more: hits.length > limit, next_page: null, url };
 }

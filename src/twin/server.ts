@@ -72,6 +72,18 @@ const RESOURCE_ROUTES: Route[] = (
 ).flatMap((m) => m.routes ?? []);
 
 const IDEMPOTENCY_TTL = 24 * 3600;
+/** Catalog keys of parameter validation errors: never stored under an Idempotency-Key, wherever they are raised. */
+const VALIDATION = new Set([
+  "decimal_too_precise",
+  "invalid_non_negative_integer",
+  "parameter_invalid",
+  "parameter_invalid_enum",
+  "parameter_invalid_integer",
+  "parameter_missing",
+  "parameter_unknown",
+  "unit_amount_exclusive",
+  "unit_amount_too_large",
+]);
 /** JSON.stringify replacer: param order does not change the idempotency hash. */
 const sortKeys = (_: string, v: unknown) =>
   v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v;
@@ -135,14 +147,16 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
       },
       body,
     });
-    // A bug (a non-TwinError, or a catalog entry the call site cannot render) is logged and becomes a 500.
+    // A bug (a non-TwinError, or a catalog entry the call site cannot render) is logged and becomes a 500. The 500 is
+    // rendered here, not through the catalog, so a broken catalog cannot loop.
     const error = (e: unknown): TwinResponse => {
       if (!(e instanceof TwinError)) console.error(e);
       try {
         const { status, body, errorKey } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
         return respond(status, body, errorKey);
       } catch (bug) {
-        return error(bug);
+        console.error(bug);
+        return respond(500, { error: { type: "api_error", message: "parity: api_error" } }, "api_error");
       }
     };
 
@@ -197,7 +211,10 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
       } catch (e) {
         res = error(e);
       }
-      if (idemKey) store.idem.set(idemKey, { hash, status: res.status, body: res.body, at: now, errorKey: res.headers["Parity-Error-Key"] });
+      // A handler's parameter check is validation too (docs: a request that fails validation saves no result), so a
+      // retry with the same key and the parameter fixed runs instead of replaying the error.
+      const errorKey = res.headers["Parity-Error-Key"];
+      if (idemKey && !(errorKey && VALIDATION.has(errorKey))) store.idem.set(idemKey, { hash, status: res.status, body: res.body, at: now, errorKey });
       return res;
     } catch (e) {
       return error(e);
@@ -223,6 +240,7 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
   function listen(port = 0, host = "127.0.0.1"): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
       let body = "";
+      req.setEncoding("utf8"); // a multi-byte character split across chunks decodes whole
       try {
         for await (const chunk of req) body += chunk;
       } catch {
