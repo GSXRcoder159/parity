@@ -6,7 +6,7 @@
 
 Before posting:
 - [ ] B5 cleared, including the title's referential use of the mark.
-- [ ] Compiled JS build and npm publish of `paritybench` are done, so `npx paritybench twin` works (the README says it does not today).
+- [ ] npm publish of `paritybench` is done, so `npx paritybench twin` works from the registry (the compiled build is done; today it runs from a packed tarball, as the README says).
 - [ ] The repo is public (from a fresh squashed history) and the score page is on GitHub Pages. The URLs below are filled in.
 - [ ] Every `{{TBD: …}}` is replaced with a measured number, or its sentence is cut.
 - [ ] The nightly run is live. If it is not, cut every "every night" and "nightly" claim.

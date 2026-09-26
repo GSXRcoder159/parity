@@ -16,7 +16,14 @@ Parity measures how faithfully a Stripe-compatible server reproduces the real St
 npx paritybench twin                  # http://127.0.0.1:12111
 ```
 
-This line does not work yet, and publishing alone will not fix it. The package is not on npm, and its `bin` is `src/cli.ts`: Node refuses to strip TypeScript types under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so `npx` needs a compiled JavaScript build first. Today, from a checkout (Node ≥ 22.18, nothing to install), run `node src/cli.ts twin [--port 12111] [--host 127.0.0.1]`, or use Docker or the Action below.
+That line works from npm once the package is published, which is a launch-gate item: it is not on the registry yet. Until then, the same package runs from a tarball. In a checkout, `npm pack` compiles `src/` and `templates/` to `dist/` (the `prepack` script, with the `typescript` devDependency, so run `npm ci` first):
+
+```sh
+npm ci && npm pack                                  # paritybench-0.0.1.tgz
+npx --yes ./paritybench-0.0.1.tgz twin --port 12111 # the relative ./ path matters: npx runs an absolute path as a command
+```
+
+From a checkout without building (Node ≥ 22.18, nothing to install), run `node src/cli.ts twin [--port 12111] [--host 127.0.0.1]`. Or use Docker or the Action below.
 
 With Docker:
 
@@ -40,6 +47,8 @@ With stripe-node, pass `new Stripe("sk_test_parity", { host: "127.0.0.1", port: 
 ```json
 { "mcpServers": { "parity-twin": { "command": "node", "args": ["/path/to/parity/src/cli.ts", "mcp"] } } }
 ```
+
+Once the package is on npm, `"command": "npx", "args": ["-y", "paritybench", "mcp"]` does the same without a checkout.
 
 - Each twin route is one tool, named from its API operation: `post_v1_customers`, `get_v1_customers_customer`, `post_v1_subscriptions`, and so on.
 - A tool takes the route's path, query and body parameters as JSON. Its input schema comes from the vendored OpenAPI spec.
@@ -65,7 +74,7 @@ It sets up Node 22 for the rest of the job. `.github/workflows/action-selftest.y
 node src/cli.ts bench http://127.0.0.1:12111 --oracle oracle.jsonl --noise noise.jsonl
 ```
 
-(`npx paritybench bench …` once the package is published; see "Run the twin".) `--oracle` is a sandbox recording of the corpus, and `--noise` is a second recording of some or all of the same sequences, for the noise floor. The floor is measured on the oracle sequences the noise recording covers, and the report says how many that is. Recordings are not distributed: they are data from a Stripe account. Record your own with your own sandbox key (see [Reproduce](#reproduce-with-your-own-sandbox-key)).
+(`npx paritybench bench …` from npm once the package is published, or from a packed tarball now; see "Run the twin".) `--oracle` is a sandbox recording of the corpus, and `--noise` is a second recording of some or all of the same sequences, for the noise floor. The floor is measured on the oracle sequences the noise recording covers, and the report says how many that is. Recordings are not distributed: they are data from a Stripe account. Record your own with your own sandbox key (see [Reproduce](#reproduce-with-your-own-sandbox-key)).
 
 ### Check your own test suite: `agree`
 
@@ -175,7 +184,7 @@ node src/cli.ts score-twin --oracle <oracle.jsonl> --noise <noise.jsonl>        
 node src/cli.ts bench <baseURL> --oracle <oracle.jsonl> --noise <noise.jsonl>                    # any server
 ```
 
-- `record` prints where it wrote each recording: under `$PARITY_DATA_DIR`, else `../parity-data` if it exists, else `recordings/`.
+- `record` prints where it wrote each recording: under `$PARITY_DATA_DIR`, else `../parity-data` if it exists, else `recordings/`. From the npm package, which has no checkout to default into, set `PARITY_DATA_DIR`: the commands that need the data dir (sandbox `record`, `oracle build`, `agree --runs …sandbox`) refuse without it, and `align` and `nightly` run only from a checkout.
 - The harness paces sandbox traffic at 20 requests per second or less. It counts every `GET` against `PARITY_READ_BUDGET` (default 10,000 per rolling 30 days, the minimum read allocation on the rate-limits page) in `<data dir>/budget/reads.jsonl`, which names your account: keep it private.
 - On an unclaimed (claimable) sandbox key, leave about 20 minutes between the two runs: that key has an undocumented request quota.
 - `node src/cli.ts help` lists every flag.
