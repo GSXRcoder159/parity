@@ -1,0 +1,19 @@
+{
+  "pm_card_amex": { "brand": "amex", "last4": "0005", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_chargeCustomerFail": { "brand": "visa", "last4": "0341", "funding": "credit", "country": "US", "behavior": "charge_fails", "decline_code": "generic_decline" },
+  "pm_card_chargeDeclined": { "brand": "visa", "last4": "0002", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "generic_decline" },
+  "pm_card_diners": { "brand": "diners", "last4": "0004", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_discover": { "brand": "discover", "last4": "1117", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_jcb": { "brand": "jcb", "last4": "0505", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_mastercard": { "brand": "mastercard", "last4": "4444", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_mastercard_debit": { "brand": "mastercard", "last4": "8210", "funding": "debit", "country": "US", "behavior": "ok" },
+  "pm_card_mastercard_prepaid": { "brand": "mastercard", "last4": "5100", "funding": "prepaid", "country": "US", "behavior": "ok" },
+  "pm_card_unionpay": { "brand": "unionpay", "last4": "0005", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_visa": { "brand": "visa", "last4": "4242", "funding": "credit", "country": "US", "behavior": "ok" },
+  "pm_card_visa_chargeDeclined": { "brand": "visa", "last4": "0002", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "generic_decline" },
+  "pm_card_visa_chargeDeclinedInsufficientFunds": { "brand": "visa", "last4": "9995", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "insufficient_funds" },
+  "pm_card_visa_chargeDeclinedLostCard": { "brand": "visa", "last4": "9987", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "lost_card" },
+  "pm_card_visa_chargeDeclinedStolenCard": { "brand": "visa", "last4": "9979", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "stolen_card" },
+  "pm_card_visa_chargeDeclinedVelocityLimitExceeded": { "brand": "visa", "last4": "6975", "funding": "credit", "country": "US", "behavior": "attach_declined", "decline_code": "card_velocity_exceeded" },
+  "pm_card_visa_debit": { "brand": "visa", "last4": "5556", "funding": "debit", "country": "US", "behavior": "ok" }
+}
