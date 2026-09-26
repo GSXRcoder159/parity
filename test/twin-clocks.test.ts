@@ -253,6 +253,18 @@ test("declined renewal recovered: the next retry charges the subscription's new 
   assert.deepEqual(types, ["charge.succeeded", "customer.subscription.updated", "invoice.paid", "invoice.payment_succeeded", "invoice.updated", "payment_intent.succeeded"]);
 });
 
+test("a canceled subscription's open invoice is not retried", async () => {
+  const t = createTwin();
+  const { ck, c, s } = await clockSub(t);
+  const bad = (await call(t, "POST", "/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: c.id })).body;
+  await call(t, "POST", `/v1/subscriptions/${s.id}`, { default_payment_method: bad.id });
+  await advance(t, ck, END + HOUR);
+  assert.equal((await call(t, "DELETE", `/v1/subscriptions/${s.id}`)).status, 200);
+  const from = t.store.events.length;
+  await advance(t, ck, END + HOUR + 14 * DAY);
+  assert.deepEqual(t.store.events.slice(from).map((e) => e.type), ["test_helpers.test_clock.advancing", "test_helpers.test_clock.ready"]);
+});
+
 test("deleting a clock deletes its customers and cancels their subscriptions; other clocks stay", async () => {
   const t = createTwin();
   const { ck, c, s } = await clockSub(t);

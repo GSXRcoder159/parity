@@ -1,5 +1,5 @@
-// Subscriptions: create (first invoice + synchronous payment; send_invoice: a draft; trial_period_days: trialing, a $0 first
-// invoice; on a test clock's customer: the clock's), retrieve, list, update (items: price swaps,
+// Subscriptions: create (first invoice + synchronous payment; send_invoice: a draft; trial_period_days: trialing on a $0
+// first invoice; a test clock's customer's runs at the clock's time, server.ts), retrieve, list, update (items: price swaps,
 // quantities, additions, deletions; proration_behavior, proration_date, billing_cycle_anchor=now;
 // cancel_at_period_end, metadata, default_payment_method, description), cancel. `change` is shared with
 // POST /v1/invoices/create_preview.

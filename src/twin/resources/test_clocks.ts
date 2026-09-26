@@ -191,7 +191,10 @@ const advance: Handler = (ctx, { pathParams, params }) => {
     }
     for (const inv of c.all("invoice")) {
       const t = (inv.status === "draft" ? inv.automatically_finalizes_at : inv.status === "open" ? inv.next_payment_attempt : null) as number | null;
-      if (mine.has(inv.customer) && t !== null) due.push([t, () => charge(t, inv.id)]);
+      // Only invoices still collected automatically: auto_advance, and a subscription not canceled (docs: canceling
+      // stops collection; ponytail: the invoice's own fields are left as they were, unobserved).
+      const sub = c.get(((inv.parent as Obj | null)?.subscription_details as Obj | null)?.subscription as string);
+      if (mine.has(inv.customer) && t !== null && inv.auto_advance === true && sub?.status !== "canceled") due.push([t, () => charge(t, inv.id)]);
     }
     const next = due.filter(([t]) => t <= to).sort(([a], [b]) => a - b)[0];
     if (!next) break;
