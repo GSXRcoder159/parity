@@ -253,7 +253,7 @@ These are the extra seeds for branches that seeds 1–2 miss:
   - In a probe of 2 sequences with 3 same-email customers each, searches from 0.3 s to 14.8 s after creation returned nothing.
   - The customers appeared between 24.8 s and 25.2 s after creation, all at once.
   - With a 30 s wait (pass 2), 1 of 2 sequences still found nothing.
-  - Stripe documents "less than a minute", so #23 waits 60 s, and both final searches found their customer.
+  - https://docs.stripe.com/search (fetched 2026-09-26, "Data freshness") says: "Under normal operating conditions, data is searchable in under 1 minute." #23 therefore waits 60 s, and both final searches found their customer.
   - Expect noise on this template regardless.
 
 **Webhook endpoints**

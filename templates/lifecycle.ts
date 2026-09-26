@@ -155,8 +155,8 @@ export const expandPaths: Template = {
 };
 
 // #23: search is eventually consistent (expect noise): new customers stayed invisible for 15 s and one was still
-// missing at 30 s (templates-validation.md); Stripe documents "less than a minute". created>= keeps earlier runs'
-// same-email customers out.
+// missing at 30 s (templates-validation.md); docs.stripe.com/search: "searchable in under 1 minute". created>= keeps
+// earlier runs' same-email customers out.
 export const customerSearch: Template = {
   name: "customer-search",
   stratum: "lifecycle",
