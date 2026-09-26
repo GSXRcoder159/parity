@@ -2,7 +2,7 @@
 // paritybench: record a corpus against a target, compare recordings, bench a URL against an oracle, build the oracle,
 // serve the twin, score the twin against an oracle.
 import { randomInt } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -31,7 +31,8 @@ const USAGE = `usage:
   paritybench help
 
   Sandbox key: STRIPE_API_KEY (.env). URL targets: PARITY_TARGET_KEY or sk_test_parity.
-  Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger budget/reads.jsonl.
+  Sandbox GET budget: PARITY_READ_BUDGET (default 10000) per rolling 30 days, ledger <dataDir>/budget/reads.jsonl (private:
+    it names the account; seeded once from this repo's old budget/reads.jsonl).
   Data dir: PARITY_DATA_DIR, else ../parity-data next to the repo if present, else recordings/.
   record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
   --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
@@ -133,10 +134,10 @@ export function newRunId(now = new Date()): string {
 }
 
 /** Refusal message when the run would push the rolling 30-day sandbox GETs over `budget` (decision 0001 C2), else null. */
-export function budgetRefusal(ledger: LedgerEntry[], projected: number, nowIso: string, budget: number): string | null {
+export function budgetRefusal(ledger: LedgerEntry[], projected: number, nowIso: string, budget: number, path = LEDGER): string | null {
   const rolling = rollingGets(ledger, nowIso);
   if (rolling + projected <= budget) return null;
-  return `refusing to run: ${rolling} sandbox GETs in the last 30 days + ${projected} projected for this run = ${rolling + projected} > read budget ${budget} (${LEDGER}; PARITY_READ_BUDGET; decision 0001 C2)`;
+  return `refusing to run: ${rolling} sandbox GETs in the last 30 days + ${projected} projected for this run = ${rolling + projected} > read budget ${budget} (${path}; PARITY_READ_BUDGET; decision 0001 C2)`;
 }
 
 export function resolveTarget(spec: string, name?: string): Target {
@@ -152,6 +153,20 @@ export function resolveTarget(spec: string, name?: string): Target {
   return { name: name ?? spec, baseUrl: spec.replace(/\/+$/, ""), apiKey: process.env.PARITY_TARGET_KEY ?? "sk_test_parity" };
 }
 
+/**
+ * The sandbox read ledger <dir>/budget/reads.jsonl. It names the Stripe account, so it lives in the private data repo
+ * (decision 0001 C3), never in this one. Seeded from `legacy` (this repo's old ledger) when absent, so the rolling 30-day
+ * count keeps its history. ponytail: one-time migration; drop `legacy` once the data repo carries its own ledger.
+ */
+export function readsLedger(dir: string, legacy = join(REPO_ROOT, LEDGER)): string {
+  const path = join(dir, LEDGER);
+  if (!existsSync(path) && existsSync(legacy)) {
+    mkdirSync(dirname(path), { recursive: true });
+    copyFileSync(legacy, path);
+  }
+  return path;
+}
+
 const fileName = (spec: string, name?: string): string => name ?? (spec === "sandbox" ? "sandbox" : new URL(spec).host.replace(/[^A-Za-z0-9.-]/g, "-"));
 const today = (): string => new Date().toISOString().slice(0, 10);
 
@@ -159,7 +174,7 @@ const isSandbox = (t: Target): boolean => new URL(t.baseUrl).hostname === "api.s
 
 interface RecordOpts {
   concurrency: number;
-  /** Read ledger (default LEDGER, relative to the cwd). */
+  /** Read ledger (default readsLedger(dataDir())). */
   ledger?: string;
   runId: string;
   out: string;
@@ -175,14 +190,14 @@ interface RecordOpts {
  */
 export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOpts): Promise<Recording[]> {
   if (!seqs.length) throw new Error("no sequences to run");
-  const ledger = o.ledger ?? LEDGER;
+  const ledger = o.ledger ?? readsLedger(dataDir());
   // By host, not name: `--target https://api.stripe.com` or `--name sandbox` must not dodge (or fake) the budget.
   const sandbox = isSandbox(target);
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
   if (sandbox) {
     const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
     const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep;
-    const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget);
+    const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget, ledger);
     if (refusal) throw new Error(refusal);
     console.log(`projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes)`);
   }

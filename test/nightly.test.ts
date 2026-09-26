@@ -92,6 +92,9 @@ test("nightly on a refusing sandbox: --dry-run writes nothing; the real run scor
   // The parity repo: the twin's code, no pushes (the workflow pushes it).
   const repo = join(tmp, "parity");
   for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
+  // The repo's old read ledger (it names the account): the gate seeds the data repo's ledger from it and counts it
+  // (dated yesterday by the wall clock: the gate's 30-day window ends at the real now, not at the pipeline's `now`).
+  writeJsonl(join(repo, "budget/reads.jsonl"), [{ date: new Date(Date.now() - 86_400_000).toISOString(), account: "acct_legacy00000000", target: "sandbox", runId: "old", gets: 5, posts: 0, deletes: 0, charges: 0 }]);
   init(repo);
   git(repo, "add", ".");
   git(repo, "commit", "-q", "-m", "init");
@@ -121,7 +124,8 @@ test("nightly on a refusing sandbox: --dry-run writes nothing; the real run scor
     const text = nightlyText(r);
 
     // Step 1 refused at the budget gate: noted, the noise pair not attempted, the oracle not refreshed.
-    assert.match(r.slice.refused ?? "", /^refusing to run: 0 sandbox GETs in the last 30 days \+ \d+ projected for this run = \d+ > read budget 0/);
+    assert.match(r.slice.refused ?? "", /^refusing to run: 5 sandbox GETs in the last 30 days \+ \d+ projected for this run = \d+ > read budget 0 \(/);
+    assert.ok(r.slice.refused!.includes(`(${join(data, "budget/reads.jsonl")}; `), "the gate reads the data repo's ledger");
     const corpus = TEMPLATES.length * 20; // slice 0/7: indices 0, 7, 14, …
     assert.deepEqual([r.slice.spec, r.slice.seqs, r.slice.recorded], ["0/7", Math.ceil(corpus / 7), 0]);
     assert.deepEqual(r.noisePair, { seqs: TEMPLATES.length * 2, recorded: false });
@@ -184,7 +188,8 @@ test("nightly on a refusing sandbox: --dry-run writes nothing; the real run scor
     assert.notEqual(dataHead1, dataHead0);
     assert.equal(git(tmp, "--git-dir", join(tmp, "origin.git"), "rev-parse", "main"), dataHead1, "the data repo was pushed");
     assert.deepEqual(r.commits, { data: dataHead1, parity: head1 });
-    assert.deepEqual(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n"), ["site/data/curve.json", "site/data/scores/2026-10-04.json"]);
+    assert.deepEqual(git(repo, "show", "--name-only", "--format=", "HEAD").split("\n"), ["site/data/curve.json", "site/data/scores/2026-10-04.json"], "no ledger here: it names the account");
+    assert.ok(git(data, "show", "--name-only", "--format=", "HEAD").split("\n").includes("budget/reads.jsonl"), "the read ledger is committed in the data repo");
     assert.match(git(repo, "log", "-1", "--format=%s"), /^nightly 2026-10-04: curve point and scores \(train L3 [\d.]+%, held-out L3 [\d.]+%; noise ceiling L3 [\d.]+%; oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);
     assert.ok(readdirSync(join(data, "runs")).every((d) => d === "2026-09-27"), "a refused recording writes no run file");

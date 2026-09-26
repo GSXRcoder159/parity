@@ -42,7 +42,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # optional: without it the assisted pass is skipped and logged
           PARITY_DATA_DIR: ${{ github.workspace }}/parity-data
           GH_TOKEN: ${{ github.token }}
-        # Commits and pushes the data repo itself; commits the public-safe files (and the budget ledgers) here.
+        # Commits and pushes the data repo itself (with the read ledger); commits the public-safe files (and the LLM ledger) here.
         run: node src/cli.ts nightly
       - name: Push this repo
         run: git push origin "HEAD:${GITHUB_REF_NAME}"

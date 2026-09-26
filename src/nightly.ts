@@ -17,7 +17,7 @@ import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
 import { contaminated } from "./bench/oracle.ts";
 import { score, type LevelScores, type Score } from "./bench/score.ts";
-import { compareSets, LEDGER, newRunId, oracleBuild, recordCorpus, resolveTarget, slice } from "./cli.ts";
+import { compareSets, LEDGER, newRunId, oracleBuild, readsLedger, recordCorpus, resolveTarget, slice } from "./cli.ts";
 import { drift, type DriftResult } from "./drift.ts";
 import { readJsonl } from "./jsonl.ts";
 import type { Recording, Sequence } from "./types.ts";
@@ -34,11 +34,11 @@ const CORPUS_SEEDS = "1-20";
 export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScores> };
 export type Patches = { automatic: number; assisted: number };
 
-/** Records `seqs` on the sandbox at NIGHTLY_RPS into <dataDir>/runs/<date>/<name>-<runId>.jsonl: budget-gated, ledgered in the repo. */
+/** Records `seqs` on the sandbox at NIGHTLY_RPS into <dataDir>/runs/<date>/<name>-<runId>.jsonl: budget-gated, ledgered in <dataDir>/budget (seeded from the repo's old ledger). */
 async function recordSandbox(repo: string, dataDir: string, date: string, name: string, seqs: Sequence[]): Promise<Recording[]> {
   const runId = newRunId(); // a fresh run id per recording: idempotency nonces derive from it and must never repeat
   const target = { ...resolveTarget("sandbox"), rps: NIGHTLY_RPS };
-  return recordCorpus(target, seqs, { concurrency: 8, runId, out: join(dataDir, "runs", date, `${name}-${runId}.jsonl`), ledger: join(repo, LEDGER) });
+  return recordCorpus(target, seqs, { concurrency: 8, runId, out: join(dataDir, "runs", date, `${name}-${runId}.jsonl`), ledger: readsLedger(dataDir, join(repo, LEDGER)) });
 }
 
 /**
@@ -233,12 +233,13 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   let commits: NightlyResult["commits"];
   if (!o.dryRun) {
     const pct = (w: { p: number }) => `${(w.p * 100).toFixed(1)}%`;
-    run("git", ["add", "-A", "--", "runs", "oracle.jsonl", "align"], data);
+    // The read ledger names the account: it is committed here, in the private data repo, never in the parity repo.
+    run("git", ["add", "-A", "--", ...["runs", "oracle.jsonl", "align", "budget"].filter((p) => existsSync(join(data, p)))], data);
     run("git", ["commit", "-q", "-m", `nightly ${date} run ${runId}: slice ${spec} ${oracleRefreshed ? `recorded (${sliceRes.recorded} clean)` : "not recorded"}; oracle ${oracle.oracleSeqs} sequences, sha256 ${oracle.oracleSha}`], data);
     const dataCommit = run("git", ["rev-parse", "HEAD"], data);
     run("git", ["push", "-q"], data);
-    // The read and LLM ledgers ride along: the next night's budget gate and cost cap read them from this repo.
-    const files = [...published, ...["budget/reads.jsonl", "budget/llm.jsonl"].filter((f) => existsSync(join(o.repo, f)))];
+    // The LLM ledger (tokens and cost, no ids) rides along: the next run's daily cost cap reads it from this repo.
+    const files = [...published, ...["budget/llm.jsonl"].filter((f) => existsSync(join(o.repo, f)))];
     run("git", ["add", "--", ...files], o.repo);
     const msg =
       `nightly ${date}: curve point and scores (train L3 ${pct(json.score.train.L3)}, held-out L3 ${pct(json.score.heldOut.L3)}; ` +
