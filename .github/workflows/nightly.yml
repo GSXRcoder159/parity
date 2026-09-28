@@ -49,6 +49,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PARITY_TOKEN: ${{ github.token }}
           PARITY_DATA_TOKEN: ${{ secrets.PARITY_DATA_TOKEN }}
+          PARITY_LLM_CAP_USD: ${{ vars.PARITY_LLM_CAP_USD || '3' }} # daily LLM cap (USD); the code keeps its $15 hard ceiling
         # Commits both repos and pushes them itself, this one first, the data repo last; an align commit lands with its
         # sealed-log entries at once, through the data repo's branch nightly/pending-<runId> (src/nightly.ts land()). Git reads each repo's credential from URL-scoped config in the environment (GIT_CONFIG_*), never from disk;
         # the gate's child process gets none of these variables (src/align/gate.ts).
