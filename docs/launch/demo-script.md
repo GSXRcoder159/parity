@@ -8,6 +8,7 @@ Before recording:
 - [ ] `npx paritybench twin` works from npm. Until then, shot 2 can run `node src/cli.ts twin` in a checkout, but the video cannot be published that way.
 - [ ] A green `action-selftest` run exists on the public repo, and the score page serves nightly data, not `site/data/sample`.
 - [ ] Every `{{TBD: …}}` is filled in.
+- [ ] The latest curve point's `oracleMaxAgeDays` is 7 or less. If it is not, cut "never more than a week old" from the 0:42 voice-over (the nightly slice is sized to the read budget).
 - [ ] Only the twin and the score page are on screen. No terminal with the sandbox key or `.env`, no recording file, no `compare` output: those hold data from a Stripe account (0001 C3).
 - [ ] No Stripe logo, and no "Stripe" in the title card or the video title (0001 C4).
 

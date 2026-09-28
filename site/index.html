@@ -18,7 +18,11 @@
         response with a recording of the same sequence on the real Stripe sandbox (the oracle).
       </p>
       <p class="rule"><strong>Any score without the noise floor and ceiling is invalid.</strong></p>
-      <p>The twin is scored nightly against an oracle that is at most 7 days old; drift on any sequence is detected within 7 days.</p>
+      <p>
+        The twin is scored nightly on the whole corpus. Each night re-records at most a seventh of it, as much as the sandbox read budget allows, so
+        the oracle is at most 7 days old and drift on any sequence is detected within 7 days whenever every night can afford a seventh. Each night's
+        point after 2026-09-28 in <code>data/curve.json</code> records the oracle's actual maximum age (<code>oracleMaxAgeDays</code>).
+      </p>
       <p id="sample-banner" class="banner" hidden><strong>Sample data.</strong> These numbers are synthetic, for developing this page. They are not measurements.</p>
       <p id="meta" hidden>
         Latest night <b id="latest"></b> · normalization <b id="norm"></b> (<a href="https://github.com/GSXRcoder159/parity/blob/main/src/bench/normalize.ts">rules</a>) ·

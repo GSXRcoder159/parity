@@ -6,7 +6,7 @@ Parity measures how faithfully a Stripe-compatible server reproduces the real St
 - **The Parity twin** is a stateful Billing server in plain Node, with no dependencies, for fast and isolated tests. ParityBench scores it against sandbox recordings, and an alignment loop patches it toward them.
 - **`paritybench agree`** runs your own test suite twice, once against the twin and once against your sandbox, and reports which tests agree.
 
-**Status: pre-release.** The alignment loop has run (174 automatic patches) and the nightly pipeline has published one point, on an oracle of 88 recorded sequences. The nightly does not run on a schedule yet: it needs a claimed sandbox key and repository secrets. Numbers not measured yet are marked `{{TBD}}`.
+**Status: pre-release.** The oracle holds the full corpus: 600 sandbox-recorded sequences (oracle v1, 2026-09-28). The alignment loop has landed 180 automatic patches and 0 assisted ones. The nightly pipeline has published two points: one on the earlier 88-sequence oracle, and one from its first full run on oracle v1, run locally with no LLM spend ([report](reports/2026-09-27-twin-v1.md)). It does not run on a schedule yet: enabling it waits on an LLM budget decision and a one-step workflow fix (installing `uv` for the test guard). Numbers not measured yet are marked `{{TBD}}`.
 
 ## Quickstart
 
@@ -88,7 +88,7 @@ node src/cli.ts agree --cmd "node --test --test-reporter=tap examples/agree-suit
 - **Outcomes:** from the JUnit XML the command writes to `--junit <path>`, else from `node --test` TAP on stdout. With TAP, a test inside a `describe` block or a subtest is named `block > test`.
 - **Report:** per-test outcomes, the agreement with a 95% Wilson interval, and the disagreeing tests. It holds test names and outcomes only, never the command's output.
 
-`examples/agree-suite/billing.test.mjs` is an 8-test example (customer, card, price, subscription, a previewed and applied price change, cancel, refund). The sandbox half needs a claimed sandbox's `sk_test_` key.
+`examples/agree-suite/billing.test.mjs` is an 8-test example (customer, card, price, subscription, a previewed and applied price change, cancel, refund). The sandbox half needs a claimed sandbox's `sk_test_` key. On 2026-09-28 it passed 8/8 on the twin and 8/8 on the sandbox: agreement 100.0% (8/8, 95% Wilson interval 67.6–100.0%) ([report](reports/2026-09-27-agree-example.md)). That shows `agree` works on both targets, not that the twin is faithful. The suite was written next to the twin and was known to pass on it, it checks outcomes and not responses, and 8 tests give a lower bound of 67.6%.
 
 ### Train agents on the twin: `verifiers`
 
@@ -103,7 +103,7 @@ cd python/parity_verifiers && uv run --locked pytest -q
 
 ## Method
 
-**Corpus.** 30 templates in 10 strata: lifecycle, pagination, cancellation, refunds, errors, idempotency, events, proration, boundaries and clocks. The full corpus runs each template with seeds 1–20: 600 sequences. The recorded oracle holds 88 of them so far (templates #1–#26, seeds 1–4 or 1–2): the rest waits for a claimed sandbox. The four test-clock templates (#27–#30) are in the corpus, but no sandbox has recorded them, so they are not validated yet. Six templates are **held out**: `subscription-cancel-at-period-end`, `refund-partial-then-rest`, `invalid-params`, `subscription-update-quantity`, `boundaries-list-limits` and `clock-trial-end`. They never feed the alignment loop; they only gate its patches. (Disclosure: an implementer's context once contained the validation notes of held-out #7, #9 and #12; the align loop never saw them. See the [day-0 report](reports/2026-09-26-twin-day0.md) limitations.)
+**Corpus.** 30 templates in 10 strata: lifecycle, pagination, cancellation, refunds, errors, idempotency, events, proration, boundaries and clocks. The full corpus runs each template with seeds 1–20: 600 sequences. The recorded oracle (oracle v1, 2026-09-28) holds all 600, each the newest clean sandbox recording of its sequence ([baseline report](reports/2026-09-27-baseline-v1.md)). The four test-clock templates (#27–#30) were validated on the sandbox on 2026-09-27 ([clock report](reports/2026-09-27-clocks.md)). Six templates are **held out** (120 sequences): `subscription-cancel-at-period-end`, `refund-partial-then-rest`, `invalid-params`, `subscription-update-quantity`, `boundaries-list-limits` and `clock-trial-end`. They never feed the alignment loop; they only gate its patches. (Disclosure: an implementer's context once contained the validation notes of held-out #7, #9 and #12, and later the intended steps and step and event counts of #28, with no results; the align loop never saw them. See the [day-0 report](reports/2026-09-26-twin-day0.md) limitations.)
 
 **Four levels.**
 
@@ -120,9 +120,9 @@ cd python/parity_verifiers && uv run --locked pytest -q
 
 **Noise floor and ceiling.** Two real sandbox recordings of the same sequences are compared with the same harness. The noise floor is 1 − their agreement. The ceiling is their agreement: the best score any server can reach against that oracle. **Any score without the noise floor and ceiling is invalid.**
 
-**Normalization.** Versioned rules rewrite run-specific values so that two faithful runs compare equal: ids, timestamps, run nonces, secrets, hosted URLs, per-account and card-network opaques, dashboard links and the unclaimed-sandbox banner. List order is compared as returned. Each rule states what it can hide. The rules and their rationale are in [`src/bench/normalize.ts`](src/bench/normalize.ts) (currently v1.3), and every score carries its normalization version.
+**Normalization.** Versioned rules rewrite run-specific values so that two faithful runs compare equal: ids, timestamps, a declined invoice's retry time (compared to the day), run nonces, secrets, hosted URLs, per-account and card-network opaques (including a Visa charge's ECI), dashboard links and the unclaimed-sandbox banner. List order is compared as returned. Each rule states what it can hide. The rules and their rationale are in [`src/bench/normalize.ts`](src/bench/normalize.ts) (currently v1.4), and every score carries its normalization version.
 
-**Rolling oracle.** The sandbox read allocation does not allow re-recording the whole corpus every night. Each night re-records a rotating seventh of the corpus and scores the twin on the whole corpus against the latest recording of each sequence. So the twin is scored nightly against an oracle that is at most 7 days old; drift on any sequence is detected within 7 days. Drift compares a night's slice with the previous recording of the same sequences, on paths outside the noise set.
+**Rolling oracle.** The sandbox read allocation (10,000 GETs per rolling 30 days) does not allow re-recording the whole corpus every night. Each night re-records the next part of a rotation through the corpus, at most a seventh of it and only as much as that night's share of the read budget allows, and scores the twin on the whole corpus against the latest recording of each sequence. When every night can afford a seventh, the oracle is at most 7 days old and drift on any sequence is detected within 7 days; a night that affords less continues the rotation the next night. Each curve point records the oracle's actual maximum age (`oracleMaxAgeDays` in `site/data/curve.json`, on points published after 2026-09-28). Drift compares a night's slice with the previous recording of the same sequences, on paths outside the noise set.
 
 **Alignment loop and automation ratio.** After the scaffold freeze (tag `twin-scaffold-v0`), every change to the twin is logged in a hash-chained log as one of three classes:
 - **automatic:** it edits only data files (`src/twin/shapes/*.json`, `src/twin/errors.json`), for a value the oracle shows deterministically. It is applied when the held-out gate passes.
@@ -142,27 +142,51 @@ The automation ratio is automatic ÷ (automatic + assisted), counted from the lo
 | L3 value | 92.4% [89.4–94.6] (420) | 7.6% |
 | L4 sequence | 65.0% [52.4–75.8] (60) | 35.0% |
 
-All 32 steps that disagree trace to 6 causes, and normalization v1.2 addresses them. On that same pair v1.2 agrees at every level (floor 0.0%; L3 [0.0–0.9], L4 [0.0–6.0]), but that is in-sample, because v1.2 was written from it ([baseline report](reports/2026-09-26-baseline.md)). On a pair recorded after it: `{{TBD: v1.2+ noise floor on an out-of-sample pair, after B1}}`.
+All 32 steps that disagree trace to 6 causes, and normalization v1.2 addresses them. On that same pair v1.2 agrees at every level (floor 0.0%; L3 [0.0–0.9], L4 [0.0–6.0]), but that is in-sample, because v1.2 was written from it ([baseline report](reports/2026-09-26-baseline.md)).
+
+**Noise floor, out of sample (2026-09-28), normalization v1.3.** All 30 templates × seeds 1–2 (60 pairs, 449 steps, all 10 strata), recorded twice back to back after v1.3 was frozen, so no rule was written from them ([baseline report on oracle v1](reports/2026-09-27-baseline-v1.md)):
+
+| Level | Agreement = ceiling | Floor |
+|---|---|---|
+| L1 status | 100.0% [99.2–100.0] (449) | 0.0% |
+| L2 shape | 100.0% [99.2–100.0] (449) | 0.0% |
+| L3 value | 99.3% [98.1–99.8] (449) | **0.7% [0.2–1.9]** |
+| L4 sequence, oracle as expected | 95.0% [86.3–98.3] (60) | 5.0% [1.7–13.7] |
+| L4 sequence, nightly's direction | 93.3% [84.1–97.4] (60) | 6.7% [2.6–15.9] |
+
+The L3 floor is under the plan's 3% bar. The highest stratum is 2.0% at L3 (clocks and refunds), and none is above 10%. L4 depends on which recording is the expected one, because causal-order constraints come from the expected side. Three things vary between the two runs: a declined renewal's retry time (so the clock stratum's L4 ceiling is 75.0% [40.9–92.9]), a Visa charge's ECI, and the event order of one held-out refunds sequence. Normalization v1.4 adds rules for the first two. They were written from this pair, so v1.4 is in-sample on it; the next weekly pair measures v1.4 out of sample.
 
 **Throughput, W0.** 3,950 and 4,436 sequences per hour (wall time, concurrency 8, no 429s).
 
-**The twin**, on the 88-sequence oracle ([day 0](reports/2026-09-26-twin-day0.md), [first align run](reports/2026-09-26-align-first-run.md)):
+**The twin on oracle v1** (600 sequences, 2026-09-28, normalization v1.3, method m2), from the first full nightly ([report](reports/2026-09-27-twin-v1.md)). The published curve point is the score before that night's align commit; "after" adds its 6 automatic patches:
+
+| Split | L1 | L3 (curve point) | L3 after | L4 after |
+|---|---|---|---|---|
+| train | 98.9% [98.5–99.2] (3605) | 24.6% [23.2–26.0] (3605) | 26.8% [25.4–28.3] (3605) | 4.2% [2.7–6.3] (480) |
+| held-out | 93.2% [91.4–94.7] (886) | 18.1% [15.7–20.7] (886) | 18.1% [15.7–20.7] (886) | 0.0% [0.0–3.1] (120) |
+| noise ceiling | 100.0% [99.2–100.0] (449) | 99.3% [98.1–99.8] (449) | | 93.3% [84.1–97.4] (60) |
+
+The twin passes no held-out sequence yet. The test clocks, built from the docs, get their first score here: every status right (train L1 100%), train L3 38.5% [35.1–41.9] and L4 0.0% [0.0–6.0], with the gaps in values and event order. The noise pair covers 60 of the 600 sequences, all 30 templates. Automation ratio so far: 180 automatic patches, 0 assisted; train divergences removed 7,538 vs 0. The assisted pass has not sent an LLM request yet (57 loci wait for it).
+
+**The twin on the earlier 88-sequence oracle v0** ([day 0](reports/2026-09-26-twin-day0.md), [first align run](reports/2026-09-26-align-first-run.md)). These scores are not comparable with oracle v1's: the curve marks `oracle expanded: 88→600`.
 
 | Split | L3 at day 0 | L3 after 174 automatic patches | L4 after |
 |---|---|---|---|
 | train | 3.8% [2.5–5.9] (495) | 18.8% [15.6–22.5] (495) | 5.6% [2.2–13.4] (72) |
 | held-out | 0.0% [0.0–3.3] (113) | 8.8% [4.9–15.5] (113) | 0.0% [0.0–19.4] (16) |
 
-The noise pair covers templates #1–#15 only and is in-sample, so these scores have a floor and ceiling for part of the corpus only. Automation ratio so far: 174 automatic, 0 assisted (the assisted pass has not run live). The first nightly point is in `site/data/curve.json`; a scheduled nightly curve: `{{TBD: after B1 and B2}}`.
+That noise pair covers templates #1–#15 only and is in-sample, so these scores have a floor and ceiling for part of the corpus only. Both nightly points are in `site/data/curve.json`; a scheduled nightly curve: `{{TBD: once the nightly runs on its schedule}}`.
 
 ### Other servers
 
-stripe-mock, as documented. Its README says: "stripe-mock does not attempt to reproduce the behavior of the real Stripe API at all. It cannot reject all invalid requests, and its responses are completely hardcoded." ([github.com/stripe/stripe-mock](https://github.com/stripe/stripe-mock)). On stateful sequences its score measures that documented design, not a defect. From the [baseline report](reports/2026-09-26-baseline.md) (normalization v1.2):
+stripe-mock, as documented. Its README says: "stripe-mock does not attempt to reproduce the behavior of the real Stripe API at all. It cannot reject all invalid requests, and its responses are completely hardcoded." ([github.com/stripe/stripe-mock](https://github.com/stripe/stripe-mock)). On stateful sequences its score measures that documented design, not a defect. From the [baseline report on oracle v1](reports/2026-09-27-baseline-v1.md) (2026-09-28, normalization v1.3, method m2):
 
 | Server | Sequences | L1 | L3 | L4 |
 |---|---|---|---|---|
-| stripe-mock (pinned digest, v0.205.0) | 88 | 80.9% | 1.3% | 0.0% [0.0–4.2] |
-| localstripe 1.15.10 (the 6 templates it serves) | 20 | 58.1% | 3.4% | 0.0% [0.0–16.1] |
+| stripe-mock (pinned digest, v0.205.0) | 600 | 83.7% | 3.1% | 0.0% [0.0–0.6] |
+| localstripe 1.15.10 (the 6 of 30 templates it serves) | 120 | 57.7% | 2.8% | 0.0% [0.0–3.1] |
+
+localstripe's event collection fails (it rejects the sweep's `ending_before` with a 400), so its event check fails on every sequence; that does not move its L4, because none of its sequences agrees on every step. On the earlier 88-sequence oracle the result was the same: L4 0.0% [0.0–4.2] and 0.0% [0.0–16.1] ([report](reports/2026-09-26-baseline.md)).
 
 ## Why a twin
 
@@ -205,7 +229,7 @@ API version `2026-08-26.dahlia`.
 | Refunds | create, retrieve, list |
 | Events | retrieve, list |
 | Webhook endpoints | create, retrieve, update, delete, list; signed deliveries (`Stripe-Signature`) with 3 retries |
-| Test clocks | create, retrieve, list, delete (deletes its customers, canceling their subscriptions), advance: renewals counted from the billing anchor, trial end and the `trial_will_end` notice, cancel at period end, a renewal draft finalized and charged an hour later, and payment retries. A clock's objects live at its frozen time. **Built from the public docs: no sandbox has recorded a clock yet, so this is not validated** |
+| Test clocks | create, retrieve, list, delete (deletes its customers, canceling their subscriptions), advance: renewals counted from the billing anchor, trial end and the `trial_will_end` notice, cancel at period end, a renewal draft finalized and charged an hour later, and payment retries. A clock's objects live at its frozen time. **Built from the public docs, then scored against sandbox recordings on oracle v1:** every status matches, but values and event order do not yet (train L3 38.5%, L4 0.0% [0.0–6.0], [report](reports/2026-09-27-twin-v1.md)). Known differences: events stamped at the frozen time (the sandbox uses the wall clock), no `invoice.upcoming` at renewal, a renewal draft that finalizes after 1 h (3 days on the sandbox), no `invoice.marked_uncollectible` at clock delete, and a fixed 2-day payment retry ([clock report](reports/2026-09-27-clocks.md)) |
 
 Across every route:
 - Form-encoded parameters are validated against the OpenAPI spec, and unknown ones are rejected.
