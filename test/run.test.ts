@@ -434,6 +434,7 @@ test("runCorpus deleteLeftoverClocks: deletes this run's clocks the account stil
   seen.length = 0;
   const halted = await runCorpus([seq([create], "c#3")], { ...local, eventWaitMs: 0 }, { concurrency: 1, runId: "r", maxGets: 0, deleteLeftoverClocks: true });
   assert.match(halted.summary.clocks?.error ?? "", /^not sent: run halted: the read budget allowed 0 more sandbox GETs/);
+  assert.equal(halted.summary.aborted, undefined, "a complete run is not reported as halted");
   assert.deepEqual(seen.map((r) => r.method), ["POST"]);
   // Without the flag (URL targets), or when the run created no clock, no check.
   seen.length = 0;

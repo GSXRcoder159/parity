@@ -323,6 +323,8 @@ async function deleteLeftoverClocks(io: Io, target: Target, recs: Recording[]): 
     }
   } catch (e) {
     out.error = errMsg(e);
+    // send() marks a budget halt on the run, but this run's steps and sweep are complete: the halt is the check's alone.
+    delete io.stats.aborted;
   }
   return out;
 }
