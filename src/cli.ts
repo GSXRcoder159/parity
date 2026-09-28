@@ -40,8 +40,11 @@ const USAGE = `usage:
   record --out default: <dataDir>/runs/<date>/<name>-<runId>.jsonl on the sandbox, recordings/<date>/<name>-<runId>.jsonl elsewhere.
   --slice k/n: only the corpus sequences whose index (templates x seeds order) is k mod n.
   --chunk n --chunk-wait m: run n sequences at a time, m minutes apart (each chunk ledgered and written as it ends).
+  On the sandbox (record, bench, nightly) each chunk ends with a test-clock leak check: the clocks it created that the
+    account still lists are deleted, and the counts printed.
   bench sends Parity-Now: <oracle recording's startedAt, epoch seconds> on every step of each sequence (not to the sandbox),
-    and its event sweep starts at the earliest Parity-Now − 60 s.
+    and its event sweep starts at the earliest Parity-Now − 60 s. Against a URL target it skips the templates' step waits
+    (they exist for the sandbox's timing only).
   oracle build: newest clean sandbox recording per sequence in <dataDir>/runs/** -> <dataDir>/oracle.jsonl.
   --noise C.jsonl: a second sandbox recording of (part of) the oracle's corpus; oracle-vs-C on the oracle sequences C
     records cleanly is the noise floor, and the report says how many it covers (bench checks this before recording).
@@ -223,15 +226,20 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
   // Only sandbox runs read or write the ledger: a URL-target run must not seed one into the data repo.
   const ledger = o.ledger ?? (sandbox ? readsLedger(dataDir()) : LEDGER);
   const budget = Number(process.env.PARITY_READ_BUDGET ?? 10_000);
-  if (sandbox) {
-    const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
-    const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep;
-    const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget, ledger);
-    if (refusal) throw new Refused(refusal);
-    console.log(`projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes)`);
-  }
   const size = o.chunk ?? seqs.length;
   const chunks = Math.ceil(seqs.length / size);
+  if (sandbox) {
+    const sweep = Math.ceil((10.5 * seqs.length) / 100) * 5;
+    // The leak check lists the account's test clocks once per chunk that creates any (one page of 100).
+    const leak = seqs.some((s) => s.steps.some((st) => st.method === "POST" && st.path === "/v1/test_helpers/test_clocks")) ? chunks : 0;
+    const projected = seqs.flatMap((s) => s.steps).filter((s) => s.method === "GET").length + sweep + leak;
+    const refusal = budgetRefusal(readLedger(ledger), projected, new Date().toISOString(), budget, ledger);
+    if (refusal) throw new Refused(refusal);
+    console.log(
+      `projected sandbox GETs: ${projected} (GET steps + ${sweep} for the event sweep: ceil(10.5 events/sequence / 100 per page) x 5 passes` +
+        (leak ? ` + ${leak} for the test-clock leak check)` : ")"),
+    );
+  }
   console.log(
     `run ${o.runId}: ${seqs.length} sequences against ${target.name} at concurrency ${o.concurrency}` +
       (chunks > 1 ? ` in ${chunks} chunks of ${size}, ${o.chunkWaitMin ?? 0} min apart` : ""),
@@ -253,6 +261,7 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
       headersFor: o.headersFor,
       // The run halts when the rolling GETs reach the budget (decision 0001 R7), not only when the projection says so.
       maxGets: sandbox ? Math.max(0, budget - rollingGets(readLedger(ledger), new Date().toISOString())) : undefined,
+      deleteLeftoverClocks: sandbox,
       onRecord: () => {
         stepsEnd = performance.now();
         if (++done % 10 === 0) console.log(`  ${done}/${part.length} sequences`);
@@ -273,6 +282,8 @@ export async function recordCorpus(target: Target, seqs: Sequence[], o: RecordOp
         `charge.succeeded events ${charges} · event overlaps ${summary.eventOverlaps}${eventsFailed ? ` · EVENT COLLECTION FAILED for ${eventsFailed} sequences: ${recs.find((r) => r.eventsError)!.eventsError}` : ""}`,
       ].join("\n"),
     );
+    const ck = summary.clocks;
+    if (ck?.created) console.log(`test clocks: ${ck.created} created, ${ck.leftOver} left over, ${ck.deleted} deleted${ck.error ? ` · LEAK CHECK: ${ck.error}` : ""}`);
     if (sandbox) {
       const date = new Date().toISOString();
       const account = process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown";
@@ -385,20 +396,24 @@ function replay(oracle: Recording[]): { seqs: Sequence[]; headersFor: (s: Sequen
   return { seqs, headersFor: (s) => ({ "Parity-Now": now.get(s.id)! }) };
 }
 
+/**
+ * The sequences without their step waits. Waits exist only for the sandbox's timing (search's eventual consistency, a
+ * clock's advance: customer-search 60 s, #30 600 s); every other target answers at once and skips them.
+ */
+export const unwaited = (seqs: Sequence[]): Sequence[] => seqs.map((s) => ({ ...s, steps: s.steps.map(({ waitMs: _, ...step }) => step) }));
+
 /** `score-twin`: the oracle's sequences against a fresh in-process twin; Markdown report to stdout, results + score to `jsonOut`. */
 async function scoreTwin(oraclePath: string, templates: Template[], noisePath: string | undefined, jsonOut: string | undefined, recOut: string | undefined): Promise<void> {
   const names = new Set(templates.map((t) => t.name));
   const oracle = readJsonl<Recording>(oraclePath).filter((r) => names.has(r.template));
   if (!oracle.length) throw new Error(`${oraclePath} has no sequence of ${[...names].join(", ")}`);
   const { seqs, headersFor } = replay(oracle);
-  // The twin is consistent at once: waits for the sandbox's eventual consistency (customer-search: 60 s) are skipped.
-  const unwaited = seqs.map((s) => ({ ...s, steps: s.steps.map(({ waitMs: _, ...step }) => step) }));
   const { createTwin } = await import("./twin/server.ts"); // loads every resource and the pruned spec: only for this command
   const twin = createTwin();
   const server = await twin.listen(0);
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const t0 = performance.now();
-  const { recordings, summary } = await runCorpus(unwaited, { name: "twin", baseUrl, apiKey: "sk_test_parity", eventWaitMs: 0 }, { concurrency: 8, runId: newRunId(), headersFor }).finally(() => {
+  const { recordings, summary } = await runCorpus(unwaited(seqs), { name: "twin", baseUrl, apiKey: "sk_test_parity", eventWaitMs: 0 }, { concurrency: 8, runId: newRunId(), headersFor }).finally(() => {
     server.closeAllConnections();
     server.close();
   });
@@ -528,10 +543,11 @@ export async function main(argv: string[]): Promise<number> {
     }
     const { seqs, headersFor } = replay(oracleRecs);
     const target = resolveTarget(url);
+    const sandbox = isSandbox(target);
     const name = fileName(url);
     const recPath = `recordings/${today()}/${name}-${runId}.jsonl`;
     // The sandbox ignores Parity-Now; sending it would also move the event sweep back to the oracle's day (outside the budget's projection).
-    await recordCorpus(target, seqs, { concurrency: 8, runId, out: recPath, headersFor: isSandbox(target) ? undefined : headersFor });
+    await recordCorpus(target, sandbox ? seqs : unwaited(seqs), { concurrency: 8, runId, out: recPath, headersFor: sandbox ? undefined : headersFor });
     compareFiles(oraclePath, recPath, flags.noise, false, flags.out ?? `recordings/${today()}/bench-${name}-${runId}`);
     return 0;
   } catch (e) {

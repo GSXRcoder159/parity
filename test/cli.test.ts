@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { budgetRefusal, newRunId, resolveTarget, slice } from "../src/cli.ts";
+import { budgetRefusal, newRunId, resolveTarget, slice, unwaited } from "../src/cli.ts";
 import type { LedgerEntry } from "../src/bench/budget.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
@@ -49,7 +49,7 @@ test("compare writes <out>.md and <out>.json; normalized ids match, --raw ids di
   const norm = cli(["compare", "--oracle", "a.jsonl", "--target", "b.jsonl", "--out", "out/norm"], dir);
   assert.equal(norm.status, 0, norm.stderr);
   const nj = JSON.parse(readFileSync(join(dir, "out/norm.json"), "utf8"));
-  assert.equal(nj.normalization, "v1.3");
+  assert.equal(nj.normalization, "v1.4");
   assert.equal(nj.score.overall.L3.p, 1);
   assert.deepEqual(nj.results.map((r: { seq: string }) => r.seq), ["customer-crud#1", "customer-crud#2"]);
   assert.match(readFileSync(join(dir, "out/norm.md"), "utf8"), /^# ParityBench: b\.jsonl vs a\.jsonl/);
@@ -201,7 +201,7 @@ test("score-twin: replays the oracle against an in-process twin at each sequence
   assert.match(r.stdout, /^\*\*Summary:\*\* L1 100\.0% .* L4 100\.0% \[[\d.–]+\] \(6\)/m);
   assert.match(r.stderr, /^score-twin: 6 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s; wrote out\/score\.json$/m);
   const j = JSON.parse(readFileSync(join(dir, "out/score.json"), "utf8"));
-  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.3", 6]);
+  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.4", 6]);
   assert.ok(j.results.every((x: { eventsMatch: boolean; eventsSkipped: boolean }) => x.eventsMatch && !x.eventsSkipped), "the twin's events are compared");
 
   const only = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--templates", "subscription-create,customer-crud"], dir);
@@ -294,6 +294,29 @@ test("record --slice --chunk and bench --oracle against a local server; bench se
       const want = epoch(oracle.find((o) => o.seq === x.seq)!.startedAt);
       assert.ok(x.steps.every((s) => s.headers?.["Parity-Now"] === want), x.seq);
     }
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("bench against a URL target skips the templates' step waits (customer-search waits 60 s for the sandbox)", { timeout: 30_000 }, async () => {
+  const [seq] = buildCorpus(TEMPLATES.filter((t) => t.name === "customer-search"), [1]);
+  assert.deepEqual(seq!.steps.map((s) => s.waitMs), [undefined, 60_000]);
+  assert.deepEqual(unwaited([seq!])[0]!.steps, seq!.steps.map(({ waitMs: _, ...s }) => s));
+  assert.equal(seq!.steps[1]!.waitMs, 60_000, "the input keeps its waits");
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(req.url!.startsWith("/v1/events") ? { object: "list", has_more: false, data: [] } : { id: "cus_Local123456789", object: "customer", created: 1790000000 }));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "pb-wait-"));
+    const body = { id: "cus_Oracle12345678", object: "customer", created: 1790000000 };
+    writeJsonl(join(dir, "oracle.jsonl"), [{ ...rec("customer-search#1", body.id), steps: seq!.steps.map((s, i) => ({ i, method: s.method, path: s.path, status: 200, body, resHeaders: {}, ms: 1 })) }]);
+    // With the wait, this run takes over 60 s and the test times out.
+    const b = await cliAsync(["bench", `http://127.0.0.1:${(server.address() as AddressInfo).port}`, "--oracle", "oracle.jsonl", "--out", "bench"], dir);
+    assert.match(b.stdout, /^1 sequences · L1 100\.0%/m);
   } finally {
     server.closeAllConnections();
     server.close();

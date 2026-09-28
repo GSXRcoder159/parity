@@ -1,10 +1,10 @@
-// Normalization v1.3: rewrites run-specific values (ids, timestamps, nonces, secrets, hosted URLs,
-// per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
+// Normalization v1.4: rewrites run-specific values (ids, timestamps, a declined invoice's retry day, nonces, secrets,
+// hosted URLs, per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
 // faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.3";
+export const NORMALIZATION_VERSION = "v1.4";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -16,6 +16,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "timestamps",
     rationale:
       "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset. Not applied to an event's own top-level `created`: events are compared by type set and causal order (compare method m2), never by value, and the order check needs the raw times.",
+  },
+  {
+    name: "retry-day",
+    rationale:
+      "After a declined payment attempt the sandbox schedules the retry a random 42–46 h later (#30: the 2026-09-28 noise pair, and the same spread over its 20 oracle seeds). v1.4: `next_payment_attempt` on an invoice with `attempt_count` > 0 becomes a whole-day offset from the timestamps rule's anchor, rounded (`<t:+35d>`); before any attempt it stays hour-granular. Hides: a retry time that rounds to the same day as the oracle's (up to ±12 h off, e.g. a fixed 48 h, or 38 h instead of 46 h).",
   },
   {
     name: "run-nonce",
@@ -41,6 +46,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "card-network-opaques",
     rationale:
       "Simulated card-network values are random per charge: `authorization_code`, `network_transaction_id` and `transaction_link_id` (charge `payment_method_details.card`) and `risk_score` (`outcome`; a fraud/risk field, never published per decision 0001 R8) → `<opaque>` wherever they are non-null. Hides: a wrong value, format or type in those fields (a null-vs-value difference is still compared).",
+  },
+  {
+    name: "card-eci",
+    rationale:
+      "A Visa charge's `payment_method_details.card.electronic_commerce_indicator` takes one of two values that nothing in the sequence selects (same test card, no 3DS; #8 in the 2026-09-28 noise pair). v1.4: it becomes `<opaque>` wherever it is non-null (Mastercard charges carry null). Hides: a wrong ECI value, format or type (a null-vs-value difference is still compared). 3DS's own `three_d_secure.electronic_commerce_indicator` is not rewritten.",
   },
   {
     name: "request-log-url",
@@ -135,6 +145,10 @@ export function normalizeRecording(r: Recording): Recording {
     if (t0 !== undefined && Number.isInteger(v) && (TS_KEYS.has(k) || TS_SUFFIX.test(k))) {
       const t = v as number;
       if (t >= 946684800 && t <= 4102444800) {
+        if (k === "next_payment_attempt" && parent.object === "invoice" && (parent.attempt_count as number) > 0) {
+          const d = Math.round((t - t0) / 86400);
+          return `<t:${d >= 0 ? "+" : ""}${d}d>`;
+        }
         if (Math.abs(t - t0) < 3600) return "<t:~0>";
         const n = Math.round((t - t0) / 3600);
         return `<t:${n >= 0 ? "+" : ""}${n}h>`;
@@ -151,6 +165,8 @@ export function normalizeRecording(r: Recording): Recording {
     if (isObj(v.error)) delete v.error.request_log_url;
     const card = v.object === "refund" && isObj(v.destination_details) ? v.destination_details.card : undefined;
     if (isObj(card)) for (const k of REFUND_REFERENCE) delete card[k];
+    const pmCard = isObj(v.payment_method_details) ? v.payment_method_details.card : undefined;
+    if (isObj(pmCard) && pmCard.electronic_commerce_indicator != null) pmCard.electronic_commerce_indicator = "<opaque>";
     const out: Obj = {};
     for (const [k, x] of Object.entries(v)) out[k] = field(v, k, x);
     return out;

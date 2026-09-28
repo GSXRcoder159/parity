@@ -105,3 +105,11 @@ test("endpoint: ids and route params become {id}; named segments stay", () => {
   assert.equal(endpoint("POST", "/v1/invoices/create_preview"), "POST /v1/invoices/create_preview");
   assert.equal(endpoint("GET", "/v1/customers"), "GET /v1/customers");
 });
+
+test("endpoint: test_helpers namespaces the resource (test clock routes, resolved or as template refs)", () => {
+  assert.equal(endpoint("POST", "/v1/test_helpers/test_clocks"), "POST /v1/test_helpers/test_clocks");
+  assert.equal(endpoint("POST", "/v1/test_helpers/test_clocks/$ck.id/advance"), "POST /v1/test_helpers/test_clocks/{id}/advance");
+  assert.equal(endpoint("POST", "/v1/test_helpers/test_clocks/clock_1AbcDEFghij12/advance"), "POST /v1/test_helpers/test_clocks/{id}/advance");
+  assert.equal(endpoint("GET", "/v1/test_helpers/test_clocks/clock_1AbcDEFghij12"), "GET /v1/test_helpers/test_clocks/{id}");
+  assert.equal(endpoint("DELETE", "/v1/test_helpers/test_clocks/$ck.id"), "DELETE /v1/test_helpers/test_clocks/{id}");
+});

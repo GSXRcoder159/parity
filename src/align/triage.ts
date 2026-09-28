@@ -37,8 +37,11 @@ const NAMED = new Set(["search", "create_preview", "upcoming"]); // literal segm
 
 /** `POST /v1/payment_methods/{id}/attach`: ids, refs and route params become `{id}`. */
 export function endpoint(method: string, path: string): string {
-  const [, v, res, id, action, sub] = path.split("?")[0]!.split("/");
-  const parts = [v, res];
+  const [, v, ...segs] = path.split("?")[0]!.split("/");
+  // `test_helpers` namespaces a resource: `/v1/test_helpers/test_clocks/{id}/advance`.
+  const ns = segs[0] === "test_helpers" ? [segs.shift()!] : [];
+  const [res, id, action, sub] = segs;
+  const parts = [v, ...ns, res];
   if (id !== undefined) parts.push(NAMED.has(id) ? id : "{id}");
   if (action !== undefined) parts.push(action);
   if (sub !== undefined) parts.push("{id}");

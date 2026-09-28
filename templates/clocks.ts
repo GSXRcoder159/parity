@@ -99,6 +99,8 @@ export const clockDeclinedRenewal: Template = {
       ...advance("$s1.items.data.0.current_period_end"),
       invoices("l1"),
       // After the declined charge the sandbox clock stays `advancing` for minutes (cause unknown).
+      // ponytail: 600 s is 1.5x the slowest declined-card advance seen (393 s over 6 clocks, reports/2026-09-27-clocks.md),
+      // not a bound; poll the clock until `ready` if a retrieve here ever comes back `advancing`.
       ...advance("$l1.data.0.automatically_finalizes_at", 600_000),
       retrieve,
       invoices(),

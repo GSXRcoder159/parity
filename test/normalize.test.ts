@@ -30,8 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.3");
-  assert.equal(RULES.length, 11);
+  assert.equal(NORMALIZATION_VERSION, "v1.4");
+  assert.equal(RULES.length, 13);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -204,6 +204,38 @@ test("v1.3: a test clock's deletes_after and status_details.advancing.target_fro
   assert.deepEqual(body(a, 0), body(b, 0));
   assert.equal(body(a, 0).deletes_after, "<t:+720h>");
   assert.equal(body(a, 0).status_details.advancing.target_frozen_time, "<t:+24h>");
+});
+
+test("v1.4: a declined invoice's next_payment_attempt is a day offset; before any attempt, and on other objects, it stays hourly", () => {
+  // The sandbox attempts at t0 + 33 days and retries 42–46 h later: both ends of that spread compare equal.
+  const at = T0 + 33 * 86400;
+  const run = (retryH: number) =>
+    normalizeRecording(
+      rec([
+        step(0, { object: "price", created: T0 }),
+        step(1, { object: "list", data: [{ object: "invoice", attempt_count: 1, attempted: true, next_payment_attempt: at + retryH * 3600 }, { object: "invoice", attempt_count: 0, next_payment_attempt: at + 3600 }] }),
+        step(2, { object: "subscription", attempt_count: 1, next_payment_attempt: at + retryH * 3600 }),
+      ]),
+    );
+  const [a, b] = [run(42), run(46)];
+  assert.deepEqual(body(a, 1), body(b, 1));
+  assert.equal(body(a, 1).data[0].next_payment_attempt, "<t:+35d>");
+  assert.equal(body(a, 1).data[1].next_payment_attempt, "<t:+793h>"); // no attempt yet: hour-granular
+  assert.equal(body(a, 2).next_payment_attempt, "<t:+834h>"); // not an invoice: hour-granular
+  assert.notDeepEqual(body(a, 2), body(b, 2));
+  // A retry a day later is still a divergence.
+  assert.equal(body(run(70), 1).data[0].next_payment_attempt, "<t:+36d>");
+});
+
+test("v1.4: payment_method_details.card.electronic_commerce_indicator is opaque unless null; 3DS's is compared", () => {
+  // Made-up values: any non-null value normalizes.
+  const charge = (eci: string | null) => ({ object: "charge", payment_method_details: { card: { brand: "visa", electronic_commerce_indicator: eci, three_d_secure: { electronic_commerce_indicator: eci } } } });
+  const [a, b] = [normalizeRecording(rec([step(0, charge("e1")), step(1, { object: "list", data: [{ latest_charge: charge("e1") }] })])), normalizeRecording(rec([step(0, charge("e2")), step(1, { object: "list", data: [{ latest_charge: charge("e2") }] })]))];
+  assert.equal(body(a, 0).payment_method_details.card.electronic_commerce_indicator, "<opaque>");
+  assert.equal(body(a, 1).data[0].latest_charge.payment_method_details.card.electronic_commerce_indicator, "<opaque>");
+  assert.equal(body(a, 0).payment_method_details.card.three_d_secure.electronic_commerce_indicator, "e1");
+  assert.notDeepEqual(body(a, 0), body(b, 0), "the 3DS ECI still differs");
+  assert.equal(body(normalizeRecording(rec([step(0, charge(null))])), 0).payment_method_details.card.electronic_commerce_indicator, null);
 });
 
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {

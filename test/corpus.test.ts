@@ -80,6 +80,14 @@ test("clock templates: one clock, at most 3 customers on it, at most 2 advances 
   }
 });
 
+test("clock-declined-renewal: its second advance is waited out for >= 600 s (declined-card advances took 208–393 s)", () => {
+  for (const s of corpus.filter((q) => q.template === "clock-declined-renewal")) {
+    const advances = s.steps.flatMap((st, i) => (st.path.endsWith("/advance") ? [i] : []));
+    assert.equal(advances.length, 2, s.id);
+    assert.ok((s.steps[advances[1]! + 1]!.waitMs ?? 0) >= 600_000, `${s.id}: waits ${s.steps[advances[1]! + 1]!.waitMs} ms`);
+  }
+});
+
 test("parseSeeds", () => {
   assert.deepEqual(parseSeeds("1-20"), Array.from({ length: 20 }, (_, i) => i + 1));
   assert.deepEqual(parseSeeds("3,5,9"), [3, 5, 9]);

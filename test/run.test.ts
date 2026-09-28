@@ -53,6 +53,8 @@ let events = EVENTS; // served 4 per page, like a newest-first Stripe list
 let eventFaults: number[] = []; // statuses /v1/events answers (in order) before serving pages
 let onEventsGet: (() => void) | undefined; // runs before each /v1/events answer (events arriving mid-sweep)
 let limited = false; // every non-events request answers 429, like a rate-limited key
+let clocks: string[] = []; // the account's test clocks, newest first, listed 1 per page
+let clockN = 0;
 const server = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -71,6 +73,21 @@ const server = createServer(async (req, res) => {
       { id: CUS, object: "customer", count: 7, proration_behavior: "create_prorations", subscriptions: { data: [{ id: SUB }] } },
       { "idempotent-replayed": "false" },
     );
+  }
+  if (url.pathname === "/v1/test_helpers/test_clocks") {
+    if (req.method === "POST") {
+      clocks.unshift(`clock_Test${String(++clockN).padStart(10, "0")}`);
+      return json(200, { id: clocks[0], object: "test_helpers.test_clock" });
+    }
+    const after = url.searchParams.get("starting_after");
+    const from = after ? clocks.indexOf(after) + 1 : 0;
+    return json(200, { object: "list", has_more: from + 1 < clocks.length, data: clocks.slice(from, from + 1).map((id) => ({ id, object: "test_helpers.test_clock" })) });
+  }
+  const clock = /^\/v1\/test_helpers\/test_clocks\/(\w+)$/.exec(url.pathname);
+  if (clock && req.method === "DELETE") {
+    if (!clocks.includes(clock[1]!)) return json(404, { error: { type: "invalid_request_error" } });
+    clocks = clocks.filter((c) => c !== clock[1]);
+    return json(200, { id: clock[1], object: "test_helpers.test_clock", deleted: true });
   }
   const obj = /^\/v1\/(\w+)s\/(\w+)$/.exec(url.pathname); // GET/DELETE /v1/<type>s/<id> echoes the id
   if (obj && req.method !== "POST") return json(200, { id: obj[2], object: obj[1] });
@@ -393,6 +410,38 @@ test("runCorpus: maxGets halts the run when the read budget is spent; the halted
   assert.equal(seen.filter((r) => r.method === "GET").length, 3, "no fourth GET reached the server");
   assert.deepEqual(recordings.map((r) => r.steps.map((s) => s.status)), [[200, 200, 200], [200, 200, 0]]);
   assert.ok(recordings.every((r) => r.eventsError === `not collected: ${reason}`), "no event sweep past the budget");
+});
+
+test("runCorpus deleteLeftoverClocks: deletes this run's clocks the account still lists, never another's, after the sweep; within the read budget", async () => {
+  seen.length = 0;
+  clocks = ["clock_Foreign12345678"]; // not this run's: never deleted
+  const create: Step = { ref: "ck", method: "POST", path: "/v1/test_helpers/test_clocks" };
+  const seqs = [seq([create, { method: "DELETE", path: "/v1/test_helpers/test_clocks/$ck.id" }], "a#1"), seq([create], "b#2")]; // b#2 leaks its clock
+  const { summary } = await runCorpus(seqs, local, { concurrency: 1, runId: "r", deleteLeftoverClocks: true });
+  const leaked = "clock_Test" + String(clockN).padStart(10, "0");
+  assert.deepEqual(summary.clocks, { created: 2, leftOver: 1, deleted: 1 });
+  assert.deepEqual(clocks, ["clock_Foreign12345678"]);
+  // After the event sweep (its delete events stay out of the recordings), only the check: the list pages (1 clock each:
+  // the leak, then the foreign one), then the leak's delete.
+  const sweepEnd = seen.findLastIndex((r) => r.url.startsWith("/v1/events"));
+  assert.ok(sweepEnd > 0, "a sweep ran");
+  const check = seen.slice(sweepEnd + 1).map((r) => `${r.method} ${r.url}`);
+  assert.deepEqual(check, ["GET /v1/test_helpers/test_clocks?limit=100", `GET /v1/test_helpers/test_clocks?limit=100&starting_after=${leaked}`, `DELETE /v1/test_helpers/test_clocks/${leaked}`]);
+  assert.equal(summary.gets, seen.filter((r) => r.method === "GET").length, "the check's GETs are counted (ledgered)");
+  assert.equal(summary.deletes, 2);
+
+  // Budget spent: the check's list GET is never sent, and the summary says so.
+  seen.length = 0;
+  const halted = await runCorpus([seq([create], "c#3")], { ...local, eventWaitMs: 0 }, { concurrency: 1, runId: "r", maxGets: 0, deleteLeftoverClocks: true });
+  assert.match(halted.summary.clocks?.error ?? "", /^not sent: run halted: the read budget allowed 0 more sandbox GETs/);
+  assert.deepEqual(seen.map((r) => r.method), ["POST"]);
+  // Without the flag (URL targets), or when the run created no clock, no check.
+  seen.length = 0;
+  const off = await runCorpus([seq([create], "d#4")], { ...local, eventWaitMs: 0 }, { concurrency: 1, runId: "r" });
+  const none = await runCorpus([seq([{ method: "POST", path: "/v1/customers" }], "e#5")], { ...local, eventWaitMs: 0 }, { concurrency: 1, runId: "r", deleteLeftoverClocks: true });
+  assert.deepEqual([off.summary.clocks, none.summary.clocks], [undefined, { created: 0, leftOver: 0, deleted: 0 }]);
+  assert.deepEqual(seen.map((r) => r.method), ["POST", "POST"]);
+  clocks = [];
 });
 
 test("runCorpus: circuit breaker aborts after 10 consecutive steps ending 429; rest recorded as not sent, no sweep", { timeout: 30_000 }, async () => {

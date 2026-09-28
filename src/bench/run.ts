@@ -101,6 +101,8 @@ export interface RunSummary {
   retries429: number;
   eventOverlaps: number;
   aborted?: string;
+  /** The leak check (runCorpus `deleteLeftoverClocks`): this run's test clocks, those still listed, those deleted now. */
+  clocks?: { created: number; leftOver: number; deleted: number; error?: string };
 }
 
 const newSummary = (): RunSummary => ({ requests: 0, gets: 0, posts: 0, deletes: 0, eventSweepGets: 0, retries429: 0, eventOverlaps: 0 });
@@ -290,6 +292,41 @@ async function sweepEvents(io: Io, target: Target, sinceSec: number, capMs: numb
   return all;
 }
 
+const CLOCKS = "/v1/test_helpers/test_clocks";
+
+/**
+ * The leak check: the test clocks this run created (its 200s to POST /v1/test_helpers/test_clocks) that GET
+ * /v1/test_helpers/test_clocks still lists are deleted. A sequence that stopped before its last step (the clock's DELETE)
+ * leaves its clock, customer and subscription behind. Other clocks on the account are never touched. Never throws.
+ */
+async function deleteLeftoverClocks(io: Io, target: Target, recs: Recording[]): Promise<NonNullable<RunSummary["clocks"]>> {
+  const ours = new Set(recs.flatMap((r) => r.steps).flatMap((s) => (s.method === "POST" && s.path === CLOCKS && s.status === 200 ? [(s.body as { id: string }).id] : [])));
+  const out: NonNullable<RunSummary["clocks"]> = { created: ours.size, leftOver: 0, deleted: 0 };
+  if (!ours.size) return out;
+  if (io.stats.aborted) return { ...out, error: `not checked: ${io.stats.aborted}` };
+  try {
+    const left: string[] = [];
+    for (let cursor: string | undefined; ; ) {
+      const r = await send(io, target, "GET", CLOCKS, encodeForm({ limit: 100, starting_after: cursor }));
+      if (r.status !== 200) throw new Error(`GET ${CLOCKS} -> ${r.status}`);
+      const page = JSON.parse(r.text) as { data: { id: string }[]; has_more: boolean };
+      left.push(...page.data.map((c) => c.id).filter((id) => ours.has(id)));
+      cursor = page.data.at(-1)?.id;
+      if (!page.has_more || !cursor) break;
+    }
+    out.leftOver = left.length;
+    for (const id of left) {
+      // An advancing clock refuses its delete (429, after send's retries); it expires at its deletes_after (30 days).
+      const r = await send(io, target, "DELETE", `${CLOCKS}/${id}`, "");
+      if (r.status === 200) out.deleted++;
+      else out.error ??= `DELETE ${CLOCKS}/{id} -> ${r.status}`;
+    }
+  } catch (e) {
+    out.error = errMsg(e);
+  }
+  return out;
+}
+
 /**
  * Runs the corpus, then ONE event sweep for all of it (events are attached after every sequence has
  * finished). `onRecord` fires as each sequence's steps finish, BEFORE its events are attached: use it
@@ -297,11 +334,19 @@ async function sweepEvents(io: Io, target: Target, sinceSec: number, capMs: numb
  * `headersFor(seq)` headers go on every step of that sequence; when they set `Parity-Now`, the sweep covers events
  * created since min(Parity-Now) − 60 s instead of the wall-clock start − 60 s. If the circuit breaker trips, the rest of the
  * corpus is recorded as not sent (status 0), the sweep is skipped, and every recording gets `eventsError`.
+ * `deleteLeftoverClocks` (sandbox record) ends the run with the leak check, after the sweep, into `summary.clocks`.
  */
 export async function runCorpus(
   seqs: Sequence[],
   target: Target,
-  opts: { concurrency: number; runId: string; onRecord?: (r: Recording) => void; headersFor?: (seq: Sequence) => Record<string, string>; maxGets?: number },
+  opts: {
+    concurrency: number;
+    runId: string;
+    onRecord?: (r: Recording) => void;
+    headersFor?: (seq: Sequence) => Record<string, string>;
+    maxGets?: number;
+    deleteLeftoverClocks?: boolean;
+  },
 ): Promise<{ recordings: Recording[]; summary: RunSummary }> {
   const io: Io = { take: createLimiter(target.rps ?? 1000), stats: newSummary(), streak429: 0, maxGets: opts.maxGets };
   // A target answering as of Parity-Now (the twin) stamps events with it: the sweep starts at the earliest one, not wall clock.
@@ -319,12 +364,10 @@ export async function runCorpus(
   };
   await Promise.all(Array.from({ length: opts.concurrency }, worker));
 
+  const idSets = out.map((r) => idsIn(r.steps));
   if (io.stats.aborted) {
     for (const r of out) r.eventsError = `not collected: ${io.stats.aborted}`;
-    return { recordings: out, summary: io.stats };
-  }
-  const idSets = out.map((r) => idsIn(r.steps));
-  if (target.eventWaitMs !== 0 && idSets.some((s) => s.size > 0)) {
+  } else if (target.eventWaitMs !== 0 && idSets.some((s) => s.size > 0)) {
     const gets0 = io.stats.gets;
     try {
       // ponytail: pages every account event since corpus start − 60 s; filter by type if other traffic on the account grows.
@@ -340,5 +383,7 @@ export async function runCorpus(
     }
     io.stats.eventSweepGets = io.stats.gets - gets0;
   }
+  // After the sweep: the clocks' delete events must not land in the recordings.
+  if (opts.deleteLeftoverClocks) io.stats.clocks = await deleteLeftoverClocks(io, target, out);
   return { recordings: out, summary: io.stats };
 }
