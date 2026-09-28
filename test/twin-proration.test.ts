@@ -6,8 +6,12 @@ import assert from "node:assert/strict";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { encodeForm, resolveRefs } from "../src/bench/run.ts";
 import { addInterval } from "../src/twin/billing.ts";
+import { CATALOG } from "../src/twin/errors.ts";
 import { createTwin } from "../src/twin/server.ts";
 import { TEMPLATES } from "../templates/index.ts";
+
+/** The catalog's current message for `key`: messages are the align loop's to seed (decision 0002 §4.3), so tests never pin the placeholder. */
+const msg = (key: string): string => CATALOG[key]!.message;
 
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
@@ -176,10 +180,10 @@ test("mid-period proration: by the second over the item period, each amount roun
   assert.deepEqual(lineAmounts(p).slice(-3), [[-333, true], [1000, true], [3001, false]]);
   // A proration_date before the last debit's start spans two debits (docs: one credit per original debit): refused.
   const early = await update(t, sub, { items: [{ id: si, price: C.id }], proration_date: T0 + 10 * 86400 }, day25);
-  assert.equal(early.body.error.message, "parity: not_implemented");
+  assert.equal(early.body.error.message, msg("not_implemented"));
   // A proration date outside the item's current period is refused.
   const late = await update(t, sub, { items: [{ id: si, price: C.id }], proration_date: END + 1 });
-  assert.equal(late.body.error.message, "parity: not_implemented");
+  assert.equal(late.body.error.message, msg("not_implemented"));
 });
 
 test("flexible mode: the credit follows the last billed price (docs example: none, then always_invoice back nets 0)", async () => {
@@ -311,7 +315,7 @@ test("billing_cycle_anchor=now: with item changes, unused time is credited and t
     await preview({ billing_cycle_anchor: "now" }),
   ];
   assert.deepEqual(refused.map(cell), Array(3).fill("400 invalid_request_error"));
-  assert.deepEqual(refused.map((r) => r.body.error.message), Array(3).fill("parity: not_implemented"));
+  assert.deepEqual(refused.map((r) => r.body.error.message), Array(3).fill(msg("not_implemented")));
   assert.equal(t.store.events.length, from + 1);
 });
 
@@ -331,7 +335,7 @@ test("a credit needs one debit that billed the whole credited span; otherwise re
     await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: B.id }] } }, at(day)),
     await update(t, sub, { items: [{ id: added.id, deleted: true }] }, day),
   ];
-  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(4).fill("parity: not_implemented"));
+  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(4).fill(msg("not_implemented")));
   assert.equal(t.store.events.length, from);
   // Changes without prorations still go through.
   const up = (await update(t, sub, { items: [{ id: si, price: B.id }], proration_behavior: "none" }, day)).body;
@@ -354,11 +358,11 @@ test("create_preview: a new subscription's first invoice, validation, and GET /v
     await call(t, "GET", "/v1/invoices/upcoming", { customer: c.id }),
   ];
   assert.deepEqual(bad.map((r) => [cell(r), r.body.error.param, r.body.error.message]), [
-    ["400 invalid_request_error", undefined, "parity: invoice_preview_target_missing"],
-    ["400 parameter_missing", "customer", "parity: parameter_missing"],
-    ["400 resource_missing", "subscription", "parity: resource_missing_400"],
-    ["400 invalid_request_error", undefined, "parity: not_implemented"],
-    ["404 invalid_request_error", undefined, "parity: invoice_upcoming_deprecated"],
+    ["400 invalid_request_error", undefined, msg("invoice_preview_target_missing")],
+    ["400 parameter_missing", "customer", msg("parameter_missing")],
+    ["400 resource_missing", "subscription", msg("resource_missing_400")],
+    ["400 invalid_request_error", undefined, msg("not_implemented")],
+    ["404 invalid_request_error", undefined, msg("invoice_upcoming_deprecated")],
   ]);
 });
 
@@ -376,7 +380,7 @@ test("create_preview: an anchor timestamp is refused, not read as unchanged; a n
     await preview({ customer: c.id, subscription_details: { items, billing_cycle_anchor: "now" } }),
     await preview({ customer: c.id, subscription_details: { items, proration_date: HALF } }),
   ];
-  assert.deepEqual(refused.map((r) => [r.status, r.body.error?.message]), Array(5).fill([400, "parity: not_implemented"]));
+  assert.deepEqual(refused.map((r) => [r.status, r.body.error?.message]), Array(5).fill([400, msg("not_implemented")]));
   // unchanged is the renewal preview; proration_behavior without an anchor changes nothing on a new subscription.
   const renewal = (await preview({ subscription: sub.id })).body;
   const unchanged = (await preview({ subscription: sub.id, subscription_details: { billing_cycle_anchor: "unchanged" } })).body;
@@ -397,7 +401,7 @@ test("a price on another billing period: only with billing_cycle_anchor=now (fle
     await update(t, sub, { items: [{ id: si, price: yearly.id }], billing_cycle_anchor: "unchanged" }),
     await call(t, "POST", "/v1/invoices/create_preview", { subscription: sub.id, subscription_details: { items: [{ id: si, price: yearly.id }] } }, at(HALF)),
   ];
-  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(3).fill("parity: not_implemented"));
+  assert.deepEqual(refused.map((r) => r.body.error?.message), Array(3).fill(msg("not_implemented")));
   assert.equal(t.store.events.length, from);
 
   // With it: A's unused half month credited, the year billed in full now; the preview shows the same invoice.
@@ -419,7 +423,7 @@ test("a period change by deleting the item and adding one (Python's items[0][del
   // Two monthly items, one moved to yearly: the result mixes periods, refused.
   const [, extra] = (await update(t, sub, { items: [{ price: B.id }], proration_behavior: "none" }, T0)).body.items.data;
   const mixed = await update(t, sub, { items: [{ id: extra.id, price: yearly.id }], billing_cycle_anchor: "now" });
-  assert.equal(mixed.body.error?.message, "parity: not_implemented");
+  assert.equal(mixed.body.error?.message, msg("not_implemented"));
   const items = [{ id: si, deleted: "True" }, { id: extra.id, deleted: "True" }, { price: yearly.id }];
   const up = (await update(t, sub, { items, billing_cycle_anchor: "now", proration_behavior: "none" })).body;
   assert.deepEqual([up.items.data.length, up.items.data[0].price.id, up.items.data[0].current_period_end, up.quantity], [1, yearly.id, addInterval(HALF, "year"), 1]);

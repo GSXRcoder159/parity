@@ -6,8 +6,12 @@ import assert from "node:assert/strict";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { encodeForm, resolveRefs } from "../src/bench/run.ts";
 import { addInterval } from "../src/twin/billing.ts";
+import { CATALOG } from "../src/twin/errors.ts";
 import { createTwin } from "../src/twin/server.ts";
 import { TEMPLATES } from "../templates/index.ts";
+
+/** The catalog's current message for `key`: messages are the align loop's to seed (decision 0002 §4.3), so tests never pin the placeholder. */
+const msg = (key: string): string => CATALOG[key]!.message;
 
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
@@ -334,7 +338,7 @@ test("subscription create validation: nothing persists on a failed create", asyn
     { items: [{ price_data: { ...inline, tax_behavior: "exclusive" } }] },
     { items: [{ price_data: { ...inline, unit_amount: undefined, unit_amount_decimal: "700" } }] },
   ])
-    assert.equal(await w4(params), "parity: not_implemented", JSON.stringify(params));
+    assert.equal(await w4(params), msg("not_implemented"), JSON.stringify(params));
   const types = [...t.store.objects.values()].map((o) => o.object);
   assert.deepEqual([types.includes("subscription"), types.includes("invoice"), types.includes("payment_intent")], [false, false, false]);
 });
@@ -379,7 +383,7 @@ test("price_data items, subscription and invoice list filters, W4 endpoints answ
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/pay`),
     await call(t, "POST", `/v1/invoices/${b.latest_invoice}/finalize`),
   ];
-  assert.deepEqual(w4.map((r) => `${r.status} ${r.body.error.message}`), w4.map(() => "400 parity: not_implemented"));
+  assert.deepEqual(w4.map((r) => `${r.status} ${r.body.error.message}`), w4.map(() => `400 ${msg("not_implemented")}`));
   assert.equal((await call(t, "POST", "/v1/invoices/in_Missing1234567890/pay")).status, 404);
   assert.equal((await call(t, "GET", `/v1/subscriptions/${b.id}`)).body.status, "active");
 });

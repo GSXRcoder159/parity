@@ -9,6 +9,9 @@ import { parseForm } from "../src/twin/form.ts";
 import { list, search } from "../src/twin/list.ts";
 import { type Route, createTwin } from "../src/twin/server.ts";
 
+/** The catalog's current message for `key`: messages are the align loop's to seed (decision 0002 §4.3), so tests never pin the placeholder. */
+const msg = (key: string): string => CATALOG[key]!.message;
+
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
 
@@ -109,12 +112,12 @@ test("auth: missing and invalid keys are 401; Bearer and Basic keys pass", async
   const { error } = missing.body as Obj;
   assert.deepEqual(Object.keys(error), ["type", "message", "request_log_url"]);
   assert.equal(error.type, "invalid_request_error");
-  assert.equal(error.message, "parity: api_key_missing");
+  assert.equal(error.message, msg("api_key_missing"));
   assert.equal(error.request_log_url, `https://dashboard.stripe.com/test/logs/${missing.headers["Request-Id"]}`);
 
   const live = await call(t, "GET", "/v1/events", undefined, { Authorization: "Bearer sk_live_nope" });
   assert.equal(live.status, 401);
-  assert.equal(live.body.error.message, "parity: api_key_invalid");
+  assert.equal(live.body.error.message, msg("api_key_invalid"));
 
   const basic = await call(t, "GET", "/v1/events", undefined, { Authorization: `Basic ${Buffer.from("rk_test_x:").toString("base64")}` });
   assert.equal(basic.status, 200);
@@ -125,7 +128,7 @@ test("unmatched method or path is unrecognized_url (404, no code)", async () => 
   for (const [m, p] of [["GET", "/v1/nope"], ["DELETE", "/v1/events"], ["GET", "/_parity/nope"]] as const) {
     const r = await call(t, m, p);
     assert.equal(r.status, 404, `${m} ${p}`);
-    assert.equal(r.body.error.message, "parity: unrecognized_url");
+    assert.equal(r.body.error.message, msg("unrecognized_url"));
     assert.equal(r.body.error.code, undefined);
   }
 });
@@ -145,7 +148,7 @@ test("unknown parameters are rejected at any depth with bracket names", async ()
       type: "invalid_request_error",
       code: "parameter_unknown",
       param,
-      message: "parity: parameter_unknown",
+      message: msg("parameter_unknown"),
       doc_url: "https://stripe.com/docs/error-codes/parameter-unknown",
       request_log_url: `https://dashboard.stripe.com/test/logs/${r.headers["Request-Id"]}`,
     });
@@ -270,9 +273,9 @@ test("form strings are coerced to the schema's types; bad integers, enums and bo
     ],
   );
   const e = await bad("POST", "/v1/customers", { tax_exempt: "sometimes" });
-  assert.deepEqual([e.code, e.param, e.message], [undefined, "tax_exempt", "parity: parameter_invalid_enum"]);
+  assert.deepEqual([e.code, e.param, e.message], [undefined, "tax_exempt", msg("parameter_invalid_enum")]);
   const b = await bad("GET", "/v1/events", { delivery_success: "maybe" });
-  assert.deepEqual([b.code, b.param, b.message], [undefined, "delivery_success", "parity: parameter_invalid"]);
+  assert.deepEqual([b.code, b.param, b.message], [undefined, "delivery_success", msg("parameter_invalid")]);
 });
 
 test("idempotency: replay, mismatch, replayed errors, validation errors not stored, 24 h expiry", async () => {
@@ -434,7 +437,7 @@ test("expand through the server resolves nested ids and an invalid path leaves n
 
   const bad = await call(t, "POST", "/v1/customers", { email: "a@example.com", expand: ["email"] });
   assert.equal(bad.status, 400);
-  assert.equal(bad.body.error.message, "parity: expand_invalid");
+  assert.equal(bad.body.error.message, msg("expand_invalid"));
   assert.equal(t.store.objects.size, 2);
   assert.equal(t.store.events.length, 1);
 });

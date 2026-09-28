@@ -5,10 +5,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { encodeForm, resolveRefs } from "../src/bench/run.ts";
-import { TwinError } from "../src/twin/errors.ts";
+import { CATALOG, TwinError } from "../src/twin/errors.ts";
 import { createTwin } from "../src/twin/server.ts";
 import { validate } from "../src/twin/validate.ts";
 import { TEMPLATES } from "../templates/index.ts";
+
+/** The catalog's current message for `key`: messages are the align loop's to seed (decision 0002 §4.3), so tests never pin the placeholder. */
+const msg = (key: string): string => CATALOG[key]!.message;
 
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
@@ -81,12 +84,12 @@ for (const seed of [1, 2, 3, 4]) {
     if (paidFirst) {
       assert.deepEqual([after.status, after.amount_paid, after.amount_remaining, after.status_transitions.paid_at, after.status_transitions.voided_at], ["paid", amount, 0, T0, null]);
       assert.equal(cancel!.cancellation_reason, "duplicate");
-      assert.equal(err.message, "parity: invoice_void_paid");
+      assert.equal(err.message, msg("invoice_void_paid"));
       assert.deepEqual(types(twin), [...SETUP, ...FINALIZED, "invoice.paid", "invoice.payment_succeeded", "invoice.updated", "payment_intent.canceled"].sort());
     } else {
       assert.deepEqual([after.status, after.amount_paid, after.amount_remaining, after.status_transitions.voided_at, after.status_transitions.paid_at], ["void", 0, amount, T0, null]);
       assert.equal(cancel!.cancellation_reason, "void_invoice");
-      assert.equal(err.message, "parity: invoice_pay_voided");
+      assert.equal(err.message, msg("invoice_pay_voided"));
       assert.deepEqual(types(twin), [...SETUP, ...FINALIZED, "invoice.updated", "invoice.voided", "payment_intent.canceled"].sort());
     }
     // The refused action changed nothing.
@@ -130,9 +133,9 @@ test("refused transitions leave no state behind: void a draft, pay/void/finalize
   const { inv } = await subscribe(t, { collection: "send_invoice" });
   const from = t.store.events.length;
   const draftVoid = await act(t, inv, "void");
-  assert.deepEqual([cell(draftVoid), draftVoid.body.error.message], ["400 invalid_request_error", "parity: invoice_not_open"]);
+  assert.deepEqual([cell(draftVoid), draftVoid.body.error.message], ["400 invalid_request_error", msg("invoice_not_open")]);
   const payMethod = await act(t, inv, "pay", { payment_method: "pm_card_visa" }); // only the default payment method
-  assert.equal(payMethod.body.error.message, "parity: not_implemented");
+  assert.equal(payMethod.body.error.message, msg("not_implemented"));
   assert.equal(t.store.events.length, from);
 
   const { inv: a } = await subscribe(t, { collection: "send_invoice" });
@@ -143,7 +146,7 @@ test("refused transitions leave no state behind: void a draft, pay/void/finalize
   await act(t, b, "void");
   const n = t.store.events.length;
   const refused = [await act(t, a, "finalize"), await act(t, a, "pay", { paid_out_of_band: true }), await act(t, b, "void"), await act(t, b, "finalize")];
-  assert.deepEqual(refused.map((r) => [r.status, r.body.error.message]), Array(4).fill([400, "parity: not_implemented"]));
+  assert.deepEqual(refused.map((r) => [r.status, r.body.error.message]), Array(4).fill([400, msg("not_implemented")]));
   assert.equal(t.store.events.length, n);
   // Missing invoices: 404 with param invoice on every action.
   const missing = await Promise.all(["finalize", "pay", "void"].map((x) => act(t, "in_Missing1234567890", x)));
@@ -164,13 +167,13 @@ test("update: metadata and description on draft and open invoices; DELETE refuse
   assert.deepEqual([open.metadata, open.description, open.status], [{}, null, "open"]);
 
   const del = await call(t, "DELETE", `/v1/invoices/${inv}`);
-  assert.deepEqual([cell(del), del.body.error.message], ["400 invalid_request_error", "parity: invoice_not_deletable"]);
+  assert.deepEqual([cell(del), del.body.error.message], ["400 invalid_request_error", msg("invoice_not_deletable")]);
   assert.equal((await call(t, "GET", `/v1/invoices/${inv}`)).body.status, "open");
   const footer = await call(t, "POST", `/v1/invoices/${inv}`, { footer: "x" });
   await act(t, inv, "pay", { paid_out_of_band: true });
   const n = t.store.events.length;
   const onPaid = await call(t, "POST", `/v1/invoices/${inv}`, { metadata: { k: "v" } });
-  assert.deepEqual([footer, onPaid].map((r) => [r.status, r.body.error.message]), Array(2).fill([400, "parity: not_implemented"]));
+  assert.deepEqual([footer, onPaid].map((r) => [r.status, r.body.error.message]), Array(2).fill([400, msg("not_implemented")]));
   assert.equal(t.store.events.length, n);
 });
 
@@ -212,7 +215,7 @@ test("an incomplete subscription: a declined pay answers 402, a pay with a new d
   // No payment method at all: the subscription create's error.
   const { inv: bare } = await subscribe(t, { behavior: "default_incomplete" });
   const none = await act(t, bare, "pay");
-  assert.deepEqual([cell(none), none.body.error.message], ["400 resource_missing", "parity: customer_no_payment_method"]);
+  assert.deepEqual([cell(none), none.body.error.message], ["400 resource_missing", msg("customer_no_payment_method")]);
 });
 
 test("the customer's balance is consumed at finalization, not by the draft; nothing due -> paid at once", async () => {
