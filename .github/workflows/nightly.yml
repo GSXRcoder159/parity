@@ -37,6 +37,9 @@ jobs:
           cache: npm
           cache-dependency-path: parity/package-lock.json
       - run: npm ci
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
       - name: Bot identity for commits in both repos
         run: |
           git config --global user.name "github-actions[bot]"
