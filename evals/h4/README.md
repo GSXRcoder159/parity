@@ -47,8 +47,18 @@ lower) may well stop it; the result is then a partial report with no verdict. Th
 `<data dir>/budget/llm.jsonl`: it is shared with the nightly's assisted pass only if you pull the data repo before a
 local run (the nightly pushes its spend there).
 
-## Status (2026-09-26)
+## Status (2026-09-28)
 
+- **H4 number (2026-09-28, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs sandbox 100.0% (20/20;
+  Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
+  noise floor 0.0%. Every run: 19 pass, 1 fail (`switch-to-annual`), 0 error. 250 model calls, $2.7459; the sandbox half
+  made 112 GET, 117 POST, 7 DELETE through the metered proxy. Report: `reports/2026-09-28-h4.md` (+ `.json`). Two caveats
+  (the report's "Reading"): the CI's lower bound is below the 90% stop line, so 20 tasks meet ≥95% on the point estimate
+  only; and `switch-to-annual` agrees as fail/fail for different reasons: the twin refuses the swap (the gap below),
+  while on the sandbox the swap succeeds and the task fails at its invoice check (the latest invoice is not a
+  `subscription_update` one). Strictly scored without it, 19/19 (CI 83.2%–100.0%). Tool inputs are not logged, so
+  whether that invoice result is the API's default for the swap or the agent's choice of parameters is open; it goes
+  to the recording task that owns the gap.
 - **Scripted agent on the twin: 19/20 pass; twin vs control 20/20** (the scripted agent is deterministic, so this
   checks the control path, not an agent; rerun 2026-09-26 after the final-review fixes, same result).
   `switch-to-annual` fails because the twin answers `not_implemented` to a price on another billing interval without
@@ -59,10 +69,6 @@ local run (the nightly pushes its spend there).
   `TWIN_GAPS`; the fix removes it from there.
 - **Booleans: fixed.** stripe-python 11.6 sends Python booleans as `True`/`False` (e.g. `items[0][deleted]=True`). W4
   Task 3 made the twin accept them (`src/twin/validate.ts`); the real API's acceptance is unverified until B1.
-- **LLM agent: not run.** There is no `ANTHROPIC_API_KEY` in the environment or `.env`. The tool-use loop, the ledger and
-  the caps are tested against a fake Messages API only, so there is no control number for the LLM agent yet either.
-- **Sandbox half: waits for B1.** The claimable key is refused, so there is no H4 number yet. The sandbox path is tested
-  only against a local stand-in upstream, through the metered proxy.
 
 ## The agent
 
