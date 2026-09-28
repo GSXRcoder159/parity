@@ -1,9 +1,9 @@
 # Baselines: exact commands (W1, 2026-09-26)
 
-These are the commands behind `reports/2026-09-26-baseline.md`, run from the repo root.
+These are the commands behind `reports/2026-09-26-baseline.md` (§1–§5) and `reports/2026-09-27-baseline-v1.md` (§6–§7, oracle v1), run from the repo root.
 - Raw recordings live in the private data dir (`PARITY_DATA_DIR`, here `../parity-data`).
 - Every `compare`/`bench` output and oracle subset goes under the gitignored `recordings/<date>/`. They all hold Stripe response values (decision 0001 C3).
-- Only `reports/2026-09-26-baseline.{md,json}` is committed.
+- Only the reports' `.md` and `.json` are committed.
 
 ```sh
 P=../parity-data          # PARITY_DATA_DIR default when the sibling exists
@@ -154,3 +154,46 @@ The oldest recording started 2026-09-26T00:01:40Z. `$P/oracle.jsonl` has sha256 
 - The held-out templates (#7, #9, #12, #18, #21, #28) were checked only through `oracle build`'s contamination predicate, by sequence id.
 
 **For Task 3's noise floor.** The pair is oracle vs `--noise $P/runs/2026-09-28/noise-a-20260928T011354-l3w0.jsonl`. It covers 60 of the 600 sequences, all 30 templates, and is out of sample for normalization v1.3. Nightly's `noiseFloor` pairs the same two files.
+
+## 7. Noise floor, stripe-mock and localstripe on oracle v1 (2026-09-28 UTC)
+
+B1-unblock Task 3, behind `reports/2026-09-27-baseline-v1.{md,json}`. The method is §2–§5's, on oracle v1 (sha256 `e1584d74…`, 600 sequences). There is no sandbox traffic: 0 GETs, and no LLM spend.
+
+```sh
+P=../parity-data
+D=recordings/2026-09-28   # gitignored
+
+# Noise floor: oracle v1 (seeds 1-2 are noise-b's recordings) vs noise-a. pair keeps 60 partners.
+node reports/baseline.ts pair $P/oracle.jsonl $D/v1-noise-oracle.jsonl $D/v1-noise-partner.jsonl \
+  $P/runs/2026-09-28/noise-a-20260928T011354-l3w0.jsonl
+node src/cli.ts compare --oracle $D/v1-noise-oracle.jsonl --target $D/v1-noise-partner.jsonl --out $D/v1-noise
+#   60 sequences · L1 100.0% · L2 100.0% · L3 99.3% · L4 95.0% (v1.3, method m2)
+
+# stripe-mock, pinned by digest; version checked live (Stripe-Mock-Version 0.205.0; -strict-version-check names 2026-08-26.dahlia)
+docker run --rm -d --name parity-stripe-mock -p 12111-12112:12111-12112 \
+  stripe/stripe-mock@sha256:ff32647993847be491e68533e2881c90434fa8d5df40246ee5f7d41253422081
+node src/cli.ts bench http://localhost:12111 --oracle $P/oracle.jsonl --out $D/v1-bench-stripe-mock
+#   run 20260928T015905-oi29: 600 sequences · requests 4609 (GET 1184 incl. 144 event-sweep, POST 3165, DELETE 260) · 429 retries 0 · wall 2212.3 s
+#   600 sequences · L1 83.7% · L2 4.9% · L3 3.1% · L4 0.0% (v1.3, method m2)
+docker rm -f parity-stripe-mock
+
+# localstripe 1.15.10: the same 127 served /v1/ routes (§4's route dump into $D/localstripe-routes.txt), then its surface of oracle v1
+uvx --from localstripe==1.15.10 localstripe --from-scratch &
+node reports/baseline.ts surface $D/localstripe-routes.txt $P/oracle.jsonl $D/v1-oracle-localstripe.jsonl
+#   included customer-crud, customer-list-pagination, payment-method-attach, idempotency-replay, boundaries-list-limits, idempotency-errors
+#   wrote …/v1-oracle-localstripe.jsonl: 120 sequences
+node src/cli.ts bench http://localhost:8420 --oracle $D/v1-oracle-localstripe.jsonl --out $D/v1-bench-localstripe
+#   run 20260928T020048-cxlu: 120 sequences · requests 672 · EVENT COLLECTION FAILED for 120 sequences: GET /v1/events -> 400
+#   120 sequences · L1 57.7% · L2 2.8% · L3 2.8% · L4 0.0% (v1.3, method m2)
+pkill -f localstripe
+
+# Report JSON (values stripped; now also carries the compare method)
+node reports/baseline.ts summarize --oracle $P/oracle.jsonl --noise $D/v1-noise.json \
+  --out reports/2026-09-27-baseline-v1.json \
+  stripe-mock=$D/v1-bench-stripe-mock.json localstripe=$D/v1-bench-localstripe.json > $D/v1-summary.md
+```
+
+- **Waits.** `bench` keeps each step's `waitMs` against every target; only `score-twin` drops them. The stripe-mock run therefore sleeps through the clock templates' waits (40 s after each advance, 600 s after #30's declined charge) and customer-search's 60 s, although stripe-mock answers at once: 2,212 s wall, almost all of it the 20 #30 sequences, which run in 3 waves of 8 at ~640 s each. A skip-waits flag for local targets was not added (YAGNI; score-twin already drops them for the twin).
+- **localstripe's surface** is §4's six templates. #27–#30 are excluded too: they need `POST /v1/prices` and `/v1/test_helpers/test_clocks`. (`surface`, and `summarize` in the JSON, print the clock routes as `/v1/test_helpers/{id}/$ck.id/…`, because `src/align/triage.ts` `endpoint()` treats the segment after `test_helpers` as an id. The report writes them as `/v1/test_helpers/test_clocks/{id}/…`.)
+- **localstripe and the wall clock.** 8 of its 120 oracle sequences were recorded on 2026-09-26 (#1, #2, #4, #14 × seeds 3–4), and localstripe ran on 2026-09-28. Its L4 is 0 on every sequence regardless: none of the 120 agrees on every step.
+- **Noise causes** were diagnosed with scratch scripts (not committed) that open values only in non-held-out recordings. No held-out template diverged in the pair.

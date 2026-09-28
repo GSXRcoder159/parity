@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { endpoint } from "../src/align/triage.ts";
-import type { SeqResult } from "../src/bench/compare.ts";
+import { METHOD, type SeqResult } from "../src/bench/compare.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { NORMALIZATION_VERSION, RULES } from "../src/bench/normalize.ts";
 import { contaminated } from "../src/bench/oracle.ts";
@@ -131,6 +131,7 @@ function summarize(args: string[]): void {
 
   const report = {
     normalization: { version: NORMALIZATION_VERSION, rules: RULES.map((r) => r.name) },
+    method: METHOD,
     oracle: {
       file: basename(oraclePath),
       sha256: createHash("sha256").update(readFileSync(oraclePath)).digest("hex"),
