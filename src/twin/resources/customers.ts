@@ -33,7 +33,8 @@ export const routes: Route[] = [
       checkAttached(ctx, defaultPm(params), undefined, DEFAULT_PM);
       const clock = params.test_clock ? (live(ctx, params.test_clock, "test_helpers.test_clock") ?? ctx.fail("resource_missing_400", { param: "test_clock" })) : undefined;
       if (clock && ctx.all("customer").filter((c) => c.test_clock === clock.id).length >= 3) ctx.fail("test_clock_customer_limit");
-      const c = assign(ctx.build("customer", { id: ctx.id("cus"), created: ctx.now(), test_clock: clock?.id ?? null }), params, FIELDS);
+      // Docs: a new customer starts its invoice numbering at 1, not 0.
+      const c = assign(ctx.build("customer", { id: ctx.id("cus"), created: ctx.now(), test_clock: clock?.id ?? null, next_invoice_sequence: 1 }), params, FIELDS);
       return { body: c, emits: [{ type: "customer.created", object: c }] };
     },
     "post /v1/customers",
