@@ -578,6 +578,7 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
   ].join("\n");
   const { git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-guard-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": await reverseOracle() }, { "test/pin.test.ts": PIN });
   const head0 = git(repo, "rev-parse", "HEAD");
+  const customerBefore = readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8"); // whatever align currently owns this to be, not a pinned literal
   const originLog = () => bare(dataOrigin, "show", "main:align/log.jsonl").split("\n").map((l) => JSON.parse(l) as LogEntry);
   const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
   process.env.STRIPE_API_KEY = "sk_test_never_sent";
@@ -591,7 +592,8 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
     // Nothing of the align commit is anywhere: not here, not on either origin, and no pending branch was pushed.
     assert.deepEqual(bare(parityOrigin, "log", "--format=%s", "main").split("\n").map((x) => x.replace(/ \(.*/s, "")), ["nightly 2026-10-05: curve point and scores", "init"]);
     assert.equal(git(repo, "rev-parse", "HEAD~1"), head0);
-    assert.equal(JSON.parse(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "none");
+    // The working tree was reverted too, not just the commit pointer: no leftover edit from the dropped align commit.
+    assert.equal(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8"), customerBefore);
     assert.equal(bare(dataOrigin, "for-each-ref", "refs/heads/nightly/"), "");
     const log = originLog();
     assert.ok(!log.some((e) => e.kind === "patch" || e.kind === "gate"), "the patch and gate entries were dropped with the commit");
