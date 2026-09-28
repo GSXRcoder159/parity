@@ -1,23 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { sh, type Run } from "../src/align/assist.ts";
 import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
+import { projectedGets } from "../src/bench/budget.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { ceilingText, changelog, logMerged, nightly, nightlyText, removedTotals } from "../src/nightly.ts";
+import { NORMALIZATION_VERSION } from "../src/bench/normalize.ts";
 import { createTwin } from "../src/twin/server.ts";
+import type { Recording } from "../src/types.ts";
 
 // site/app.js is browser JS with no build step; a computed specifier keeps tsc from asking for its types.
 const app = await import(new URL("../site/app.js", import.meta.url).href);
 
 const REPO = resolve(import.meta.dirname, "..");
+/** The nightly's corpus seeds (src/nightly.ts CORPUS_SEEDS). */
+const SEEDS = Array.from({ length: 20 }, (_, i) => i + 1);
 const ORACLE = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
 const GH_ARGS = ["pr", "list", "--state", "merged", "--json", "number,headRefName,mergedAt", "--limit", "200"];
 const pr = (number: number, headRefName: string, mergedAt: string | null = "2026-10-03T12:00:00Z") => ({ number, headRefName, mergedAt });
@@ -172,7 +177,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     };
     await assert.rejects(nightly({ repo, dataDir: data, env: {}, run: ghDown, now }), /gh: injected outage/);
     const origin = (...args: string[]) => git(tmp, "--git-dir", join(tmp, "origin.git"), ...args);
-    assert.match(origin("log", "-1", "--format=%s", "main"), /^nightly 2026-10-04 run \S+: recordings and read ledger$/);
+    assert.match(origin("log", "-1", "--format=%s", "main"), /^nightly 2026-10-04 run \S+: recordings, read ledger and rotation cursor$/);
     assert.deepEqual(origin("show", "--name-only", "--format=", "main").split("\n"), [late]);
     assert.equal(git(repo, "rev-parse", "HEAD"), head0, "it failed before publishing anything");
 
@@ -183,12 +188,17 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     // Step 1 refused at the budget gate: noted, the noise pair not attempted, the oracle not refreshed.
     assert.match(r.slice.refused ?? "", /^refusing to run: 5 sandbox GETs in the last 30 days \+ \d+ projected for this run = \d+ > read budget 0 \(/);
     assert.ok(r.slice.refused!.includes(`(${join(data, "budget/reads.jsonl")}; `), "the gate reads the data repo's ledger");
-    const corpus = TEMPLATES.length * 20; // slice 0/7: indices 0, 7, 14, …
-    assert.deepEqual([r.slice.spec, r.slice.seqs, r.slice.recorded], ["0/7", Math.ceil(corpus / 7), 0]);
+    // No rotation cursor yet: a Sunday's window starts at slice 0/7 (indices 0, 7, 14, …), a full seventh within the allowance.
+    const corpus = TEMPLATES.length * 20;
+    assert.deepEqual([r.slice.spec, r.slice.seqs, r.slice.recorded], [`0+${Math.ceil(corpus / 7)}/${corpus}`, Math.ceil(corpus / 7), 0]);
+    const seventh = projectedGets(buildCorpus(TEMPLATES, SEEDS).filter((_, i) => i % 7 === 0));
+    assert.ok(seventh < 1_213);
+    assert.equal(r.slice.allowance, seventh, "min(one seventh, floor((10000 − 1500 − 5 GETs) / 7) = 1213)");
     assert.deepEqual(r.noisePair, { seqs: TEMPLATES.length * 2, recorded: false });
     assert.equal(r.oracleRefreshed, false);
     assert.equal(r.oracle.oracleSeqs, 6);
-    assert.match(text, /^slice 0\/7: \d+ sequences · NOT RECORDED: refusing to run/m);
+    assert.match(text, /^slice 0\+86\/600: 86 sequences · NOT RECORDED: refusing to run/m);
+    assert.equal(existsSync(join(data, "budget/rotation.json")), false, "a refused slice leaves the cursor where it was");
     assert.match(text, /NOT refreshed tonight \(curve point oracleRefreshed: false\)/);
 
     // The sealed log: the refusal, the score (with the noise floor), align's gate, assist skipped, one merged PR, drift.
@@ -198,7 +208,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const at = (kind: string, key: string) => mine.filter((e) => e.kind === kind && key in e.data).map((e) => e.data[key]);
     assert.deepEqual(
       at("note", "nightly").map((n) => ({ ...(n as object), error: "…" })),
-      [{ date: "2026-10-04", step: "record slice 0/7", error: "…", oracleRefreshed: false }],
+      [{ date: "2026-10-04", step: "record slice 0+86/600", error: "…", oracleRefreshed: false }],
     );
     const scored = mine.filter((e) => e.kind === "score");
     assert.equal(scored.length, 1);
@@ -216,7 +226,8 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const pt = curve[0];
     // The failed night left a nightly score entry but never published: its surface-added entry is annotated here.
     // patches: sealed-log totals since the freeze, the manual --apply included.
-    assert.deepEqual([pt.date, pt.normalization, pt.method, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", "v1.3", "m2", false, 6, ["surface-added: test clocks"], { automatic: 1, assisted: 1 }, undefined]);
+    assert.deepEqual([pt.date, pt.normalization, pt.method, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", NORMALIZATION_VERSION, "m2", false, 6, ["surface-added: test clocks"], { automatic: 1, assisted: 1 }, undefined]);
+    assert.ok(Number.isInteger(pt.oracleMaxAgeDays) && pt.oracleMaxAgeDays === r.oracleMaxAgeDays);
     assert.equal(site("scores/2026-10-04.json").method, "m2");
     // Train divergences removed per class: the fixture's manual apply and merged PR carry no gate counts.
     assert.deepEqual([pt.divergencesRemoved, r.divergencesRemoved], [{ automatic: 0, assisted: 0 }, { automatic: 0, assisted: 0 }]);
@@ -317,44 +328,12 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
   }
 });
 
-test("nightly lands an align commit with its sealed-log entries: a failed parity push drops both here and leaves the pending branch, which the next night deletes unread, or relands when the push landed after all; a failed data push leaves them on a pending branch that the next night relands",{ timeout: 240_000 }, async () => {
-  // A sandbox recording where every customer's tax_exempt is "reverse": align --apply seeds it (one automatic patch).
-  const CLOCK = "2026-09-27T07:00:00.000Z";
-  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
-  const twin = createTwin();
-  const server = await twin.listen(0);
-  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
-  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "20260927T070000-aaaa", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  const reverse = (v: unknown): unknown =>
-    Array.isArray(v) ? v.map(reverse) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, (v as { object?: string }).object === "customer" && k === "tax_exempt" ? "reverse" : reverse(x)])) : v;
-  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: reverse(s.body) })) }));
-
-  const tmp = mkdtempSync(join(tmpdir(), "pb-land-"));
-  const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
-  const repoWithOrigin = (dir: string, origin: string) => {
-    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
-    git(dir, "init", "-q", "-b", "main");
-    git(dir, "config", "user.email", "test@example.com");
-    git(dir, "config", "user.name", "test");
-    git(dir, "remote", "add", "origin", origin);
-    git(dir, "add", ".");
-    git(dir, "commit", "-q", "-m", "init");
-    git(dir, "push", "-q", "-u", "origin", "main");
-  };
-  const data = join(tmp, "parity-data");
-  const dataOrigin = join(tmp, "data-origin.git");
-  writeJsonl(join(data, "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl"), oracle);
-  repoWithOrigin(data, dataOrigin);
-  const repo = join(tmp, "parity");
-  const parityOrigin = join(tmp, "parity-origin.git");
-  for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
-  repoWithOrigin(repo, parityOrigin);
+test("nightly lands an align commit with its sealed-log entries: a failed parity push drops both here and leaves the pending branch, which the next night deletes unread, or relands when the push landed after all; a failed data push leaves them on a pending branch that the next night relands",{ timeout: 240_000 }, async (t) => {
+  const errors = t.mock.method(console, "error", () => {}); // reland()'s shallow-clone line, checked below
+  const oracle = await reverseOracle();
+  const { tmp, git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-land-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": oracle });
   const head0 = git(repo, "rev-parse", "HEAD");
 
-  const bare = (dir: string, ...args: string[]) => git(tmp, "--git-dir", dir, ...args);
   const originLog = (ref = "main") => {
     try {
       return bare(dataOrigin, "show", `${ref}:align/log.jsonl`).split("\n").map((l) => JSON.parse(l) as LogEntry);
@@ -439,10 +418,13 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
     git(shallow, "config", "user.name", "test");
     await nightly({ repo: shallow, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-07T07:00:00Z") });
     assert.equal(pendingRefs(), pending, "left for a full checkout");
+    assert.match(String(errors.mock.calls.at(-1)?.arguments[0]), /which this shallow clone of the parity repo does not have: left for a full checkout$/);
     assert.ok(!originLog().some((e) => e.data.relanded), "nothing relanded");
     // Then a full clone: it relands them first.
     const r = await nightly({ repo, dataDir: data, env: {}, run: failing(() => false), now: () => new Date("2026-10-08T07:00:00Z") });
     assert.equal(pendingRefs(), "", "the pending branch is deleted once landed");
+    // Every recording in the oracle is from CLOCK, 2026-09-27T07:00: 11 days before this night.
+    assert.deepEqual([r.oracleMaxAgeDays, site(repo, "curve.json").at(-1).oracleMaxAgeDays], [11, 11]);
     // Run (2)'s entries, all of them (its refusal note and score entry too), relanded with the branch and original hash.
     const relanded = originLog().filter((e) => e.data.relanded);
     assert.deepEqual(relanded.map((e) => [e.kind, e.data.commit === aligned, (e.data.relanded as { branch: string }).branch]), [["note", false, pending], ["score", false, pending], ["patch", true, pending], ["gate", true, pending]]);
@@ -483,4 +465,205 @@ test("nightly lands an align commit with its sealed-log entries: a failed parity
   }
 });
 
+test("nightly sizes tonight's slice to the read budget and keeps the rotation cursor across nights: the longest prefix that fits is recorded and the next night goes on from there; an allowance of 0 records nothing; the noise pair waits for a night it fits", { timeout: 240_000 }, async (t) => {
+  t.mock.method(console, "log", () => {}); // recordCorpus's progress lines
+  // The sandbox is an in-process twin (the `sandbox` seam): the nights record for real, and fast.
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const sandbox = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  try {
+    // Last Sunday's (2026-10-04) noise pair, which is also the oracle: customer-crud #1 and #2 recorded twice.
+    const pairSeqs = buildCorpus(TEMPLATES.filter((x) => x.name === "customer-crud"), [1, 2]);
+    const record = async (runId: string) => (await runCorpus(pairSeqs, sandbox, { concurrency: 2, runId })).recordings.map((r) => ({ ...r, events: touching(idsIn(r.steps), twin.store.events) }));
+    const { git, bare, data, dataOrigin, repo } = fixture("pb-cursor-", {
+      "runs/2026-10-04/noise-a-20261004T070000-aaaa.jsonl": await record("20261004T070000-aaaa"),
+      "runs/2026-10-04/noise-b-20261004T071000-bbbb.jsonl": await record("20261004T071000-bbbb"),
+    });
+    // The rotation, rebuilt here: slices 0/7 to 6/7 of the corpus end to end.
+    const corpus = buildCorpus(TEMPLATES, SEEDS);
+    const rotation = [0, 1, 2, 3, 4, 5, 6].flatMap((k) => corpus.filter((_, i) => i % 7 === k));
+    // The ledger's 30-day GETs that leave exactly `seqs`'s projection as the night's share: floor((8500 − x) / 7).
+    const spend = (gets: number, day: string) => writeJsonl(join(data, "budget/reads.jsonl"), [{ date: `${day}T00:00:00.000Z`, account: "acct_test", target: "sandbox", runId: "earlier", gets, posts: 0, deletes: 0, charges: 0 }]);
+    const leaving = (seqs: typeof rotation) => 8_500 - 7 * projectedGets(seqs);
+    const cursor = () => JSON.parse(bare(dataOrigin, "show", "main:budget/rotation.json"));
+    const recorded = (day: string) =>
+      readdirSync(join(data, "runs", day))
+        .filter((f) => f.startsWith("slice-"))
+        .flatMap((f) => readJsonl<Recording>(join(data, "runs", day, f)).map((r) => r.seq));
+    const notes = (r: { runId: string }) => readJsonl<LogEntry>(logPath(data)).filter((e) => e.runId === r.runId && e.kind === "note" && "nightly" in e.data).map((e) => e.data.nightly as { step: string; error: string });
+    const night = (day: string) => nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date(`${day}T07:00:00Z`), sandbox });
+
+    // Saturday: no cursor yet, so the window starts at slice 6/7 (rotation 515). The share is exactly the first two
+    // sequences' projection, which the third one's GETs would exceed: two are recorded, and the cursor moves to 517.
+    const start = rotation.indexOf(corpus[6]!);
+    assert.equal(start, 515);
+    assert.ok(projectedGets(rotation.slice(515, 518)) > projectedGets(rotation.slice(515, 517)), "the third sequence has a GET");
+    spend(leaving(rotation.slice(515, 517)), "2026-10-09");
+    const sat = await night("2026-10-10");
+    assert.deepEqual(sat.slice, { spec: "515+2/600", seqs: 2, recorded: 2, allowance: projectedGets(rotation.slice(515, 517)), budget: sat.slice.budget });
+    assert.match(sat.slice.budget, new RegExp(`^allowance ${sat.slice.allowance} GETs = min\\(\\d+ projected for one seventh of the corpus, floor\\(\\(10000 − 1500 reserve − ${leaving(rotation.slice(515, 517))} GETs in 30 days\\) / 7\\) = ${sat.slice.allowance}\\); `));
+    assert.deepEqual(recorded("2026-10-10"), rotation.slice(515, 517).map((x) => x.id));
+    assert.deepEqual(cursor(), { cursor: 517 }, "the cursor is pushed to the data repo");
+    assert.equal(sat.noisePair, undefined, "last Sunday's pair is recorded: none due");
+    assert.equal(sat.oracleRefreshed, true);
+    assert.deepEqual(notes(sat), []);
+
+    // Sunday: the next night goes on at 517, not at slice 0/7. The pair is due, but after the slice nothing of the share
+    // is left: it is deferred, and noted.
+    spend(leaving(rotation.slice(517, 518)), "2026-10-10");
+    const sun = await night("2026-10-11");
+    assert.deepEqual([sun.slice.spec, sun.slice.recorded], ["517+1/600", 1]);
+    assert.deepEqual(recorded("2026-10-11"), [rotation[517]!.id]);
+    assert.deepEqual(cursor(), { cursor: 518 });
+    const pairGets = 2 * projectedGets(buildCorpus(TEMPLATES, [1, 2]));
+    assert.deepEqual(sun.noisePair, { seqs: 60, recorded: false, refused: `deferred to the next night: ${pairGets} GETs projected for the pair > 0 left of tonight's share ${sun.slice.allowance} after the slice (decision 0001 C2)` });
+    assert.deepEqual(notes(sun), [{ date: "2026-10-11", step: "record noise pair", error: sun.noisePair!.refused!, oracleRefreshed: true }]);
+    assert.match(nightlyText(sun), /^noise pair: 60 sequences x 2 · NOT RECORDED: deferred to the next night: /m);
+
+    // Monday: the 30-day GETs reach the reserve: an allowance of 0, the degraded path. Nothing is recorded, the cursor
+    // stays, the oracle is not refreshed, and both the slice and the still-due pair are noted.
+    spend(8_500, "2026-10-11");
+    const mon = await night("2026-10-12");
+    assert.deepEqual([mon.slice.spec, mon.slice.seqs, mon.slice.recorded, mon.slice.allowance, mon.oracleRefreshed], ["518+0/600", 0, 0, 0, false]);
+    assert.equal(mon.slice.refused, `nothing recorded: ${mon.slice.budget}`);
+    assert.ok(mon.slice.budget.endsWith(`; ${join(data, "budget/reads.jsonl")}; decision 0001 C2`), "the allowance reads the data repo's ledger");
+    assert.equal(existsSync(join(data, "runs/2026-10-12")), false);
+    assert.deepEqual(cursor(), { cursor: 518 });
+    assert.deepEqual(notes(mon).map((n) => n.step), ["record slice 518+0/600", "record noise pair"]);
+    assert.match(nightlyText(mon), /^slice 518\+0\/600: 0 sequences · NOT RECORDED: nothing recorded: allowance 0 GETs = min\(\d+ projected for one seventh of the corpus, floor\(\(10000 − 1500 reserve − 8500 GETs in 30 days\) \/ 7\) = 0\)/m);
+    assert.match(git(repo, "log", "-1", "--format=%s"), /; oracle not refreshed\)$/);
+
+    // Tuesday: room again; the rotation continues where Sunday stopped.
+    spend(leaving(rotation.slice(518, 519)), "2026-10-12");
+    const tue = await night("2026-10-13");
+    assert.deepEqual([tue.slice.spec, recorded("2026-10-13"), cursor()], ["518+1/600", [rotation[518]!.id], { cursor: 519 }]);
+    assert.equal(tue.noisePair?.recorded, false, "the pair is still due and still does not fit");
+    assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
+
+    // A Sunday with the budget unused (a dry run: it plans, never records): one seventh binds the slice, and the pair
+    // fits in what is left of the night's share after it, though the seventh leaves nothing of the allowance.
+    spend(0, "2026-10-17");
+    const window = Array.from({ length: 86 }, (_, i) => rotation[(519 + i) % 600]!);
+    assert.ok(projectedGets(window) + pairGets <= 1_214, "floor(8500 / 7)");
+    const dry = await nightly({ repo, dataDir: data, dryRun: true, env: {}, run: withGh([]), now: () => new Date("2026-10-18T07:00:00Z") });
+    assert.deepEqual([dry.slice.spec, dry.slice.allowance, dry.noisePair], ["519+86/600", projectedGets(window), { seqs: 60, recorded: false }]);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("the test guard: a red suite or tsc on the align commit drops the commit and its sealed-log entries before anything is pushed, notes the failures, and the night goes on; a green one lands it", { timeout: 240_000 }, async () => {
+  // A test pinning a value align owns, as the tests that turned CI red on 2026-09-28 pinned the placeholder messages,
+  // a type error, and a test that fails if the guard's suite could see the nightly's keys.
+  const PIN = [
+    'import { test } from "node:test";',
+    'import assert from "node:assert/strict";',
+    'import { readFileSync } from "node:fs";',
+    'test("the customer template keeps tax_exempt none", () => {',
+    '  assert.equal(JSON.parse(readFileSync(new URL("../src/twin/shapes/customer.json", import.meta.url), "utf8")).tax_exempt, "none");',
+    "});",
+    'test("no key reaches the guard", () => assert.deepEqual([process.env.STRIPE_API_KEY, process.env.PARITY_READ_BUDGET], [undefined, undefined]));',
+    'export const typo: number = "not a number";',
+    "",
+  ].join("\n");
+  const { git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-guard-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": await reverseOracle() }, { "test/pin.test.ts": PIN });
+  const head0 = git(repo, "rev-parse", "HEAD");
+  const originLog = () => bare(dataOrigin, "show", "main:align/log.jsonl").split("\n").map((l) => JSON.parse(l) as LogEntry);
+  const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
+  process.env.STRIPE_API_KEY = "sk_test_never_sent";
+  process.env.PARITY_READ_BUDGET = "0"; // the sandbox refuses at the budget gate: the night scores the existing oracle
+  try {
+    const r = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-05T07:00:00Z") });
+    assert.equal(r.guard?.length, 2);
+    assert.equal(r.guard![0], "test: the customer template keeps tax_exempt none");
+    assert.match(r.guard![1]!, /^tsc: test\/pin\.test\.ts\(8,14\): error TS2322: /);
+    assert.match(nightlyText(r), /^test guard: the align commit was DROPPED, 2 failures on it: test: the customer template keeps tax_exempt none; tsc: /m);
+    // Nothing of the align commit is anywhere: not here, not on either origin, and no pending branch was pushed.
+    assert.deepEqual(bare(parityOrigin, "log", "--format=%s", "main").split("\n").map((x) => x.replace(/ \(.*/s, "")), ["nightly 2026-10-05: curve point and scores", "init"]);
+    assert.equal(git(repo, "rev-parse", "HEAD~1"), head0);
+    assert.equal(JSON.parse(readFileSync(join(repo, "src/twin/shapes/customer.json"), "utf8")).tax_exempt, "none");
+    assert.equal(bare(dataOrigin, "for-each-ref", "refs/heads/nightly/"), "");
+    const log = originLog();
+    assert.ok(!log.some((e) => e.kind === "patch" || e.kind === "gate"), "the patch and gate entries were dropped with the commit");
+    const note = log.find((e) => e.runId === r.runId && (e.data.nightly as { step?: string } | undefined)?.step === "test guard");
+    assert.deepEqual(note?.data.nightly, { date: "2026-10-05", step: "test guard", error: "the align commit and its sealed-log entries were dropped here: the suite or tsc failed on it (2 failures)", failing: r.guard, oracleRefreshed: false });
+    // The night went on: scored, published, both repos pushed.
+    assert.equal(r.patches.automatic, 0);
+    assert.ok(r.commits && existsSync(join(repo, "site/data/curve.json")));
+    assert.ok(verifyLog(logPath(data)).ok);
+    assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
+
+    // The pin removed, the next night's align commit passes the guard and lands.
+    git(repo, "rm", "-q", "test/pin.test.ts");
+    git(repo, "commit", "-q", "-m", "unpin");
+    git(repo, "push", "-q");
+    const r2 = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-06T07:00:00Z") });
+    assert.deepEqual(r2.guard, []);
+    assert.match(nightlyText(r2), /^test guard: the suite and tsc pass on the align commit$/m);
+    assert.equal(r2.patches.automatic, 1);
+    assert.match(bare(parityOrigin, "log", "--format=%s", "main"), /^align: 1 automatic patches/m);
+  } finally {
+    for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 const site = (repo: string, f: string) => JSON.parse(readFileSync(join(repo, "site/data", f), "utf8"));
+
+/** The land tests' recording time. */
+const CLOCK = "2026-09-27T07:00:00.000Z";
+
+/**
+ * customer-crud and subscription-cancel-at-period-end x seeds 1-2 recorded on the twin at CLOCK, as a sandbox recording
+ * where every customer's tax_exempt is "reverse": align --apply seeds it (one automatic patch).
+ */
+async function reverseOracle(): Promise<Recording[]> {
+  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "20260927T070000-aaaa", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const reverse = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(reverse) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, (v as { object?: string }).object === "customer" && k === "tax_exempt" ? "reverse" : reverse(x)])) : v;
+  return recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: reverse(s.body) })) }));
+}
+
+/**
+ * The data repo (`dataFiles`: JSONL rows per path) and the parity repo (src, templates, package.json and tsconfig.json
+ * copied, node_modules linked, so the test guard's suite and tsc run for real, plus `repoFiles`), each with a bare origin.
+ */
+function fixture(prefix: string, dataFiles: Record<string, unknown[]>, repoFiles: Record<string, string> = {}) {
+  const tmp = mkdtempSync(join(tmpdir(), prefix));
+  const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const bare = (dir: string, ...args: string[]) => git(tmp, "--git-dir", dir, ...args);
+  const repoWithOrigin = (dir: string, origin: string) => {
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    git(dir, "init", "-q", "-b", "main");
+    git(dir, "config", "user.email", "test@example.com");
+    git(dir, "config", "user.name", "test");
+    git(dir, "remote", "add", "origin", origin);
+    git(dir, "add", ".");
+    git(dir, "commit", "-q", "-m", "init");
+    git(dir, "push", "-q", "-u", "origin", "main");
+  };
+  const data = join(tmp, "parity-data");
+  const dataOrigin = join(tmp, "data-origin.git");
+  for (const [f, rows] of Object.entries(dataFiles)) writeJsonl(join(data, f), rows);
+  repoWithOrigin(data, dataOrigin);
+  const repo = join(tmp, "parity");
+  const parityOrigin = join(tmp, "parity-origin.git");
+  for (const p of ["src", "templates", "package.json", "tsconfig.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
+  symlinkSync(join(REPO, "node_modules"), join(repo, "node_modules"));
+  for (const [f, text] of Object.entries(repoFiles)) {
+    mkdirSync(dirname(join(repo, f)), { recursive: true });
+    writeFileSync(join(repo, f), text);
+  }
+  repoWithOrigin(repo, parityOrigin);
+  return { tmp, git, bare, data, dataOrigin, repo, parityOrigin };
+}

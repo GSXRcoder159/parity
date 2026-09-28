@@ -1,10 +1,13 @@
 // paritybench nightly (plan §3.3–§3.5; decision 0002 §1 rolling oracle, §3 what counts, §5 data locations): record
-// tonight's sandbox slice (and weekly the noise pair), rebuild the oracle, score the twin on the whole oracle with the
-// noise ceiling, align (mechanical, then assisted), log merged assisted PRs, publish the public-safe curve point and
-// scores file and the changelog, run drift, commit and push both repos (this one first; an align commit lands with its
-// sealed-log entries at once, land()). A refused or aborted recording (budget gate, circuit breaker; decision 0001 C2)
-// is a sealed-log note, not a failure: the night goes on with the existing oracle and the curve point says oracleRefreshed: false.
+// tonight's budget-sized sandbox slice (and weekly the noise pair), rebuild the oracle, score the twin on the whole oracle
+// with the noise ceiling, align (mechanical, then assisted), log merged assisted PRs, publish the public-safe curve point
+// and scores file and the changelog, run drift, commit and push both repos (this one first; an align commit lands with
+// its sealed-log entries at once, land(), once the suite and tsc pass on it). A refused or aborted recording (budget gate,
+// circuit breaker), an allowance of 0, a deferred noise pair (decision 0001 C2) and a red suite on the align commit are
+// sealed-log notes, not failures: the night goes on, and when no slice was recorded it scores the existing oracle and
+// the curve point says oracleRefreshed: false.
 // Any other error (a missing key, a bug) fails the night.
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -15,10 +18,13 @@ import { align, noiseFromRuns, planText } from "./align/index.ts";
 import type { Env } from "./align/llm.ts";
 import { appendLog, logPath, provenance, type LogEntry, type Provenance } from "./align/log.ts";
 import { FRAUD_OR_RISK } from "./align/patch.ts";
+import { parseTap } from "./agree.ts";
+import { allowance, fittingPrefix, nightShare, projectedGets, readLedger, RESERVE, rollingGets } from "./bench/budget.ts";
 import { METHOD, type SeqResult } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
 import { contaminated } from "./bench/oracle.ts";
+import type { Target } from "./bench/run.ts";
 import { score, type LevelScores, type Score } from "./bench/score.ts";
 import { compareSets, newRunId, oracleBuild, readsLedger, recordCorpus, Refused, resolveTarget, slice } from "./cli.ts";
 import { drift, type DriftResult } from "./drift.ts";
@@ -33,6 +39,8 @@ const NOISE_SEEDS = [1, 2];
 const NIGHTLY_RPS = 10;
 /** The corpus the slices rotate through: templates x seeds 1-20 (30 x 20 = 600 sequences, ~86 a night). */
 const CORPUS_SEEDS = "1-20";
+/** The rotation cursor, in the data repo (committed with the read ledger): where tomorrow's slice starts. */
+const CURSOR = "budget/rotation.json";
 
 /**
  * What a noise pair covers of tonight's scored oracle. `inSample`: the normalization rules were written from this pair,
@@ -51,11 +59,52 @@ const IN_SAMPLE_RUNS = new Set(["20260925T233315-zdmc", "20260926T000140-m0x6"])
 /** Account keys and ids that must never reach a public file (decision 0001 R8): checked before anything is committed. */
 const SECRET = /\b(sk|rk|rkcs)_(test|live)_|\bacct_[A-Za-z0-9]/;
 
-/** Records `seqs` on the sandbox at NIGHTLY_RPS into <dataDir>/runs/<date>/<name>-<runId>.jsonl: budget-gated, ledgered in <dataDir>/budget. */
-async function recordSandbox(dataDir: string, date: string, name: string, seqs: Sequence[]): Promise<Recording[]> {
+/** Records `seqs` on `target` into <dataDir>/runs/<date>/<name>-<runId>.jsonl: on the sandbox, budget-gated and ledgered in <dataDir>/budget. */
+async function recordSandbox(target: Target, dataDir: string, date: string, name: string, seqs: Sequence[]): Promise<Recording[]> {
   const runId = newRunId(); // a fresh run id per recording: idempotency nonces derive from it and must never repeat
-  const target = { ...resolveTarget("sandbox"), rps: NIGHTLY_RPS };
   return recordCorpus(target, seqs, { concurrency: 8, runId, out: join(dataDir, "runs", date, `${name}-${runId}.jsonl`), ledger: readsLedger(dataDir) });
+}
+
+/**
+ * The noise pair is due from NOISE_DAY until one is recorded: no `noise-b` run file dated on or after the latest
+ * NOISE_DAY. So a pair deferred or refused on NOISE_DAY is tried again the next night. ponytail: a pair aborted during
+ * noise-b leaves its file and waits for next week.
+ */
+function noiseDue(dataDir: string, now: Date): boolean {
+  const since = new Date(now.getTime() - ((now.getUTCDay() - NOISE_DAY + 7) % 7) * 86_400_000).toISOString().slice(0, 10);
+  const runs = join(dataDir, "runs");
+  const files = existsSync(runs) ? readdirSync(runs, { recursive: true, encoding: "utf8" }) : [];
+  return !files.some((f) => basename(f).startsWith("noise-b-") && dirname(f) >= since);
+}
+
+/**
+ * The test guard (after 2026-09-28, when an align commit turned CI red: tests pinned catalog placeholders): the suite and
+ * tsc on the patched tree `repo`, in a CI-like environment (PATH, HOME and CI only, as the gate's child: no test reaches
+ * the nightly's keys, tokens or data dir). Returns what failed: failing test names, tsc's error lines; none when green.
+ */
+function guard(repo: string): string[] {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
+  const failure = (args: string[]): string | undefined => {
+    try {
+      execFileSync(process.execPath, args, { cwd: repo, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+      return undefined;
+    } catch (e) {
+      return (e as { stdout?: string }).stdout || (e as Error).message;
+    }
+  };
+  const failed: string[] = [];
+  const tests = failure(["--test", "--test-reporter=tap", "test/*.test.ts"]);
+  if (tests !== undefined) {
+    const names = [...parseTap(tests)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
+    failed.push(...(names.length ? names : ["test: node --test failed without a failing test"]));
+  }
+  // The repo's own tsc (npx could fetch a package where node_modules is missing).
+  const tsc = failure([join("node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
+  if (tsc !== undefined) {
+    const errors = tsc.split("\n").filter((l) => /error TS\d+/.test(l)).map((l) => `tsc: ${l.trim()}`);
+    failed.push(...(errors.length ? errors : [`tsc: ${tsc.trim().split("\n")[0]}`]));
+  }
+  return failed;
 }
 
 /**
@@ -193,6 +242,8 @@ const PENDING = "nightly/pending-";
  * parity-data log's main never cites a parity commit absent from this repo's origin, and an align commit on this repo's
  * origin has its patch entries on the log's main, or, from the moment it is pushed until the next nightly relands them
  * (reland()), on the data repo's branch nightly/pending-<runId>. So:
+ *   0. guard() the commit: when the suite or tsc fails on it, the commit and its entries are dropped here, before
+ *      anything is pushed, and the failures are returned (the night goes on); else [] once landed;
  *   1. commit the log (and tonight's other data files) and push it to nightly/pending-<runId>, never to main;
  *   2. push the align commit. If 1 or 2 fails, the entries and the commit are dropped here (so no later push carries
  *      them). After 1 the commit was never pushed: the pending branch is deleted. After 2 it may have landed with the
@@ -201,7 +252,7 @@ const PENDING = "nightly/pending-";
  *   3. push the log to main, then delete the pending branch. If 3 fails, the entries wait on the pending branch, which
  *      outlives this checkout (the nightly's runner is discarded), and the next nightly lands them before anything else.
  */
-function land(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run; commit: string; log: string; logBefore: string }): void {
+function land(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run; commit: string; log: string; logBefore: string }): string[] {
   const { data, run } = o;
   const pending = `${PENDING}${o.runId}`;
   const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
@@ -211,13 +262,21 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
     } catch {}
   };
   let committed = false;
-  const drop = (why: string, e: unknown, kept = ""): never => {
+  const undo = (): void => {
     if (committed) git(data, "reset", "-q", "HEAD~1");
     writeFileSync(o.log, o.logBefore);
     git(o.repo, "reset", "-q", "--keep", `${o.commit}~1`);
+  };
+  const drop = (why: string, e: unknown, kept = ""): never => {
+    undo();
     if (!kept) quiet(() => git(data, "push", "-q", "origin", "--delete", pending));
     throw new Error(`nightly: ${why} (${(e as Error).message}); the align commit ${o.commit} and its sealed-log entries were dropped here: nothing is published tonight${kept}`);
   };
+  const failed = guard(o.repo);
+  if (failed.length) {
+    undo();
+    return failed;
+  }
   try {
     git(data, "pull", "-q", "--rebase", "--autostash");
     git(data, "add", "-A", "--", ...["runs", "oracle.jsonl", "align", "budget"].filter((p) => existsSync(join(data, p))));
@@ -241,6 +300,7 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
     throw new Error(`nightly: the align commit ${o.commit} is on origin, but its sealed-log entries did not reach the data repo's main (${(e as Error).message}); they wait on ${pending}, and the next nightly lands them first`);
   }
   quiet(() => git(data, "push", "-q", "origin", "--delete", pending)); // a leftover is deleted by the next reland()
+  return [];
 }
 
 /**
@@ -315,6 +375,7 @@ function publicFiles(o: {
   divergencesRemoved: Patches;
   oracleRefreshed: boolean;
   oracleSeqs: number;
+  oracleMaxAgeDays: number;
 }) {
   const { date } = o;
   const s = o.score;
@@ -336,7 +397,7 @@ function publicFiles(o: {
     byStratum: Object.fromEntries(strata.map((k) => [k, o.noise!.byStratum[k]!])),
     coverage,
   };
-  const point = { date, normalization, method, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, divergencesRemoved: o.divergencesRemoved, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs };
+  const point = { date, normalization, method, overall: s.overall, byStratum: s.byStratum, heldOut: s.heldOut, train: s.train, events: o.events, ...(noise && { noise }), patches: o.patches, divergencesRemoved: o.divergencesRemoved, oracleRefreshed: o.oracleRefreshed, oracleSeqs: o.oracleSeqs, oracleMaxAgeDays: o.oracleMaxAgeDays };
   const byStratum = Object.keys(s.byStratum)
     .sort()
     .map((k) => {
@@ -369,15 +430,24 @@ export interface NightlyResult {
   runId: string;
   /** Set on --dry-run: where the data copy and the public files went. */
   tmp?: string;
-  slice: { spec: string; seqs: number; recorded: number; refused?: string };
+  /**
+   * `spec` <from>+<seqs>/<corpus>: tonight's slice starts at rotation position `from` and records the `seqs` sequences
+   * that fit in `allowance` GETs (`budget` spells the allowance out). `refused`: nothing was recorded, and why.
+   */
+  slice: { spec: string; seqs: number; recorded: number; allowance: number; budget: string; refused?: string };
+  /** Present when the pair is due. `refused`: not recorded, and why (deferred when it does not fit: tried again the next night). */
   noisePair?: { seqs: number; recorded: boolean; refused?: string };
   oracleRefreshed: boolean;
+  /** Days since the oracle's oldest recording, rounded up: the published "at most N days old". */
+  oracleMaxAgeDays: number;
   /** oracle build's one-line account (sequences, recordings scanned, exclusions). */
   built: string;
   oracle: Provenance;
   score: Score;
   noise?: Noise & { pair: [string, string]; seqs: number; inSample: boolean };
   plan: string;
+  /** Set when align committed: what failed on the align commit (it was then dropped); [] when the suite and tsc passed. */
+  guard?: string[];
   assist: string;
   merged: number;
   /** Cumulative (patchTotals): JSON-pointer edits and merged PRs. */
@@ -394,9 +464,10 @@ export interface NightlyResult {
 /**
  * The nightly pipeline on `repo` and `dataDir`. `dryRun`: no sandbox traffic, align plan only, no assisted pass, no
  * commits or pushes; the data dir is copied to a temp dir (the oracle rebuild and sealed-log entries land in the copy)
- * and the public files go to a temp root. `env` reaches the assisted pass; `run` runs git and gh.
+ * and the public files go to a temp root. `env` reaches the assisted pass; `run` runs git and gh. `sandbox` replaces
+ * the sandbox target (tests only; the CLI never sets it).
  */
-export async function nightly(o: { repo: string; dataDir: string; dryRun?: boolean; env?: Env; run?: Run; now?: () => Date }): Promise<NightlyResult> {
+export async function nightly(o: { repo: string; dataDir: string; dryRun?: boolean; env?: Env; run?: Run; now?: () => Date; sandbox?: Target }): Promise<NightlyResult> {
   const now = (o.now ?? (() => new Date()))();
   const date = now.toISOString().slice(0, 10);
   const run = o.run ?? sh;
@@ -411,20 +482,39 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const log = logPath(data);
   const oraclePath = join(data, "oracle.jsonl");
 
-  // 1. Tonight's slice, and on NOISE_DAY the noise pair after it. Drift's baseline is the oracle before the rebuild.
+  // 1. Tonight's slice, sized to the read budget (decision 0001 C2), and when due the noise pair after it, if it fits.
+  // Drift's baseline is the oracle before the rebuild.
   const previous = existsSync(oraclePath) ? readJsonl<Recording>(oraclePath) : [];
-  const dow = now.getUTCDay();
-  const spec = `${dow}/7`;
-  const seqs = slice(buildCorpus(TEMPLATES, parseSeeds(CORPUS_SEEDS)), spec);
-  const sliceRes: NightlyResult["slice"] = { spec, seqs: seqs.length, recorded: 0 };
+  // The rotation: slices 0/7 to 6/7 of the corpus end to end. Tonight's window is its next seventh from the cursor
+  // (wrapping); before a night kept a cursor, it starts at slice <weekday>/7, where the fixed weekday slices were.
+  const corpus = buildCorpus(TEMPLATES, parseSeeds(CORPUS_SEEDS));
+  const rotation = [0, 1, 2, 3, 4, 5, 6].flatMap((k) => slice(corpus, `${k}/7`));
+  const cursorFile = join(data, CURSOR);
+  const from = existsSync(cursorFile) ? (JSON.parse(readFileSync(cursorFile, "utf8")) as { cursor: number }).cursor % rotation.length : rotation.indexOf(corpus[now.getUTCDay()]!);
+  const window = Array.from({ length: Math.ceil(rotation.length / 7) }, (_, i) => rotation[(from + i) % rotation.length]!);
+  // Tonight's allowance: min(one seventh, the night's share of what the 30-day budget has left); the longest prefix of
+  // the window that fits is recorded, and the cursor moves past it only once it is.
+  const ledger = readsLedger(data);
+  const rolling = rollingGets(readLedger(ledger), now.toISOString());
+  const share = nightShare(rolling);
+  const allowed = allowance(projectedGets(window), rolling);
+  const seqs = fittingPrefix(window, allowed);
+  const spec = `${from}+${seqs.length}/${rotation.length}`;
+  const budget = `allowance ${allowed} GETs = min(${projectedGets(window)} projected for one seventh of the corpus, floor((10000 − ${RESERVE} reserve − ${rolling} GETs in 30 days) / 7) = ${share}); ${ledger}; decision 0001 C2`;
+  const sliceRes: NightlyResult["slice"] = { spec, seqs: seqs.length, recorded: 0, allowance: allowed, budget };
   let noisePair: NightlyResult["noisePair"];
   let today: Recording[] = [];
-  const refused: { step: string; error: string }[] = [];
+  const notes: { step: string; error: string }[] = [];
   const refuse = (step: string, e: unknown): string => {
     if (!(e instanceof Refused)) throw e;
-    refused.push({ step, error: e.message });
+    notes.push({ step, error: e.message });
     return e.message;
   };
+  // The degraded path: nothing fits tonight (an allowance of 0, or less than one sequence's projection).
+  if (!seqs.length) {
+    sliceRes.refused = `nothing recorded: ${budget}`;
+    notes.push({ step: `record slice ${spec}`, error: sliceRes.refused });
+  }
   // Tonight's run files and read-ledger entries (and, after the assisted pass, the LLM ledger) are pushed as soon as each
   // recording ends (and when one fails), so a later failure or a killed run cannot lose them: the next night's budget
   // gate and daily LLM cap count them (decision 0001 C2). A concurrent push to the data repo is rebased onto, not lost.
@@ -439,26 +529,35 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     run("git", ["pull", "-q", "--rebase", "--autostash"], data);
     run("git", ["push", "-q"], data);
   };
+  // A missing key fails the night here, before anything is written.
+  const target = o.dryRun ? undefined : (o.sandbox ?? { ...resolveTarget("sandbox"), rps: NIGHTLY_RPS });
   const branch = o.dryRun ? "" : run("git", ["rev-parse", "--abbrev-ref", "HEAD"], o.repo);
   if (!o.dryRun) reland({ data, repo: o.repo, branch, date, runId, run });
   let failed: { e: unknown } | undefined;
   try {
-    if (!o.dryRun) {
+    if (target && seqs.length) {
       try {
-        today = await recordSandbox(data, date, "slice", seqs);
+        today = await recordSandbox(target, data, date, "slice", seqs);
         sliceRes.recorded = today.filter((r) => !contaminated(r)).length;
+        writeJson(cursorFile, { cursor: (from + seqs.length) % rotation.length });
       } catch (e) {
         sliceRes.refused = refuse(`record slice ${spec}`, e);
       }
-      persist("recordings and read ledger"); // before a Sunday's noise pair: the slice's reads must not wait ~120 more sequences
+      persist("recordings, read ledger and rotation cursor"); // before the noise pair: the slice's reads must not wait ~120 more sequences
     }
-    if (dow === NOISE_DAY) {
+    if (noiseDue(data, now)) {
       const noiseSeqs = buildCorpus(TEMPLATES, NOISE_SEEDS);
       noisePair = { seqs: noiseSeqs.length, recorded: false };
-      // After a refused slice the sandbox is refusing: the pair waits for next week.
-      if (!o.dryRun && !sliceRes.refused) {
+      // The pair fits in what is left of the night's share after the slice's projection, or waits for the next night.
+      const need = 2 * projectedGets(noiseSeqs);
+      const left = share - projectedGets(seqs);
+      if (need > left) {
+        noisePair.refused = `deferred to the next night: ${need} GETs projected for the pair > ${left} left of tonight's share ${share} after the slice (decision 0001 C2)`;
+        notes.push({ step: "record noise pair", error: noisePair.refused });
+      } else if (target && !sliceRes.refused) {
+        // After a refused slice the sandbox is refusing: the pair waits for the next night.
         try {
-          for (const name of ["noise-a", "noise-b"]) await recordSandbox(data, date, name, noiseSeqs);
+          for (const name of ["noise-a", "noise-b"]) await recordSandbox(target, data, date, name, noiseSeqs);
           noisePair.recorded = true;
         } catch (e) {
           noisePair.refused = refuse("record noise pair", e);
@@ -470,7 +569,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   }
   // Persisting must not mask the night's own error: that one is rethrown, a persist failure after it only reported.
   try {
-    persist("recordings and read ledger");
+    persist("recordings, read ledger and rotation cursor");
   } catch (p) {
     if (!failed) throw p;
     console.error(`nightly: persisting the recordings also failed: ${(p as Error).message}`);
@@ -481,7 +580,9 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   // 2. oracle build: newest clean recording per sequence (an aborted run is contaminated and never selected).
   const built = oracleBuild(undefined, data).split("\n")[0]!;
   const oracle = provenance(oraclePath);
-  if (refused.length) appendLog(log, runId, refused.map((n) => ({ kind: "note", data: { nightly: { date, ...n, oracleRefreshed }, oracle } })));
+  const oldest = Math.min(...readJsonl<Recording>(oraclePath).map((r) => Date.parse(r.startedAt)));
+  const oracleMaxAgeDays = Math.max(0, Math.ceil((now.getTime() - oldest) / 86_400_000));
+  if (notes.length) appendLog(log, runId, notes.map((n) => ({ kind: "note", data: { nightly: { date, ...n, oracleRefreshed }, oracle } })));
 
   // 3. score-twin on the whole oracle, the noise ceiling from the latest pair, one sealed-log `score` entry.
   const { json } = scoreTwinIn(o.repo, oraclePath, []);
@@ -503,12 +604,19 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     if (!o.dryRun && run("git", ["rev-parse", "HEAD"], o.repo) !== head) run("git", ["reset", "-q", "--keep", head], o.repo);
     throw e;
   }
-  if (plan.applied?.commit) land({ data, repo: o.repo, branch, date, runId, run, commit: plan.applied.commit, log, logBefore });
+  let guarded: string[] | undefined;
+  if (plan.applied?.commit) {
+    guarded = land({ data, repo: o.repo, branch, date, runId, run, commit: plan.applied.commit, log, logBefore });
+    // A red suite dropped the commit and its entries (the log is back to logBefore): noted, and the night goes on.
+    const error = `the align commit and its sealed-log entries were dropped here: the suite or tsc failed on it (${guarded.length} failures)`;
+    if (guarded.length) appendLog(log, runId, [{ kind: "note", data: { nightly: { date, step: "test guard", error, failing: guarded, oracleRefreshed }, oracle } }]);
+  }
+  const landed = plan.applied?.commit && !guarded?.length;
 
-  // 5. align --assist on HEAD (a fresh plan when --apply just committed: the old baseline is stale), then merged PRs.
+  // 5. align --assist on HEAD (a fresh plan when --apply just landed a commit: the old baseline is stale), then merged PRs.
   let assisted = "assist: not run (dry run)";
   if (!o.dryRun) {
-    const base = plan.applied?.commit ? align({ repo: o.repo, dataDir: data, runId }) : plan;
+    const base = landed ? align({ repo: o.repo, dataDir: data, runId }) : plan;
     assisted = assistText(await assist(base, { repo: o.repo, dataDir: data, runId, env: o.env, run }));
     persist("LLM ledger"); // the day's spend must survive a later failure: the daily cap reads it (a same-day rerun too)
   }
@@ -534,7 +642,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     ...(methodChanged ? [`method change: ${METHOD.change}`] : []),
   ];
   const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
-  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, divergencesRemoved, oracleRefreshed, oracleSeqs: oracle.oracleSeqs });
+  const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, divergencesRemoved, oracleRefreshed, oracleSeqs: oracle.oracleSeqs, oracleMaxAgeDays });
   writeJson(curveFile, [...curve, point]);
   writeJson(join(root, `site/data/scores/${date}.json`), scores);
   writeJson(join(root, "site/data/changelog.json"), changes);
@@ -577,11 +685,13 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     slice: sliceRes,
     ...(noisePair && { noisePair }),
     oracleRefreshed,
+    oracleMaxAgeDays,
     built,
     oracle,
     score: json.score,
     ...(noise && { noise }),
     plan: planText(plan),
+    ...(guarded && { guard: guarded }),
     assist: assisted,
     merged,
     patches,
@@ -600,14 +710,15 @@ export function nightlyText(r: NightlyResult): string {
   const d = r.drift;
   return [
     `nightly ${r.date} run ${r.runId}${r.tmp ? ` · DRY RUN: nothing recorded, applied, assisted, committed or pushed; data copy and public files in ${r.tmp}` : ""}`,
-    `slice ${r.slice.spec}: ${r.slice.seqs} sequences · ${r.tmp ? "not recorded (dry run)" : r.slice.refused ? `NOT RECORDED: ${r.slice.refused}` : `recorded, ${r.slice.recorded} clean`}`,
-    ...(r.noisePair ? [`noise pair: ${r.noisePair.seqs} sequences x 2 · ${r.tmp ? "not recorded (dry run)" : r.noisePair.recorded ? "recorded" : `NOT RECORDED: ${r.noisePair.refused ?? "the slice was refused"}`}`] : []),
-    `${r.built} · sha256 ${r.oracle.oracleSha.slice(0, 12)}… · ${r.oracleRefreshed ? "refreshed tonight" : "NOT refreshed tonight (curve point oracleRefreshed: false)"}`,
+    `slice ${r.slice.spec}: ${r.slice.seqs} sequences · ${r.slice.refused ? `NOT RECORDED: ${r.slice.refused}` : r.tmp ? `not recorded (dry run); ${r.slice.budget}` : `recorded, ${r.slice.recorded} clean; ${r.slice.budget}`}`,
+    ...(r.noisePair ? [`noise pair: ${r.noisePair.seqs} sequences x 2 · ${r.noisePair.refused ? `NOT RECORDED: ${r.noisePair.refused}` : r.tmp ? "not recorded (dry run)" : r.noisePair.recorded ? "recorded" : "NOT RECORDED: the slice was refused"}`] : []),
+    `${r.built} · sha256 ${r.oracle.oracleSha.slice(0, 12)}… · ${r.oracleRefreshed ? "refreshed tonight" : "NOT refreshed tonight (curve point oracleRefreshed: false)"} · at most ${r.oracleMaxAgeDays} days old`,
     `score: train ${levels(r.score.train)} · held-out ${levels(r.score.heldOut)}`,
     r.noise
       ? `noise ceiling: ${levels(r.noise.overall)} from ${r.noise.pair.join(" vs ")} (${r.noise.seqs} of ${r.score.overall.L4.n} oracle sequences${r.noise.inSample ? "; in-sample: the normalization was written from this pair" : ""})`
       : "noise ceiling: none (no noise-a/noise-b pair with clean sequences): the page marks the night invalid",
     r.plan,
+    ...(r.guard ? [r.guard.length ? `test guard: the align commit was DROPPED, ${r.guard.length} failures on it: ${r.guard.join("; ")}` : "test guard: the suite and tsc pass on the align commit"] : []),
     r.assist,
     `merged align/assisted-* PRs newly logged: ${r.merged} · since the scaffold freeze (sealed log): patches automatic ${r.patches.automatic} (JSON-pointer edits), assisted ${r.patches.assisted} (merged PRs); train divergences removed automatic ${r.divergencesRemoved.automatic}, assisted ${r.divergencesRemoved.assisted}`,
     `curve annotations: ${r.events.join("; ") || "none"}`,

@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { readJsonl } from "../jsonl.ts";
+import type { Sequence } from "../types.ts";
 
 export interface LedgerEntry {
   date: string; // ISO
@@ -11,7 +12,10 @@ export interface LedgerEntry {
   gets: number;
   posts: number;
   deletes: number;
-  /** `charge.succeeded` events observed (reads per transaction). */
+  /**
+   * Charges (reads per transaction). recordCorpus: distinct `charge.succeeded` events observed. agree's metered proxy:
+   * 2xx answers to direct charge-creating calls, which misses the charges Stripe makes on its own (meteredProxy).
+   */
   charges: number;
 }
 
@@ -37,4 +41,31 @@ export function appendLedger(path: string, entry: LedgerEntry): void {
   const { date, account, target, runId, gets, posts, deletes, charges } = entry;
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, JSON.stringify({ date, account, target, runId, gets, posts, deletes, charges }) + "\n");
+}
+
+/**
+ * Projected sandbox GETs of recording `seqs` in one chunk: their GET steps, the event sweep (ceil(10.5 events/sequence /
+ * 100 per page) x 5 passes) and, when they create a test clock, the leak check's one list. ponytail: recordCorpus's gate
+ * (src/cli.ts) computes the same inline, per chunk; it should call this one.
+ */
+export function projectedGets(seqs: Sequence[]): number {
+  const steps = seqs.flatMap((s) => s.steps);
+  const leak = steps.some((s) => s.method === "POST" && s.path === "/v1/test_helpers/test_clocks") ? 1 : 0;
+  return steps.filter((s) => s.method === "GET").length + Math.ceil((10.5 * seqs.length) / 100) * 5 + leak;
+}
+
+/** GETs of the 30-day budget no nightly slice may use (decision 0001 C2): room for agree, reruns and recordings by hand. */
+export const RESERVE = 1_500;
+
+/** A night's share of the read budget (decision 0001 C2): floor((10,000 − RESERVE − rolling30) / 7), never negative. */
+export const nightShare = (rolling30: number): number => Math.max(0, Math.floor((10_000 - RESERVE - rolling30) / 7));
+
+/** Tonight's allowance (decision 0001 C2): min(projected GETs of one seventh of the corpus, the night's share). */
+export const allowance = (seventhGets: number, rolling30: number): number => Math.min(seventhGets, nightShare(rolling30));
+
+/** The longest prefix of `seqs` whose projection fits in `gets` (the sweep term is not linear in its length). */
+export function fittingPrefix(seqs: Sequence[], gets: number): Sequence[] {
+  let n = seqs.length;
+  while (n > 0 && projectedGets(seqs.slice(0, n)) > gets) n--;
+  return seqs.slice(0, n);
 }

@@ -225,11 +225,15 @@ test("agree: --cmd is required and --runs takes only twin and sandbox", () => {
 async function fakeUpstream(): Promise<{ target: Target; hits: { method: string; url: string; headers: IncomingHttpHeaders; body: string }[]; status: { v: number }; server: Server }> {
   const hits: { method: string; url: string; headers: IncomingHttpHeaders; body: string }[] = [];
   const status = { v: 200 };
+  const keys = new Set<unknown>();
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const c of req) body += c;
     hits.push({ method: req.method!, url: req.url!, headers: req.headers, body });
-    res.writeHead(status.v, { "content-type": "application/json", "content-encoding": "gzip", "request-id": `req_${hits.length}` });
+    // As Stripe answers a request whose Idempotency-Key it has seen: the first answer again, marked as a replay.
+    const replayed = keys.has(req.headers["idempotency-key"]);
+    if (req.headers["idempotency-key"]) keys.add(req.headers["idempotency-key"]);
+    res.writeHead(status.v, { "content-type": "application/json", "content-encoding": "gzip", "request-id": `req_${hits.length}`, ...(replayed && { "idempotent-replayed": "true" }) });
     res.end(gzipSync(JSON.stringify({ n: hits.length })));
   }).listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
@@ -262,10 +266,38 @@ test("meteredProxy: forwards requests with their headers and body, decodes gzip,
   } finally {
     const m = await p.close();
     up.server.close();
-    assert.deepEqual(m, { gets: 1, posts: 1, deletes: 1, aborted: undefined });
+    assert.deepEqual(m, { gets: 1, posts: 1, deletes: 1, charges: 0, aborted: undefined });
   }
   const [row] = readLedger(ledger);
   assert.deepEqual({ ...row, date: undefined }, { date: undefined, account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: "sandbox", runId: "r1", gets: 1, posts: 1, deletes: 1, charges: 0 });
+});
+
+test("meteredProxy: ledgers charges as 2xx answers to direct charge-creating calls; declines, replays and the charges Stripe makes on its own are not counted", async () => {
+  const up = await fakeUpstream();
+  const ledger = ledgerWith(tmp(), 0);
+  const p = await meteredProxy(up.target, { ledger, budget: 100, runId: "r5" });
+  const post = async (path: string, body = "", key?: string) =>
+    (await fetch(`${p.baseUrl}${path}`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", ...(key && { "Idempotency-Key": key }) }, body })).status;
+  const counted = [
+    await post("/v1/charges", "amount=2000&currency=usd&source=tok_visa", "key-1"),
+    await post("/v1/payment_intents", "amount=2000&currency=usd&payment_method=pm_card_visa&confirm=true"),
+    await post("/v1/payment_intents/pi_1/confirm?expand[]=latest_charge", "payment_method=pm_card_visa"),
+    await post("/v1/invoices/in_1/pay"),
+  ];
+  const notCounted = [
+    await post("/v1/charges", "amount=2000&currency=usd&source=tok_visa", "key-1"), // the first call's replay
+    await post("/v1/payment_intents", "amount=2000&currency=usd"), // created, not confirmed
+    await post("/v1/invoices/in_2/pay", "paid_out_of_band=true"),
+    await post("/v1/subscriptions", "customer=cus_1&items[0][price]=price_1"), // may charge its first invoice: not countable here
+    (await fetch(`${p.baseUrl}/v1/charges?limit=3`)).status,
+  ];
+  up.status.v = 402;
+  notCounted.push(await post("/v1/charges", "amount=2000&currency=usd&source=tok_chargeDeclined")); // declined
+  const m = await p.close();
+  up.server.close();
+  assert.deepEqual([...counted, ...notCounted], [200, 200, 200, 200, 200, 200, 200, 200, 200, 402]);
+  assert.equal(up.hits.length, 10, "every call was forwarded");
+  assert.deepEqual([m.charges, readLedger(ledger)[0]!.charges], [4, 4]);
 });
 
 test("meteredProxy: halts the run when the rolling GETs reach the budget; nothing after it is forwarded", async () => {

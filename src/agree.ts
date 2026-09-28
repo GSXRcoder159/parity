@@ -162,22 +162,39 @@ export interface Metered {
   /** Rolling 30-day GETs in the ledger when the proxy started. */
   rolling: number;
   /** Stops the proxy and appends this run's counts to the read ledger; `aborted` says why the run was halted, if it was. */
-  close: () => Promise<{ gets: number; posts: number; deletes: number; aborted?: string }>;
+  close: () => Promise<{ gets: number; posts: number; deletes: number; charges: number; aborted?: string }>;
+}
+
+/**
+ * A call that creates a charge by itself: POST /v1/charges, a payment intent confirmed (created with confirm=true, or
+ * /confirm), an invoice paid (/pay, not paid_out_of_band). The charges Stripe makes on its own cannot be counted here: a
+ * subscription's first or renewal invoice, an auto-advancing invoice. The call behind them (POST /v1/subscriptions, a
+ * test clock advance) does not say whether one was made (a trial, a $0 invoice, send_invoice make none), and finding out
+ * takes event reads that count against the read budget. A 2xx confirm that still requires an action counts.
+ */
+function chargeCreating(method: string, url: string, body: string): boolean {
+  if (method !== "POST") return false;
+  const path = url.split("?")[0]!;
+  const form = new URLSearchParams(body);
+  if (path === "/v1/payment_intents") return form.get("confirm") === "true";
+  if (/^\/v1\/invoices\/[^/]+\/pay$/.test(path)) return form.get("paid_out_of_band") !== "true";
+  return path === "/v1/charges" || /^\/v1\/payment_intents\/[^/]+\/confirm$/.test(path);
 }
 
 /**
  * The sandbox half's STRIPE_API_BASE: a local proxy to `upstream` under the harness's controls (decision 0001 C2/R7). Every
  * request waits on the limiter (upstream.rps; 20 req/s for the sandbox) and is counted by method before it is forwarded.
  * The run halts once the rolling 30-day GETs reach `budget` or after BREAKER consecutive 429s: every later request is
- * answered here with a 503 and never forwarded. close() ledgers the counts. Headers (the child's Authorization included)
- * and bodies pass through untouched and are never kept.
+ * answered here with a 503 and never forwarded. close() ledgers the counts, with `charges`: 2xx answers to
+ * chargeCreating() calls, idempotent replays excluded. Headers (the child's Authorization included) and bodies pass
+ * through untouched and are never kept.
  * ponytail: 429s are passed back, not retried (the suite owns its retry policy; the limiter caps its rate). Counts are
  * ledgered at close, so a killed run loses its entry, as recordCorpus's current chunk does.
  */
 export async function meteredProxy(upstream: Target, o: { ledger: string; budget: number; runId: string }): Promise<Metered> {
   const take = createLimiter(upstream.rps ?? 1000);
   const rolling = rollingGets(readLedger(o.ledger), new Date().toISOString());
-  const n = { gets: 0, posts: 0, deletes: 0 };
+  const n = { gets: 0, posts: 0, deletes: 0, charges: 0 };
   let streak = 0;
   let aborted: string | undefined;
   const local = (res: ServerResponse, status: number, message: string): void =>
@@ -185,6 +202,7 @@ export async function meteredProxy(upstream: Target, o: { ledger: string; budget
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
+    const sent = Buffer.concat(chunks);
     if (!aborted) await take();
     if (rolling + n.gets >= o.budget) aborted ??= `run halted: the rolling 30-day sandbox GETs reached the read budget ${o.budget} (decision 0001 C2)`;
     if (aborted) return local(res, 503, `not sent to the sandbox: ${aborted}`);
@@ -193,11 +211,12 @@ export async function meteredProxy(upstream: Target, o: { ledger: string; budget
     const headers = Object.fromEntries(Object.entries(req.headers).filter((e): e is [string, string] => !HOP.has(e[0]) && typeof e[1] === "string"));
     let r: Response;
     try {
-      r = await fetch(upstream.baseUrl + req.url, { method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined });
+      r = await fetch(upstream.baseUrl + req.url, { method, headers, body: chunks.length ? sent : undefined });
     } catch (e) {
       return local(res, 502, `sandbox unreachable: ${(e as Error).message}`);
     }
     const body = Buffer.from(await r.arrayBuffer());
+    if (r.ok && r.headers.get("idempotent-replayed") !== "true" && chargeCreating(method, req.url ?? "", sent.toString("utf8"))) n.charges++;
     streak = r.status === 429 ? streak + 1 : 0;
     if (streak >= BREAKER) aborted ??= `circuit breaker: ${BREAKER} consecutive sandbox answers were 429 (decision 0001 R7)`;
     const out: Record<string, string> = {};
@@ -213,7 +232,7 @@ export async function meteredProxy(upstream: Target, o: { ledger: string; budget
       server.closeAllConnections();
       server.close();
       const date = new Date().toISOString();
-      appendLedger(o.ledger, { date, account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: upstream.name, runId: o.runId, ...n, charges: 0 });
+      appendLedger(o.ledger, { date, account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: upstream.name, runId: o.runId, ...n });
       return { ...n, aborted };
     },
   };
@@ -261,7 +280,7 @@ export async function agreeRuns(o: { cmd: string; junit?: string; runs: ("twin" 
   } finally {
     closeTwin();
     const m = await proxy?.close();
-    if (m) console.error(`agree: sandbox: ${m.gets} GET, ${m.posts} POST, ${m.deletes} DELETE ledgered to ${ledger}${m.aborted ? `; HALTED: ${m.aborted}` : ""}`);
+    if (m) console.error(`agree: sandbox: ${m.gets} GET, ${m.posts} POST, ${m.deletes} DELETE, ${m.charges} charges (direct charge-creating calls only) ledgered to ${ledger}${m.aborted ? `; HALTED: ${m.aborted}` : ""}`);
     halted = m?.aborted;
   }
   if (halted) throw new Refused(`agree: the sandbox run was halted, so there is no report: ${halted}`);
