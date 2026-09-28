@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-09-28",
+    "endpoint": "GET /v1/invoices",
+    "template": "subscription-update-price",
+    "path": "$.data[0].account_name",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-28",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "expand-paths",
+    "path": "$.data[0].latest_charge.payment_method_details.card.electronic_commerce_indicator",
+    "cls": "VALUE_MISMATCH"
+  }
+]

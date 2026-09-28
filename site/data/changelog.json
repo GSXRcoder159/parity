@@ -306,5 +306,20 @@
     "note": "post-freeze twin commits that had no sealed-log entry (F15), logged together: f0365c0 anchor reset without item changes follows flexible mode; 0dc6b2e a credit needs one debit that billed the whole credited span; 0f7002c create_preview refuses an anchor timestamp, and a new subscription takes no anchor or proration_date; 09dd79e an unscoped subscription list leaves out clock subscriptions. Scored f0365c0^ (the twin of 2914c99) against HEAD: the span also holds the surface-added entries for bcec25c, d32db08..1c945e7 and 5d0e523..1187721, so this delta overlaps theirs",
     "commit": "f0365c04e1dc615a84c8d5968a82ffa81fb87c3e",
     "divergencesRemoved": -4
+  },
+  {
+    "date": "2026-09-28",
+    "class": "automatic",
+    "file": "src/twin/errors.json",
+    "pointers": [
+      "/unit_amount_exclusive/message",
+      "/expand_too_deep/code",
+      "/invoice_preview_target_missing/message",
+      "/invoice_upcoming_deprecated/message",
+      "/invoice_pay_voided/message",
+      "/invoice_void_paid/message"
+    ],
+    "commit": "ae1343c45b83ac0ee658660fbea93ba50fd77f68",
+    "divergencesRemoved": 80
   }
 ]
