@@ -31,14 +31,17 @@ function withEnv(vars: Record<string, string | undefined>): () => void {
   return () => set(saved);
 }
 
-test("tasks.json: 20 refund/cancel/proration tasks, each with setup, an instruction naming the customer, scripted calls and checks", () => {
-  assert.equal(TASKS.length, 20);
-  assert.equal(new Set(TASKS.map((t) => t.id)).size, 20);
+test("tasks.json: 80 refund/cancel/proration tasks, each with setup, an instruction naming the customer by email, scripted calls and checks", () => {
+  assert.equal(TASKS.length, 80);
+  assert.equal(new Set(TASKS.map((t) => t.id)).size, 80);
   const n = (s: string) => TASKS.filter((t) => t.stratum === s).length;
-  assert.deepEqual([n("refunds"), n("cancellation"), n("proration")], [6, 6, 8]);
+  assert.deepEqual([n("refunds"), n("cancellation"), n("proration")], [28, 26, 26]);
+  // Invoice lookups and customer lookups by email are grouped by id prefix (their stratum is the write they check).
+  const prefix = (p: string) => TASKS.filter((t) => t.id.startsWith(p)).length;
+  assert.deepEqual([prefix("invoice-"), prefix("lookup-")], [8, 10]);
   for (const t of TASKS) {
     assert.ok(t.setup.length >= 4 && t.setup.every((s) => typeof s === "object" && s.method && s.path), t.id);
-    assert.match(t.instruction, /\$c1\.email/, t.id);
+    assert.match(t.instruction, /\$c\w*\.email/, t.id);
     assert.ok(t.scripted.length >= 1 && t.checks.length >= 1 && t.checks.every((c) => Object.keys(c.expect).length > 0), t.id);
   }
 });
@@ -50,7 +53,7 @@ test("scripted agent on the twin: every task passes but the twin's known gaps (h
   assert.equal(r.agreement, null);
   assert.equal(r.model, null);
   assert.equal(r.costUsd, 0);
-  assert.match(h4Text(r), /twin: 19 pass, 1 fail, 0 error/);
+  assert.match(h4Text(r), /twin: 79 pass, 1 fail, 0 error/);
 });
 
 test("an agent that does nothing fails every task: no predicate holds on the setup state alone", async () => {

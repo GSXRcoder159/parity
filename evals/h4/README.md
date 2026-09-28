@@ -4,12 +4,24 @@ H4 asks whether an agent task's pass/fail on the twin predicts its pass/fail on 
 ≥95% agreement to confirm and <90% to stop before any pricing conversation. This directory is the fallback suite from
 plan §6.4, for use when no partner suite exists. It is an agent run, not a gym framework.
 
-- `tasks.json` holds 20 tasks: 6 refunds, 6 cancellations, 8 prorations. Each task has:
+- `tasks.json` holds 80 tasks over the ICP call graph (plan §2.1): 28 refunds, 26 cancellations, 26 prorations (the
+  stratum is the write the checks read). Invoice lookups (`invoice-*`, 8) and customer lookups by email (`lookup-*`, 10;
+  namesakes who differ only in the email's domain, a changed email, a deleted customer with the same email) are grouped
+  by id prefix, since `Stratum` has no lookup value. Each task has:
   - `setup`: steps in the harness's template format, run by `src/bench/run.ts`. A fixture name expands to its steps.
   - `instruction`: the request in plain language. It names the customer by email.
   - `checks`: API reads of the final state, made against the same target. A field path maps to its expected value,
     or to `{">": n}` or `{"<": n}`. Refs resolve from the setup and from earlier checks.
   - `scripted`: the fixed tool calls that solve the task, for validating the harness without an LLM.
+- **Tool reach.** The agent's 9 tools (below) bound what a task can ask:
+  - "Pay an open `send_invoice` invoice" is **not in the suite**: no tool pays an invoice. Adding one would change the
+    agent between the 20-task and the 80-task runs. The `invoice-*` tasks create the open invoice in setup and ask for
+    what the tools reach (cancel or refund the right subscription or payment).
+  - Invoice retrieve is exercised by the checks (`GET /v1/invoices/:id`); the agent finds invoices with `list_invoices`.
+  - The `preview-*` tasks make the instruction's choice depend on the prorated amount. No tool previews it, so the agent
+    works it out from the prices; the checks' `POST /v1/invoices/create_preview` reads the result.
+  - `cancel_at_period_end` is not in the ported `update_subscription` schema. The bridge forwards extra properties to
+    `Subscription.modify`, so the scripted solutions pass it; whether the model does is part of its outcome.
 - `toolkit.py` is the agent's tools. It runs the pinned Python `stripe-agent-toolkit==0.6.1` with `stripe.api_base`
   set to the target (W0 verifications §10), as a JSON-lines server under `uv run --script`.
 - `run.ts` is the runner. It runs every task on the twin, on a second fresh twin (the control) and on the sandbox,
@@ -41,7 +53,7 @@ node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
                                                            # the H4 number: twin, control, sandbox (after B1)
 ```
 
-A full run (twin, control, sandbox) is up to 60 × 12 = 720 model calls, half again the 480 of twin + sandbox alone.
+A full run (twin, control, sandbox) is up to 240 × 12 = 2,880 model calls, half again the 1,920 of twin + sandbox alone.
 The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day, which `PARITY_LLM_CAP_USD` can only
 lower) may well stop it; the result is then a partial report with no verdict. The cap counts the spend in one ledger,
 `<data dir>/budget/llm.jsonl`: it is shared with the nightly's assisted pass only if you pull the data repo before a
@@ -49,6 +61,17 @@ local run (the nightly pushes its spend there).
 
 ## Status (2026-09-28)
 
+- **Suite expansion to 80 tasks (2026-09-28), because the 20-task CI's lower bound (83.9%) is below the 90% stop line.**
+  The 60 new tasks were written before any twin or sandbox result for them (tasks.json sha256 `0d7720d0…` before the
+  first run). Scripted agent on the sandbox, the ground truth: 59/60 pass. The one failure was a wrong setup:
+  `remove-addon-item-credit` removed an add-on that had been added without proration, so it was never invoiced, and the
+  real API makes no proration credit for it. The setup now adds the add-on with `always_invoice` and the instruction says
+  it was paid for today; then 60/60. Scripted agent on the twin: 60/60, so no new `TWIN_GAPS`. The sandbox passes made
+  1+222+2 GET. **The 80-task LLM run is scheduled after 00:00 UTC 2026-09-29** (today's $15 cap has $12.03 left, less
+  than the run may cost). Until then the H4 number below is the 20-task one. Stated before that run: the twin's error
+  messages are `parity: <key>` placeholders (decision 0002 §4 rule 3), while the sandbox's are descriptive ("Refund amount
+  … is greater than charge amount …"). The agent reads them as tool results, so on the over-refund, refunded-charge and
+  canceled-subscription tasks they are a candidate cause of twin-vs-sandbox disagreement.
 - **H4 number (2026-09-28, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs sandbox 100.0% (20/20;
   Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
   noise floor 0.0%. Every run: 19 pass, 1 fail (`switch-to-annual`), 0 error. 250 model calls, $2.7459; the sandbox half
@@ -59,8 +82,8 @@ local run (the nightly pushes its spend there).
   `subscription_update` one). Strictly scored without it, 19/19 (CI 83.2%–100.0%). Tool inputs are not logged, so
   whether that invoice result is the API's default for the swap or the agent's choice of parameters is open; it goes
   to the recording task that owns the gap.
-- **Scripted agent on the twin: 19/20 pass; twin vs control 20/20** (the scripted agent is deterministic, so this
-  checks the control path, not an agent; rerun 2026-09-26 after the final-review fixes, same result).
+- **Scripted agent on the twin: 79/80 pass** (2026-09-28, 80 tasks; 19/20 and twin vs control 20/20 on the 20-task
+  suite: the scripted agent is deterministic, so that checks the control path, not an agent).
   `switch-to-annual` fails because the twin answers `not_implemented` to a price on another billing interval without
   `billing_cycle_anchor=now` (`src/twin/resources/subscriptions.ts`). W4 Task 3 deliberately kept that refusal: how the
   real API aligns the new period when the anchor is not reset is unobserved. This is a twin surface gap, and the task

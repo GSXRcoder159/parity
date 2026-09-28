@@ -14,6 +14,36 @@
     ],
     "business": [
       { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 5000, "recurring": { "interval": "month" }, "product_data": { "name": "Business plan" } } }
+    ],
+    "seats": [
+      { "ref": "c1", "method": "POST", "path": "/v1/customers", "params": { "email": "h4-$run@example.com", "name": "Ada Lovelace" } },
+      { "ref": "pm1", "method": "POST", "path": "/v1/payment_methods/pm_card_visa/attach", "params": { "customer": "$c1.id" } },
+      { "ref": "pr1", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 2000, "recurring": { "interval": "month" }, "product_data": { "name": "Pro plan" } } },
+      { "ref": "s1", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c1.id", "items": [{ "price": "$pr1.id", "quantity": 5 }], "default_payment_method": "$pm1.id" } },
+      { "ref": "pis", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c1.id" } }
+    ],
+    "starter": [
+      { "ref": "prS", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 500, "recurring": { "interval": "month" }, "product_data": { "name": "Starter plan" } } }
+    ],
+    "canceling": [
+      { "ref": "s1x", "method": "POST", "path": "/v1/subscriptions/$s1.id", "params": { "cancel_at_period_end": true } }
+    ],
+    "refunded": [
+      { "ref": "rf1", "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id" } }
+    ],
+    "upgraded": [
+      { "ref": "s1u", "method": "POST", "path": "/v1/subscriptions/$s1.id", "waitMs": 1100, "params": { "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id" }], "proration_behavior": "always_invoice" } },
+      { "ref": "pisU", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c1.id" } }
+    ],
+    "invoiced": [
+      { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics add-on" } } },
+      { "ref": "s2", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c1.id", "items": [{ "price": "$pr2.id" }], "collection_method": "send_invoice", "days_until_due": 30 } }
+    ],
+    "namesake": [
+      { "ref": "c2", "method": "POST", "path": "/v1/customers", "params": { "email": "h4-$run@example.org", "name": "Ada Lovelace" } },
+      { "ref": "pm2", "method": "POST", "path": "/v1/payment_methods/pm_card_visa/attach", "params": { "customer": "$c2.id" } },
+      { "ref": "s3", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c2.id", "items": [{ "price": "$pr1.id" }], "default_payment_method": "$pm2.id" } },
+      { "ref": "pis3", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c2.id" } }
     ]
   },
   "tasks": [
@@ -287,6 +317,835 @@
       "checks": [
         { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.length": 1, "items.data.0.price.id": "$pr2.id" } },
         { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "refund-full-seats",
+      "stratum": "refunds",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email pays for 5 seats of the Pro plan. Refund their last payment in full. They keep their subscription and all 5 seats.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount": 10000, "amount_refunded": 10000, "refunded": true } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.quantity": 5 } }
+      ]
+    },
+    {
+      "id": "refund-one-seat",
+      "stratum": "refunds",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email pays for 5 seats of the Pro plan ($20.00 per seat per month). One seat went unused this month: refund one seat's price from their last payment. Keep all 5 seats.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 2000 } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000, "refunded": false } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.quantity": 5 } }
+      ]
+    },
+    {
+      "id": "refund-half-seats",
+      "stratum": "refunds",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email pays for 5 seats of the Pro plan. Refund half of their last payment. Keep their subscription and all 5 seats.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 5000 } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 5000, "refunded": false } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.quantity": 5 } }
+      ]
+    },
+    {
+      "id": "refund-over-seats",
+      "stratum": "refunds",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email asks for $150.00 back on their last payment. Refund as much of that as the payment allows. They keep their subscription.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 15000 } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 10000 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "refund-addon-partial",
+      "stratum": "refunds",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email pays for a $20.00/month Pro plan and a $9.00/month Analytics add-on. Refund $4.50 of the add-on's last payment. Refund nothing on the Pro plan payment, and do not change either subscription.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": 450 } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount": 900, "amount_refunded": 450, "refunded": false } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "refund-both-full",
+      "stratum": "refunds",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email pays for a $20.00/month Pro plan and a $9.00/month Analytics add-on. Refund the last payment of each in full. They keep both subscriptions.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount_refunded": 900 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "refund-over-remaining",
+      "stratum": "refunds",
+      "setup": ["subscribed", { "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id", "amount": 1500 } }],
+      "instruction": "Customer $c1.email already got $15.00 of their last payment back. They now ask for another $10.00. Refund as much of that $10.00 as the payment still allows.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 1000 } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000, "refunded": true } },
+        { "method": "GET", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id" }, "expect": { "data.length": 2 } }
+      ]
+    },
+    {
+      "id": "refund-over-addon",
+      "stratum": "refunds",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email asks for $15.00 back on each of their last two payments: the $20.00 Pro plan payment and the $9.00 Analytics add-on payment. Refund $15.00 of each, or all of a payment that is smaller than $15.00.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 1500 } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": 1500 } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 1500 } },
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount_refunded": 900 } }
+      ]
+    },
+    {
+      "id": "refund-over-and-cancel",
+      "stratum": "refunds",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email wants their subscription canceled now and $25.00 back on their last payment. Refund as much of the $25.00 as that payment allows.",
+      "scripted": [
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 2500 } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } }
+      ]
+    },
+    {
+      "id": "refund-refunded-and-cancel",
+      "stratum": "refunds",
+      "setup": ["subscribed", "refunded"],
+      "instruction": "Customer $c1.email wants their last payment refunded in full and their subscription canceled now.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } },
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id" }, "expect": { "data.length": 1 } }
+      ]
+    },
+    {
+      "id": "refund-refunded-addon",
+      "stratum": "refunds",
+      "setup": ["subscribed", "addon", { "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis2.data.0.id" } }],
+      "instruction": "Customer $c1.email pays for a $20.00/month Pro plan and a $9.00/month Analytics add-on. Refund the last payment of each in full. They keep both subscriptions.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount_refunded": 900 } },
+        { "method": "GET", "path": "/v1/refunds", "params": { "payment_intent": "$pis2.data.0.id" }, "expect": { "data.length": 1 } }
+      ]
+    },
+    {
+      "id": "refund-rest-after-two",
+      "stratum": "refunds",
+      "setup": [
+        "subscribed",
+        { "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id", "amount": 500 } },
+        { "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id", "amount": 700 } }
+      ],
+      "instruction": "Customer $c1.email has had two partial refunds on their last payment. Refund the rest of that payment.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000, "refunded": true } },
+        { "method": "GET", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id" }, "expect": { "data.length": 3 } }
+      ]
+    },
+    {
+      "id": "refund-upgrade-charge",
+      "stratum": "refunds",
+      "setup": ["subscribed", "business", "upgraded"],
+      "instruction": "Customer $c1.email moved from the Pro plan to the Business plan today and was charged a prorated difference. Refund that prorated charge in full. Keep them on the Business plan, and do not refund their earlier Pro plan payment.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pisU.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pisU.data.0.latest_charge", "expect": { "amount_refunded": "$pisU.data.0.amount" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.price.id": "$pr2.id" } }
+      ]
+    },
+    {
+      "id": "refund-upgrade-charge-partial",
+      "stratum": "refunds",
+      "setup": ["subscribed", "business", "upgraded"],
+      "instruction": "Customer $c1.email moved from the Pro plan to the Business plan today and was charged a prorated difference. Refund $10.00 of that prorated charge. Keep them on the Business plan, and do not refund their earlier Pro plan payment.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pisU.data.0.id", "amount": 1000 } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pisU.data.0.latest_charge", "expect": { "amount_refunded": 1000 } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.price.id": "$pr2.id" } }
+      ]
+    },
+    {
+      "id": "cancel-at-period-end",
+      "stratum": "cancellation",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email wants their subscription to end at the end of the current billing period, not now. No refund.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": true } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "cancel-addon-at-period-end",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email wants to drop their $9.00/month Analytics add-on at the end of its current billing period, not now. Keep their Pro plan.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s2.id", "cancel_at_period_end": true } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false } }
+      ]
+    },
+    {
+      "id": "cancel-all-at-period-end",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email wants all of their subscriptions to end at the end of their current billing periods. Cancel nothing now, and refund nothing.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": true } },
+        { "tool": "update_subscription", "input": { "subscription": "$s2.id", "cancel_at_period_end": true } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "cancel-pro-now-addon-later",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email wants their Pro plan canceled now. Their $9.00/month Analytics add-on should run to the end of its current billing period and then end.",
+      "scripted": [
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } },
+        { "tool": "update_subscription", "input": { "subscription": "$s2.id", "cancel_at_period_end": true } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active", "cancel_at_period_end": true } }
+      ]
+    },
+    {
+      "id": "reactivate",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "canceling"],
+      "instruction": "Customer $c1.email set their subscription to cancel at the end of the current billing period, but changed their mind: keep it going.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": false } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false, "cancel_at": null } }
+      ]
+    },
+    {
+      "id": "reactivate-addon-only",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "addon", "canceling", { "method": "POST", "path": "/v1/subscriptions/$s2.id", "params": { "cancel_at_period_end": true } }],
+      "instruction": "Both of customer $c1.email's subscriptions are set to cancel at the end of their current billing periods. They want to keep the $9.00/month Analytics add-on going; the Pro plan still ends as scheduled.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s2.id", "cancel_at_period_end": false } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active", "cancel_at_period_end": false } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": true } }
+      ]
+    },
+    {
+      "id": "reactivate-and-upgrade",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "business", "canceling"],
+      "instruction": "Customer $c1.email set their Pro subscription to cancel at the end of the current billing period. They will stay if they can have the Business plan (price $pr2.id, $50.00/month): keep the subscription going and move them to Business now, prorated, charging the difference immediately.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": false, "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false, "items.data.length": 1, "items.data.0.price.id": "$pr2.id" } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "reactivate-and-add-seats",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "canceling"],
+      "instruction": "Customer $c1.email set their Pro subscription to cancel at the end of the current billing period, but now they are staying and adding 2 seats. Keep the subscription going, set it to 3 seats now, and charge the prorated difference immediately.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": false, "items": [{ "id": "$s1.items.data.0.id", "quantity": 3 }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false, "items.data.0.quantity": 3 } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "cancel-now-instead",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "canceling"],
+      "instruction": "Customer $c1.email's subscription is set to end at the end of the current billing period. They want it canceled right now instead. No refund.",
+      "scripted": [{ "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "cancel-all-one-canceled",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "addon", { "method": "DELETE", "path": "/v1/subscriptions/$s2.id" }],
+      "instruction": "Customer $c1.email is closing their account: make sure none of their subscriptions is still running. Cancel now, and refund nothing.",
+      "scripted": [
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } },
+        { "tool": "cancel_subscription", "input": { "subscription": "$s2.id" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "cancel-now-refund-rest",
+      "stratum": "cancellation",
+      "setup": ["subscribed", { "method": "POST", "path": "/v1/refunds", "params": { "payment_intent": "$pis.data.0.id", "amount": 500 } }],
+      "instruction": "Customer $c1.email already got $5.00 of their last payment back. Cancel their subscription now and refund whatever is left of that payment.",
+      "scripted": [
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000, "refunded": true } }
+      ]
+    },
+    {
+      "id": "cancel-at-period-end-and-credit",
+      "stratum": "cancellation",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email is leaving at the end of the current billing period, not now. As a goodwill gesture, refund $5.00 of their last payment.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "cancel_at_period_end": true } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": 500 } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 500 } }
+      ]
+    },
+    {
+      "id": "downgrade-bill-now",
+      "stratum": "proration",
+      "setup": ["subscribed", "starter"],
+      "instruction": "Downgrade customer $c1.email from the Pro plan to the Starter plan (price $prS.id, $5.00/month) now. Prorate it and invoice the change immediately: their unused Pro time becomes a credit on their account, not a refund to their card.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$prS.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.price.id": "$prS.id" } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid", "total": { "<": 0 } } },
+        { "method": "GET", "path": "/v1/customers/$c1.id", "expect": { "balance": { "<": 0 } } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "downgrade-no-proration",
+      "stratum": "proration",
+      "setup": ["subscribed", "starter"],
+      "instruction": "Move customer $c1.email from the Pro plan to the Starter plan (price $prS.id, $5.00/month) with no proration: nothing is charged or credited now, and the new price applies from their next renewal.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$prS.id" }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.price.id": "$prS.id", "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": 500 } }
+      ]
+    },
+    {
+      "id": "seats-up-next-invoice",
+      "stratum": "proration",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email added two seats: set their Pro plan to 3 seats now. Prorate the change, but charge nothing now: the difference goes on their next regular invoice.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 3 }], "proration_behavior": "create_prorations" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 3, "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": { ">": 6000 } } }
+      ]
+    },
+    {
+      "id": "seats-up-no-proration",
+      "stratum": "proration",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email is going to 3 seats on their Pro plan. No proration: nothing is charged now, and the 3 seats are billed from their next renewal.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 3 }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 3, "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": 6000 } }
+      ]
+    },
+    {
+      "id": "seats-down-credit-next-invoice",
+      "stratum": "proration",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email is going from 5 seats to 2 on their Pro plan now. Prorate the change and credit the unused seat time on their next invoice; refund nothing.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 2 }], "proration_behavior": "create_prorations" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 2, "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": { "<": 4000 } } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "seats-down-bill-now",
+      "stratum": "proration",
+      "setup": ["seats"],
+      "instruction": "Customer $c1.email is going from 5 seats to 2 on their Pro plan now. Prorate it and invoice the change immediately: the unused seat time becomes a credit on their account, not a refund to their card.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 2 }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 2 } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid", "total": { "<": 0 } } },
+        { "method": "GET", "path": "/v1/customers/$c1.id", "expect": { "balance": { "<": 0 } } }
+      ]
+    },
+    {
+      "id": "remove-addon-item",
+      "stratum": "proration",
+      "setup": [
+        "subscribed",
+        { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics add-on" } } },
+        { "ref": "s1b", "method": "POST", "path": "/v1/subscriptions/$s1.id", "params": { "items": [{ "price": "$pr2.id" }], "proration_behavior": "none" } }
+      ],
+      "instruction": "Customer $c1.email's Pro subscription has a second item, the Analytics add-on (price $pr2.id, $9.00/month). Remove the add-on from the subscription now, with no proration: no credit, and their next renewal bills the Pro plan only.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1b.items.data.1.id", "deleted": true }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.length": 1, "items.data.0.price.id": "$pr1.id", "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": 2000 } }
+      ]
+    },
+    {
+      "id": "remove-addon-item-credit",
+      "stratum": "proration",
+      "setup": [
+        "subscribed",
+        { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics add-on" } } },
+        { "ref": "s1b", "method": "POST", "path": "/v1/subscriptions/$s1.id", "params": { "items": [{ "price": "$pr2.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "instruction": "Customer $c1.email's Pro subscription has a second item, the Analytics add-on (price $pr2.id, $9.00/month), which they paid for today. Remove the add-on from the subscription now. Prorate it: credit the unused add-on time on their next invoice, and refund nothing.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1b.items.data.1.id", "deleted": true }], "proration_behavior": "create_prorations" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.length": 1, "items.data.0.price.id": "$pr1.id", "latest_invoice": "$s1b.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": { "<": 2000 } } }
+      ]
+    },
+    {
+      "id": "preview-upgrade-within-limit",
+      "stratum": "proration",
+      "setup": ["subscribed", "business"],
+      "instruction": "Customer $c1.email agreed to move from the Pro plan to the Business plan (price $pr2.id, $50.00/month) now if the prorated charge for the rest of this billing period is at most $35.00. If it is, make the change and charge it immediately; if it is more, change nothing.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.length": 1, "items.data.0.price.id": "$pr2.id" } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "preview-upgrade-over-limit",
+      "stratum": "proration",
+      "setup": ["subscribed", "business"],
+      "instruction": "Customer $c1.email agreed to move from the Pro plan to the Business plan (price $pr2.id, $50.00/month) now if the prorated charge for the rest of this billing period is at most $10.00. If it is, make the change and charge it immediately. If it is more, make the change without proration instead: nothing is charged or credited now, and the new price applies from their next renewal.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id" }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.price.id": "$pr2.id", "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": 5000 } }
+      ]
+    },
+    {
+      "id": "preview-seats-within-limit",
+      "stratum": "proration",
+      "setup": ["subscribed"],
+      "instruction": "Customer $c1.email wants 2 more seats on their Pro plan (3 in total) now. They approved a prorated charge of up to $45.00 for them: if the prorated charge is within that, make the change and charge it immediately; if it is more, make the change without proration, so the new seats are billed from their next renewal.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 3 }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 3 } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "preview-downgrade-credit",
+      "stratum": "proration",
+      "setup": ["subscribed", "starter"],
+      "instruction": "Downgrade customer $c1.email from the Pro plan to the Starter plan (price $prS.id, $5.00/month) now. If the prorated credit for their unused Pro time is at least $10.00, prorate the change and leave the credit for their next invoice; if it is less, make the change without proration. Refund nothing.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$prS.id" }], "proration_behavior": "create_prorations" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.price.id": "$prS.id", "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": { "<": 500 } } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "swap-addon-up",
+      "stratum": "proration",
+      "setup": [
+        "subscribed",
+        "addon",
+        { "ref": "pr3", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 1900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics Plus add-on" } } }
+      ],
+      "instruction": "Customer $c1.email wants to move their $9.00/month Analytics add-on subscription to Analytics Plus (price $pr3.id, $19.00/month) now. Prorate it and charge the difference immediately. Do not change their Pro plan.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s2.id", "items": [{ "id": "$s2.items.data.0.id", "price": "$pr3.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub2", "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active", "items.data.length": 1, "items.data.0.price.id": "$pr3.id" } },
+        { "method": "GET", "path": "/v1/invoices/$sub2.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.0.price.id": "$pr1.id", "latest_invoice": "$s1.latest_invoice" } }
+      ]
+    },
+    {
+      "id": "upgrade-with-seats",
+      "stratum": "proration",
+      "setup": ["subscribed", "business"],
+      "instruction": "Move customer $c1.email from the Pro plan to the Business plan (price $pr2.id, $50.00/month per seat) with 2 seats, now. Prorate the change and charge the difference immediately.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id", "quantity": 2 }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.length": 1, "items.data.0.price.id": "$pr2.id", "items.data.0.quantity": 2 } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } }
+      ]
+    },
+    {
+      "id": "addon-seats-no-proration",
+      "stratum": "proration",
+      "setup": ["subscribed", "addon"],
+      "instruction": "Customer $c1.email wants 3 seats of their $9.00/month Analytics add-on, from their next renewal of it, with no proration. Do not change their Pro plan.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s2.id", "items": [{ "id": "$s2.items.data.0.id", "quantity": 3 }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "items.data.length": 1, "items.data.0.quantity": 3, "latest_invoice": "$s2.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s2.id" }, "expect": { "total": 2700 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.0.quantity": 1 } }
+      ]
+    },
+    {
+      "id": "add-addon-next-invoice",
+      "stratum": "proration",
+      "setup": [
+        "subscribed",
+        { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics add-on" } } }
+      ],
+      "instruction": "Add the Analytics add-on (price $pr2.id, $9.00/month) to customer $c1.email's Pro subscription as a second item, now. Prorate it, but charge nothing now: the prorated amount goes on their next regular invoice.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "price": "$pr2.id" }], "proration_behavior": "create_prorations" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.length": 2, "latest_invoice": "$s1.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": { ">": 2900 } } }
+      ]
+    },
+    {
+      "id": "invoice-refund-first",
+      "stratum": "refunds",
+      "setup": ["subscribed", "business", "upgraded"],
+      "instruction": "Customer $c1.email has two paid invoices: one from when they subscribed and one from a plan change today. Refund what they paid on the first one, in full. Keep them on their current plan.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/charges/$pisU.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "items.data.0.price.id": "$pr2.id" } }
+      ]
+    },
+    {
+      "id": "invoice-open-cancel",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "invoiced"],
+      "instruction": "Customer $c1.email has not paid one of their invoices. Cancel the subscription that invoice is for, now. Leave their other subscription as it is.",
+      "scripted": [{ "tool": "cancel_subscription", "input": { "subscription": "$s2.id" } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false } }
+      ]
+    },
+    {
+      "id": "invoice-open-at-period-end",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "invoiced"],
+      "instruction": "Customer $c1.email has not paid one of their invoices. Set the subscription that invoice is for to end at the end of its current billing period, not now. Leave their other subscription as it is.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s2.id", "cancel_at_period_end": true } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active", "cancel_at_period_end": false } }
+      ]
+    },
+    {
+      "id": "invoice-refund-paid",
+      "stratum": "refunds",
+      "setup": ["subscribed", "invoiced"],
+      "instruction": "Customer $c1.email has one paid invoice and one unpaid invoice. Refund what they paid on the paid invoice, in full. Do not cancel or change anything else.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "cancel_at_period_end": false, "items.data.0.price.id": "$pr2.id" } }
+      ]
+    },
+    {
+      "id": "invoice-close-account",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "invoiced"],
+      "instruction": "Customer $c1.email is closing their account. Cancel all of their subscriptions now, and refund what they paid on their paid invoice, in full.",
+      "scripted": [
+        { "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } },
+        { "tool": "cancel_subscription", "input": { "subscription": "$s2.id" } },
+        { "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } }
+      ]
+    },
+    {
+      "id": "invoice-largest-refund",
+      "stratum": "refunds",
+      "setup": [
+        "subscribed",
+        "business",
+        { "ref": "s2", "method": "POST", "path": "/v1/subscriptions", "waitMs": 1100, "params": { "customer": "$c1.id", "items": [{ "price": "$pr2.id" }], "default_payment_method": "$pm1.id" } },
+        { "ref": "pis2", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c1.id" } }
+      ],
+      "instruction": "Customer $c1.email has two subscriptions. Refund what they paid on their largest invoice, in full. They keep both subscriptions.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount": 5000, "amount_refunded": 5000 } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "invoice-addon-extra-seats",
+      "stratum": "refunds",
+      "setup": [
+        "subscribed",
+        { "ref": "pr2", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 900, "recurring": { "interval": "month" }, "product_data": { "name": "Analytics add-on" } } },
+        { "ref": "s2", "method": "POST", "path": "/v1/subscriptions", "waitMs": 1100, "params": { "customer": "$c1.id", "items": [{ "price": "$pr2.id", "quantity": 3 }], "default_payment_method": "$pm1.id" } },
+        { "ref": "pis2", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c1.id" } }
+      ],
+      "instruction": "Customer $c1.email says their Analytics add-on invoice billed them for more seats than the 1 they use. Refund the extra seats' share of what they paid on that invoice, and set the add-on to 1 seat from its next renewal, with no proration.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pis2.data.0.id", "amount": 1800 } },
+        { "tool": "update_subscription", "input": { "subscription": "$s2.id", "items": [{ "id": "$s2.items.data.0.id", "quantity": 1 }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis2.data.0.latest_charge", "expect": { "amount": 2700, "amount_refunded": 1800 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s2.id", "expect": { "items.data.0.quantity": 1, "latest_invoice": "$s2.latest_invoice" } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s2.id" }, "expect": { "total": 900 } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "invoice-seats-charge-refund",
+      "stratum": "refunds",
+      "setup": [
+        "subscribed",
+        { "method": "POST", "path": "/v1/subscriptions/$s1.id", "waitMs": 1100, "params": { "items": [{ "id": "$s1.items.data.0.id", "quantity": 3 }], "proration_behavior": "always_invoice" } },
+        { "ref": "pisQ", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c1.id" } }
+      ],
+      "instruction": "Customer $c1.email was charged today on an invoice for 2 extra seats they did not want. Refund that invoice's payment in full, and set them back to 1 seat from their next renewal, with no proration.",
+      "scripted": [
+        { "tool": "create_refund", "input": { "payment_intent": "$pisQ.data.0.id", "amount": null } },
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "quantity": 1 }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pisQ.data.0.latest_charge", "expect": { "amount_refunded": "$pisQ.data.0.amount" } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.0.quantity": 1 } },
+        { "method": "POST", "path": "/v1/invoices/create_preview", "params": { "subscription": "$s1.id" }, "expect": { "total": 2000 } }
+      ]
+    },
+    {
+      "id": "lookup-refund",
+      "stratum": "refunds",
+      "setup": ["subscribed", "namesake"],
+      "instruction": "Customer $c1.email wants their last payment refunded in full. They keep their subscription.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/charges/$pis3.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "lookup-refund-other",
+      "stratum": "refunds",
+      "setup": ["subscribed", "namesake"],
+      "instruction": "Customer $c2.email was promised a $5.00 credit: refund $5.00 of their last payment. Do not change their subscription.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis3.data.0.id", "amount": 500 } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis3.data.0.latest_charge", "expect": { "amount_refunded": 500 } },
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 0 } }
+      ]
+    },
+    {
+      "id": "lookup-cancel",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "namesake"],
+      "instruction": "Customer $c1.email wants their subscription canceled immediately. No refund.",
+      "scripted": [{ "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "lookup-cancel-other-at-period-end",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "namesake"],
+      "instruction": "Customer $c2.email wants their subscription to end at the end of the current billing period, not now.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s3.id", "cancel_at_period_end": true } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "status": "active", "cancel_at_period_end": true } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "cancel_at_period_end": false } }
+      ]
+    },
+    {
+      "id": "lookup-reactivate-other",
+      "stratum": "cancellation",
+      "setup": ["subscribed", "namesake", "canceling", { "method": "POST", "path": "/v1/subscriptions/$s3.id", "params": { "cancel_at_period_end": true } }],
+      "instruction": "Customer $c2.email set their subscription to cancel at the end of the current billing period, but changed their mind: keep it going.",
+      "scripted": [{ "tool": "update_subscription", "input": { "subscription": "$s3.id", "cancel_at_period_end": false } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "status": "active", "cancel_at_period_end": false } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "cancel_at_period_end": true } }
+      ]
+    },
+    {
+      "id": "lookup-upgrade",
+      "stratum": "proration",
+      "setup": ["subscribed", "namesake", "business"],
+      "instruction": "Move customer $c1.email from the Pro plan to the Business plan (price $pr2.id, $50.00/month) now. Prorate the change and charge the difference immediately.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s1.id", "items": [{ "id": "$s1.items.data.0.id", "price": "$pr2.id" }], "proration_behavior": "always_invoice" } }
+      ],
+      "checks": [
+        { "ref": "sub", "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.0.price.id": "$pr2.id" } },
+        { "method": "GET", "path": "/v1/invoices/$sub.latest_invoice", "expect": { "billing_reason": "subscription_update", "status": "paid" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "items.data.0.price.id": "$pr1.id", "latest_invoice": "$s3.latest_invoice" } }
+      ]
+    },
+    {
+      "id": "lookup-seats-other",
+      "stratum": "proration",
+      "setup": ["subscribed", "namesake"],
+      "instruction": "Customer $c2.email is going to 3 seats on their Pro plan. No proration: nothing is charged now, and the 3 seats are billed from their next renewal.",
+      "scripted": [
+        { "tool": "update_subscription", "input": { "subscription": "$s3.id", "items": [{ "id": "$s3.items.data.0.id", "quantity": 3 }], "proration_behavior": "none" } }
+      ],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "items.data.0.quantity": 3, "latest_invoice": "$s3.latest_invoice" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "items.data.0.quantity": 1 } }
+      ]
+    },
+    {
+      "id": "lookup-three",
+      "stratum": "cancellation",
+      "setup": [
+        "subscribed",
+        "namesake",
+        { "ref": "c3", "method": "POST", "path": "/v1/customers", "params": { "email": "h4-$run@example.net", "name": "Ada Lovelace" } },
+        { "ref": "pm3", "method": "POST", "path": "/v1/payment_methods/pm_card_visa/attach", "params": { "customer": "$c3.id" } },
+        { "ref": "s4", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c3.id", "items": [{ "price": "$pr1.id" }], "default_payment_method": "$pm3.id" } }
+      ],
+      "instruction": "Customer $c2.email wants their subscription canceled immediately. No refund.",
+      "scripted": [{ "tool": "cancel_subscription", "input": { "subscription": "$s3.id" } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s4.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "lookup-email-changed",
+      "stratum": "cancellation",
+      "setup": [
+        "subscribed",
+        { "ref": "c1u", "method": "POST", "path": "/v1/customers/$c1.id", "params": { "email": "h4-$run-new@example.com" } },
+        { "ref": "c2", "method": "POST", "path": "/v1/customers", "params": { "email": "h4-$run@example.com", "name": "Ada Lovelace" } },
+        { "ref": "pm2", "method": "POST", "path": "/v1/payment_methods/pm_card_visa/attach", "params": { "customer": "$c2.id" } },
+        { "ref": "s3", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c2.id", "items": [{ "price": "$pr1.id" }], "default_payment_method": "$pm2.id" } }
+      ],
+      "instruction": "Customer $c1u.email wants their subscription canceled immediately. No refund.",
+      "scripted": [{ "tool": "cancel_subscription", "input": { "subscription": "$s1.id" } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "canceled" } },
+        { "method": "GET", "path": "/v1/subscriptions/$s3.id", "expect": { "status": "active" } }
+      ]
+    },
+    {
+      "id": "lookup-deleted-duplicate",
+      "stratum": "refunds",
+      "setup": [
+        { "ref": "c0", "method": "POST", "path": "/v1/customers", "params": { "email": "h4-$run@example.com", "name": "Ada Lovelace" } },
+        { "ref": "pm0", "method": "POST", "path": "/v1/payment_methods/pm_card_visa/attach", "params": { "customer": "$c0.id" } },
+        { "ref": "pr0", "method": "POST", "path": "/v1/prices", "params": { "currency": "usd", "unit_amount": 2000, "recurring": { "interval": "month" }, "product_data": { "name": "Pro plan" } } },
+        { "ref": "s0", "method": "POST", "path": "/v1/subscriptions", "params": { "customer": "$c0.id", "items": [{ "price": "$pr0.id" }], "default_payment_method": "$pm0.id" } },
+        { "ref": "pis0", "method": "GET", "path": "/v1/payment_intents", "params": { "customer": "$c0.id" } },
+        { "method": "DELETE", "path": "/v1/customers/$c0.id" },
+        "subscribed"
+      ],
+      "instruction": "Customer $c1.email wants their last payment refunded in full. They keep their subscription.",
+      "scripted": [{ "tool": "create_refund", "input": { "payment_intent": "$pis.data.0.id", "amount": null } }],
+      "checks": [
+        { "method": "GET", "path": "/v1/charges/$pis.data.0.latest_charge", "expect": { "amount_refunded": 2000 } },
+        { "method": "GET", "path": "/v1/charges/$pis0.data.0.latest_charge", "expect": { "amount_refunded": 0 } },
+        { "method": "GET", "path": "/v1/subscriptions/$s1.id", "expect": { "status": "active" } }
       ]
     }
   ]
