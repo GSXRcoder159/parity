@@ -5,7 +5,7 @@
 // its sealed-log entries at once, land(), once the suite and tsc pass on it). A refused or aborted recording (budget gate,
 // circuit breaker), an allowance of 0, a deferred noise pair (decision 0001 C2) and a red suite on the align commit are
 // sealed-log notes, not failures: the night goes on, and when no slice was recorded it scores the existing oracle and
-// the curve point says oracleRefreshed: false.
+// the curve point says oracleRefreshed: false. A red suite includes one that ran 0 tests or hung past GUARD_TIMEOUT_MS.
 // Any other error (a missing key, a tool the suite spawns missing from the runner, a bug) fails the night.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,11 +41,13 @@ const NIGHTLY_RPS = 10;
 const CORPUS_SEEDS = "1-20";
 /** The rotation cursor, in the data repo (committed with the read ledger): where tomorrow's slice starts. */
 const CURSOR = "budget/rotation.json";
+/** The test guard's limit per run (the suite, tsc): a hang drops the align commit with a note, not at the job's timeout. */
+const GUARD_TIMEOUT_MS = 600_000;
 
 /**
  * What a noise pair covers of tonight's scored oracle. `inSample`: the normalization rules were written from this pair,
- * so its floor flatters them (the W0 pair A/D, now noise-a/noise-b, wrote v1.2). `maxAgeDays`: the pair is at most this
- * many days old (a deferred pair leaves last week's ceiling in place).
+ * so its floor flatters them (the W0 pair A/D, now noise-a/noise-b, wrote v1.2; the 2026-09-28 pair wrote v1.4).
+ * `maxAgeDays`: the pair is at most this many days old (a deferred pair leaves last week's ceiling in place).
  */
 export type Coverage = { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number; strata: string[]; inSample: boolean; maxAgeDays: number };
 export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScores> };
@@ -55,8 +57,11 @@ export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScore
  */
 export type Patches = { automatic: number; assisted: number };
 
-/** Run ids of the noise pairs the current normalization rules were written from (v1.2: the W0 pair A/D). */
-const IN_SAMPLE_RUNS = new Set(["20260925T233315-zdmc", "20260926T000140-m0x6"]);
+/**
+ * Run ids of the noise pairs the current normalization rules were written from (v1.2: the W0 pair A/D; v1.4: the
+ * 2026-09-28 pair). The next weekly pair replaces them as the ceiling (noiseFloor takes the newest) and is out of sample.
+ */
+const IN_SAMPLE_RUNS = new Set(["20260925T233315-zdmc", "20260926T000140-m0x6", "20260928T011354-l3w0", "20260928T012601-q5kb"]);
 /** Account keys and ids that must never reach a public file (decision 0001 R8): checked before anything is committed. */
 const SECRET = /\b(sk|rk|rkcs)_(test|live)_|\bacct_[A-Za-z0-9]/;
 
@@ -84,35 +89,42 @@ function noiseDue(dataDir: string, now: Date): boolean {
 /**
  * The test guard (after 2026-09-28, when an align commit turned CI red: tests pinned catalog placeholders): the suite and
  * tsc on the patched tree `repo`, in a CI-like environment (PATH, HOME and CI only, as the gate's child: no test reaches
- * the nightly's keys, tokens or data dir). Returns what failed: failing test names, tsc's error lines; none when green.
- * Throws when the suite could not run (a tool it spawns is not on PATH).
+ * the nightly's keys, tokens or data dir). Returns what failed: failing test names, tsc's error lines, a suite that ran
+ * 0 tests, a run killed at `timeout`; none when green. Throws when the suite could not run (a tool it spawns is not on PATH).
  */
-function guard(repo: string): string[] {
+function guard(repo: string, timeout = GUARD_TIMEOUT_MS): string[] {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
-  const failure = (args: string[]): string | undefined => {
+  const exec = (args: string[]): { out: string; failed?: boolean; hung?: boolean } => {
     try {
-      execFileSync(process.execPath, args, { cwd: repo, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
-      return undefined;
+      return { out: execFileSync(process.execPath, args, { cwd: repo, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, timeout }) };
     } catch (e) {
-      return (e as { stdout?: string }).stdout || (e as Error).message;
+      const x = e as { stdout?: string; code?: string; message: string };
+      return { out: x.stdout || x.message, failed: true, hung: x.code === "ETIMEDOUT" };
     }
   };
+  const hung = `timed out after ${timeout / 1000} s (killed)`;
   const failed: string[] = [];
-  const tests = failure(["--test", "--test-reporter=tap", "test/*.test.ts"]);
-  if (tests !== undefined) {
+  const tests = exec(["--test", "--test-reporter=tap", "test/*.test.ts"]);
+  if (tests.hung) failed.push(`test: node --test test/*.test.ts ${hung}`);
+  else if (tests.failed) {
     // A tool the suite spawns missing from this runner (uv for test/h4.test.ts) is not the commit's failure: it would
     // drop every align commit while the night stays green, so it fails the night (land() drops this one first).
     // ponytail: only a missing executable ("spawn[Sync] <cmd> ENOENT") is told apart; other runner gaps still read as failures on the commit.
-    const missing = [...new Set([...tests.matchAll(/spawn(?:Sync)? (\S+) ENOENT/g)].map((m) => m[1]))];
+    const missing = [...new Set([...tests.out.matchAll(/spawn(?:Sync)? (\S+) ENOENT/g)].map((m) => m[1]))];
     if (missing.length) throw new Error(`the test guard could not run the suite: ${missing.join(", ")} not on PATH (spawn ENOENT); install it on the runner (.github/workflows/nightly.yml)`);
-    const names = [...parseTap(tests)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
+    const names = [...parseTap(tests.out)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
     failed.push(...(names.length ? names : ["test: node --test failed without a failing test"]));
+  } else if ([...tests.out.matchAll(/^# tests (\d+)$/gm)].at(-1)?.[1] === "0") {
+    // A moved or renamed suite: the glob matches nothing and node --test passes. The last `# tests` line is the run's
+    // summary (a test's own output line reads `# <line>` too).
+    failed.push("test: node --test test/*.test.ts ran 0 tests");
   }
   // The repo's own tsc (npx could fetch a package where node_modules is missing).
-  const tsc = failure([join("node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
-  if (tsc !== undefined) {
-    const errors = tsc.split("\n").filter((l) => /error TS\d+/.test(l)).map((l) => `tsc: ${l.trim()}`);
-    failed.push(...(errors.length ? errors : [`tsc: ${tsc.trim().split("\n")[0]}`]));
+  const tsc = exec([join("node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
+  if (tsc.hung) failed.push(`tsc: ${hung}`);
+  else if (tsc.failed) {
+    const errors = tsc.out.split("\n").filter((l) => /error TS\d+/.test(l)).map((l) => `tsc: ${l.trim()}`);
+    failed.push(...(errors.length ? errors : [`tsc: ${tsc.out.trim().split("\n")[0]}`]));
   }
   return failed;
 }
@@ -252,9 +264,10 @@ const PENDING = "nightly/pending-";
  * parity-data log's main never cites a parity commit absent from this repo's origin, and an align commit on this repo's
  * origin has its patch entries on the log's main, or, from the moment it is pushed until the next nightly relands them
  * (reland()), on the data repo's branch nightly/pending-<runId>. So:
- *   0. guard() the commit: when the suite or tsc fails on it, the commit and its entries are dropped here, before
- *      anything is pushed, and the failures are returned (the night goes on); else [] once landed. When the suite could
- *      not run (a tool it spawns is missing), they are dropped the same way and the night fails;
+ *   0. guard() the commit: when the suite or tsc fails on it (0 tests or a hang past GUARD_TIMEOUT_MS is a failure),
+ *      the commit and its entries are dropped here, before anything is pushed, and the failures are returned (the
+ *      night goes on); else [] once landed. When the suite could not run (a tool it spawns is missing), they are
+ *      dropped the same way and the night fails;
  *   1. commit the log (and tonight's other data files) and push it to nightly/pending-<runId>, never to main;
  *   2. push the align commit. If 1 or 2 fails, the entries and the commit are dropped here (so no later push carries
  *      them). After 1 the commit was never pushed: the pending branch is deleted. After 2 it may have landed with the
@@ -263,7 +276,7 @@ const PENDING = "nightly/pending-";
  *   3. push the log to main, then delete the pending branch. If 3 fails, the entries wait on the pending branch, which
  *      outlives this checkout (the nightly's runner is discarded), and the next nightly lands them before anything else.
  */
-function land(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run; commit: string; log: string; logBefore: string }): string[] {
+function land(o: { data: string; repo: string; branch: string; date: string; runId: string; run: Run; commit: string; log: string; logBefore: string; guardTimeoutMs?: number }): string[] {
   const { data, run } = o;
   const pending = `${PENDING}${o.runId}`;
   const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
@@ -285,7 +298,7 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
   };
   let failed: string[];
   try {
-    failed = guard(o.repo);
+    failed = guard(o.repo, o.guardTimeoutMs);
   } catch (e) {
     undo(); // nothing is pushed yet
     throw new Error(`nightly: ${(e as Error).message}; the align commit ${o.commit} and its sealed-log entries were dropped here: nothing is published tonight`);
@@ -392,7 +405,7 @@ function publicFiles(o: {
   divergencesRemoved: Patches;
   oracleRefreshed: boolean;
   oracleSeqs: number;
-  oracleMaxAgeDays: number;
+  oracleMaxAgeDays: number | null;
 }) {
   const { date } = o;
   const s = o.score;
@@ -456,8 +469,8 @@ export interface NightlyResult {
   /** Present when the pair is due. `refused`: not recorded, and why (deferred when it does not fit: tried again the next night). */
   noisePair?: { seqs: number; recorded: boolean; refused?: string };
   oracleRefreshed: boolean;
-  /** Days since the oracle's oldest recording, rounded up: the published "at most N days old". */
-  oracleMaxAgeDays: number;
+  /** Days since the oracle's oldest recording, rounded up: the published "at most N days old". null: no oracle (never 0 days). */
+  oracleMaxAgeDays: number | null;
   /** oracle build's one-line account (sequences, recordings scanned, exclusions). */
   built: string;
   oracle: Provenance;
@@ -483,9 +496,9 @@ export interface NightlyResult {
  * The nightly pipeline on `repo` and `dataDir`. `dryRun`: no sandbox traffic, align plan only, no assisted pass, no
  * commits or pushes; the data dir is copied to a temp dir (the oracle rebuild and sealed-log entries land in the copy)
  * and the public files go to a temp root. `env` reaches the assisted pass; `run` runs git and gh. `sandbox` replaces
- * the sandbox target (tests only; the CLI never sets it).
+ * the sandbox target and `guardTimeoutMs` the test guard's GUARD_TIMEOUT_MS (tests only; the CLI never sets them).
  */
-export async function nightly(o: { repo: string; dataDir: string; dryRun?: boolean; env?: Env; run?: Run; now?: () => Date; sandbox?: Target }): Promise<NightlyResult> {
+export async function nightly(o: { repo: string; dataDir: string; dryRun?: boolean; env?: Env; run?: Run; now?: () => Date; sandbox?: Target; guardTimeoutMs?: number }): Promise<NightlyResult> {
   const now = (o.now ?? (() => new Date()))();
   const date = now.toISOString().slice(0, 10);
   const run = o.run ?? sh;
@@ -602,7 +615,8 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   // 2. oracle build: newest clean recording per sequence (an aborted run is contaminated and never selected).
   const built = oracleBuild(undefined, data).split("\n")[0]!;
   const oracle = provenance(oraclePath);
-  const oracleMaxAgeDays = maxAgeDays(now, readJsonl<Recording>(oraclePath));
+  const oracleRecs = readJsonl<Recording>(oraclePath);
+  const oracleMaxAgeDays = oracleRecs.length ? maxAgeDays(now, oracleRecs) : null; // maxAgeDays of none would say 0
   if (notes.length) appendLog(log, runId, notes.map((n) => ({ kind: "note", data: { nightly: { date, ...n, oracleRefreshed }, oracle } })));
 
   // 3. score-twin on the whole oracle, the noise ceiling from the latest pair, one sealed-log `score` entry.
@@ -627,7 +641,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   }
   let guarded: string[] | undefined;
   if (plan.applied?.commit) {
-    guarded = land({ data, repo: o.repo, branch, date, runId, run, commit: plan.applied.commit, log, logBefore });
+    guarded = land({ data, repo: o.repo, branch, date, runId, run, commit: plan.applied.commit, log, logBefore, guardTimeoutMs: o.guardTimeoutMs });
     // A red suite dropped the commit and its entries (the log is back to logBefore): noted, and the night goes on.
     const error = `the align commit and its sealed-log entries were dropped here: the suite or tsc failed on it (${guarded.length} failures)`;
     if (guarded.length) appendLog(log, runId, [{ kind: "note", data: { nightly: { date, step: "test guard", error, failing: guarded, oracleRefreshed }, oracle } }]);
@@ -733,7 +747,7 @@ export function nightlyText(r: NightlyResult): string {
     `nightly ${r.date} run ${r.runId}${r.tmp ? ` · DRY RUN: nothing recorded, applied, assisted, committed or pushed; data copy and public files in ${r.tmp}` : ""}`,
     `slice ${r.slice.spec}: ${r.slice.seqs} sequences · ${r.slice.refused ? `NOT RECORDED: ${r.slice.refused}` : r.tmp ? `not recorded (dry run); ${r.slice.budget}` : `recorded, ${r.slice.recorded} clean; ${r.slice.budget}`}`,
     ...(r.noisePair ? [`noise pair: ${r.noisePair.seqs} sequences x 2 · ${r.noisePair.refused ? `NOT RECORDED: ${r.noisePair.refused}` : r.tmp ? "not recorded (dry run)" : r.noisePair.recorded ? "recorded" : "NOT RECORDED: the slice was refused"}`] : []),
-    `${r.built} · sha256 ${r.oracle.oracleSha.slice(0, 12)}… · ${r.oracleRefreshed ? "refreshed tonight" : "NOT refreshed tonight (curve point oracleRefreshed: false)"} · at most ${r.oracleMaxAgeDays} days old`,
+    `${r.built} · sha256 ${r.oracle.oracleSha.slice(0, 12)}… · ${r.oracleRefreshed ? "refreshed tonight" : "NOT refreshed tonight (curve point oracleRefreshed: false)"} · ${r.oracleMaxAgeDays === null ? "no oracle" : `at most ${r.oracleMaxAgeDays} days old`}`,
     `score: train ${levels(r.score.train)} · held-out ${levels(r.score.heldOut)}`,
     r.noise
       ? `noise ceiling: ${levels(r.noise.overall)} from ${r.noise.pair.join(" vs ")} (${r.noise.seqs} of ${r.score.overall.L4.n} oracle sequences; at most ${r.noise.maxAgeDays} days old${r.noise.inSample ? "; in-sample: the normalization was written from this pair" : ""})`

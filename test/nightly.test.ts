@@ -603,8 +603,10 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
     assert.ok(verifyLog(logPath(data)).ok);
     assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
 
-    // The pin removed, the next night's align commit passes the guard and lands.
+    // The pin replaced by a passing test, the next night's align commit passes the guard and lands.
+    writeFileSync(join(repo, "test/ok.test.ts"), OK);
     git(repo, "rm", "-q", "test/pin.test.ts");
+    git(repo, "add", "test/ok.test.ts");
     git(repo, "commit", "-q", "-m", "unpin");
     git(repo, "push", "-q");
     const r2 = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-06T07:00:00Z") });
@@ -648,6 +650,77 @@ test("the test guard: a suite that could not run (a tool it spawns is missing, a
   }
 });
 
+test("the test guard: a suite that ran 0 tests (moved or renamed) or hung past the guard's timeout drops the align commit, notes it, and the night goes on", { timeout: 240_000 }, async () => {
+  // The suite moved to tests/: test/*.test.ts matches nothing, and node --test passes with 0 tests.
+  const { git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-guard-empty-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": await reverseOracle() }, { "tests/ok.test.ts": OK });
+  const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
+  process.env.STRIPE_API_KEY = "sk_test_never_sent";
+  process.env.PARITY_READ_BUDGET = "0"; // the sandbox refuses at the budget gate: the night scores the existing oracle
+  /** The night's align commit was dropped with its entries, its failures noted, and the night went on. */
+  const dropped = (r: Awaited<ReturnType<typeof nightly>>, failing: string[]) => {
+    assert.deepEqual(r.guard, failing);
+    assert.doesNotMatch(bare(parityOrigin, "log", "--format=%s", "main"), /^align: /m);
+    assert.equal(bare(dataOrigin, "for-each-ref", "refs/heads/nightly/"), "");
+    const log = bare(dataOrigin, "show", "main:align/log.jsonl").split("\n").map((l) => JSON.parse(l) as LogEntry);
+    assert.ok(!log.some((e) => e.kind === "patch" || e.kind === "gate"), "the patch and gate entries were dropped with the commit");
+    const note = log.find((e) => e.runId === r.runId && (e.data.nightly as { step?: string } | undefined)?.step === "test guard");
+    assert.deepEqual((note?.data.nightly as { failing?: string[] } | undefined)?.failing, failing);
+    assert.ok(r.commits, "the night went on: published and pushed");
+    assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
+  };
+  try {
+    const empty = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-05T07:00:00Z") });
+    dropped(empty, ["test: node --test test/*.test.ts ran 0 tests"]);
+
+    // The suite back in test/, plus a test that never ends: the guard kills the suite at its timeout (here 30 s, 600 s in
+    // the nightly) instead of waiting for the job's. 30 s leaves tsc, which shares the timeout, room on a busy runner.
+    mkdirSync(join(repo, "test"));
+    git(repo, "mv", "tests/ok.test.ts", "test/ok.test.ts");
+    writeFileSync(join(repo, "test/hang.test.ts"), ['import { test } from "node:test";', 'test("never ends", () => new Promise(() => setInterval(() => {}, 1_000)));', ""].join("\n"));
+    git(repo, "add", "test/hang.test.ts");
+    git(repo, "commit", "-q", "-m", "hang");
+    git(repo, "push", "-q");
+    const hung = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-06T07:00:00Z"), guardTimeoutMs: 30_000 });
+    dropped(hung, ["test: node --test test/*.test.ts timed out after 30 s (killed)"]);
+    assert.match(nightlyText(hung), /^test guard: the align commit was DROPPED, 1 failures on it: test: node --test test\/\*\.test\.ts timed out after 30 s \(killed\)$/m);
+  } finally {
+    for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("nightly: the 2026-09-28 pair's published ceiling says inSample (normalization v1.4 was written from it) until a newer pair replaces it; an oracle with no recordings has no age, never 0 days", { timeout: 120_000 }, async () => {
+  const recs = await reverseOracle();
+  const { data, repo } = fixture("pb-insample-", {
+    "runs/2026-09-28/noise-a-20260928T011354-l3w0.jsonl": recs,
+    "runs/2026-09-28/noise-b-20260928T012601-q5kb.jsonl": recs,
+  });
+  // Dry runs: the public files go to r.tmp.
+  const night = (day: string) => nightly({ repo, dataDir: data, dryRun: true, env: {}, run: withGh([]), now: () => new Date(`${day}T07:00:00Z`) });
+  const published = (r: { tmp?: string; date: string }) => [site(join(r.tmp!, "parity"), "curve.json").at(-1).noise.coverage.inSample, site(join(r.tmp!, "parity"), `scores/${r.date}.json`).noiseCoverage.inSample];
+  const r = await night("2026-09-29");
+  assert.deepEqual(r.noise?.pair, ["2026-09-28/noise-a-20260928T011354-l3w0.jsonl", "2026-09-28/noise-b-20260928T012601-q5kb.jsonl"]);
+  assert.deepEqual([r.noise?.inSample, ...published(r)], [true, true, true]);
+  assert.match(nightlyText(r), /^noise ceiling: .*; in-sample: the normalization was written from this pair\)$/m);
+
+  // The next weekly pair is the ceiling from then on, out of sample.
+  writeJsonl(join(data, "runs/2026-10-04/noise-a-20261004T070000-aaaa.jsonl"), recs);
+  writeJsonl(join(data, "runs/2026-10-04/noise-b-20261004T071000-bbbb.jsonl"), recs);
+  const r2 = await night("2026-10-05");
+  assert.deepEqual(r2.noise?.pair, ["2026-10-04/noise-a-20261004T070000-aaaa.jsonl", "2026-10-04/noise-b-20261004T071000-bbbb.jsonl"]);
+  assert.deepEqual([r2.noise?.inSample, ...published(r2)], [false, false, false]);
+  assert.doesNotMatch(nightlyText(r2), /in-sample/);
+
+  // The oracle's age: every recording is from CLOCK, 2026-09-27T07:00, 2 days before the first night. With no oracle
+  // there is no age: the summary says so, never "at most 0 days old".
+  const oracleLine = (x: Parameters<typeof nightlyText>[0]) => nightlyText(x).split("\n").find((l) => l.startsWith(r.built))!;
+  assert.equal(r.oracleMaxAgeDays, 2);
+  assert.match(oracleLine(r), / · at most 2 days old$/);
+  assert.match(oracleLine({ ...r, oracleMaxAgeDays: null }), / · no oracle$/);
+});
+
 const site = (repo: string, f: string) => JSON.parse(readFileSync(join(repo, "site/data", f), "utf8"));
 
 /** The land tests' recording time. */
@@ -671,11 +744,15 @@ async function reverseOracle(): Promise<Recording[]> {
   return recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: reverse(s.body) })) }));
 }
 
+/** A passing test: the guard fails a suite that runs 0 tests. */
+const OK = ['import { test } from "node:test";', 'test("ok", () => {});', ""].join("\n");
+
 /**
  * The data repo (`dataFiles`: JSONL rows per path) and the parity repo (src, templates, package.json and tsconfig.json
- * copied, node_modules linked, so the test guard's suite and tsc run for real, plus `repoFiles`), each with a bare origin.
+ * copied, node_modules linked, so the test guard's suite and tsc run for real, plus `repoFiles`, by default one passing
+ * test), each with a bare origin.
  */
-function fixture(prefix: string, dataFiles: Record<string, unknown[]>, repoFiles: Record<string, string> = {}) {
+function fixture(prefix: string, dataFiles: Record<string, unknown[]>, repoFiles: Record<string, string> = { "test/ok.test.ts": OK }) {
   const tmp = mkdtempSync(join(tmpdir(), prefix));
   const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const bare = (dir: string, ...args: string[]) => git(tmp, "--git-dir", dir, ...args);
