@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { sh, type Run } from "../src/align/assist.ts";
 import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
-import { projectedGets } from "../src/bench/budget.ts";
+import { nightShare, projectedGets } from "../src/bench/budget.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
@@ -184,6 +184,8 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const gh: string[][] = [];
     const r = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS, gh), now });
     const text = nightlyText(r);
+    // The pair's age on a night: days since its older side (noise-a) was recorded, rounded up.
+    const pairAge = (night: string) => Math.max(0, Math.ceil((Date.parse(night) - Math.min(...(pair.a as Recording[]).map((x) => Date.parse(x.startedAt)))) / 86_400_000));
 
     // Step 1 refused at the budget gate: noted, the noise pair not attempted, the oracle not refreshed.
     assert.match(r.slice.refused ?? "", /^refusing to run: 5 sandbox GETs in the last 30 days \+ \d+ projected for this run = \d+ > read budget 0 \(/);
@@ -233,11 +235,14 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.deepEqual([pt.divergencesRemoved, r.divergencesRemoved], [{ automatic: 0, assisted: 0 }, { automatic: 0, assisted: 0 }]);
     assert.match(text, /^merged align\/assisted-\* PRs newly logged: 1 · since the scaffold freeze \(sealed log\): patches automatic 1 \(JSON-pointer edits\), assisted 1 \(merged PRs\); train divergences removed automatic 0, assisted 0$/m);
     assert.equal(mine.find((e) => e.kind === "score")!.data.method, "m2");
-    assert.deepEqual(pt.noise.coverage, { seqs: 6, oracleSeqs: 6, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
+    assert.deepEqual(pt.noise.coverage, { seqs: 6, oracleSeqs: 6, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false, maxAgeDays: pairAge("2026-10-04T07:00:00Z") });
+    assert.equal(r.noise?.maxAgeDays, pairAge("2026-10-04T07:00:00Z"));
+    assert.match(text, new RegExp(`^noise ceiling: .* \\(6 of 6 oracle sequences; at most ${r.noise!.maxAgeDays} days old\\)$`, "m"));
     assert.deepEqual(r.events, pt.events);
     assert.match(text, /^curve annotations: surface-added: test clocks$/m);
     assert.deepEqual(Object.keys(pt.noise.byStratum).sort(), ["errors", "lifecycle", "refunds"]);
     const scores = site("scores/2026-10-04.json");
+    assert.deepEqual(scores.noiseCoverage, pt.noise.coverage);
     assert.deepEqual(Object.keys(scores.byStratum), ["errors", "lifecycle", "refunds"]);
     assert.deepEqual([scores.byStratum.errors.train.L1.n, scores.byStratum.lifecycle.heldOut.L1.n], [0, 0], "invalid-params is held out, customer-crud is train");
     assert.ok(scores.byStratum.errors.heldOut.L1.n > 0 && scores.byStratum.lifecycle.train.L1.n > 0);
@@ -297,7 +302,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const d2 = await app.load(async (url: string) => (existsSync(join(repo, "site", url)) ? JSON.parse(readFileSync(join(repo, "site", url), "utf8")) : null));
     assert.deepEqual(app.series(d2.curve, "all").map((row: { events: string[] }) => row.events), [["surface-added: test clocks"], ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order"]]);
     assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").map((e) => [e.data.date, e.data.events]), [["2026-10-04", curve2[0].events], ["2026-10-05", curve2[1].events]]);
-    assert.deepEqual(curve2[1].noise.coverage, { seqs: 6, oracleSeqs: 9, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false });
+    assert.deepEqual(curve2[1].noise.coverage, { seqs: 6, oracleSeqs: 9, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false, maxAgeDays: pairAge("2026-10-05T07:00:00Z") });
     // The public commit message never prints the pair's number without its coverage.
     assert.match(git(repo, "log", "-1", "--format=%s"), /; noise ceiling L3 [\d.]+% \(the pair covers 6 of 9 sequences\); oracle not refreshed\)$/);
     assert.deepEqual(clean(), ["", ""]);
@@ -508,15 +513,17 @@ test("nightly sizes tonight's slice to the read budget and keeps the rotation cu
     assert.equal(sat.oracleRefreshed, true);
     assert.deepEqual(notes(sat), []);
 
-    // Sunday: the next night goes on at 517, not at slice 0/7. The pair is due, but after the slice nothing of the share
-    // is left: it is deferred, and noted.
+    // Sunday: the next night goes on at 517, not at slice 0/7. The pair is due, but the 30-day budget has less left after
+    // the slice than the pair projects: it is deferred, and noted.
     spend(leaving(rotation.slice(517, 518)), "2026-10-10");
     const sun = await night("2026-10-11");
     assert.deepEqual([sun.slice.spec, sun.slice.recorded], ["517+1/600", 1]);
     assert.deepEqual(recorded("2026-10-11"), [rotation[517]!.id]);
     assert.deepEqual(cursor(), { cursor: 518 });
     const pairGets = 2 * projectedGets(buildCorpus(TEMPLATES, [1, 2]));
-    assert.deepEqual(sun.noisePair, { seqs: 60, recorded: false, refused: `deferred to the next night: ${pairGets} GETs projected for the pair > 0 left of tonight's share ${sun.slice.allowance} after the slice (decision 0001 C2)` });
+    const one = projectedGets(rotation.slice(517, 518));
+    assert.ok(8_500 - leaving(rotation.slice(517, 518)) - one < pairGets);
+    assert.deepEqual(sun.noisePair, { seqs: 60, recorded: false, refused: `deferred to the next night: ${pairGets} GETs projected for the pair > ${6 * one} left of the 30-day budget after the slice = 10000 − 1500 reserve − ${leaving(rotation.slice(517, 518))} GETs in 30 days − ${one} projected for the slice (decision 0001 C2)` });
     assert.deepEqual(notes(sun), [{ date: "2026-10-11", step: "record noise pair", error: sun.noisePair!.refused!, oracleRefreshed: true }]);
     assert.match(nightlyText(sun), /^noise pair: 60 sequences x 2 · NOT RECORDED: deferred to the next night: /m);
 
@@ -540,11 +547,13 @@ test("nightly sizes tonight's slice to the read budget and keeps the rotation cu
     assert.equal(tue.noisePair?.recorded, false, "the pair is still due and still does not fit");
     assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
 
-    // A Sunday with the budget unused (a dry run: it plans, never records): one seventh binds the slice, and the pair
-    // fits in what is left of the night's share after it, though the seventh leaves nothing of the allowance.
-    spend(0, "2026-10-17");
+    // A Sunday at the steady state's 30-day GETs (a dry run: it plans, never records): one seventh binds the slice, and the
+    // pair fits in what the 30-day budget has left after it, though neither the night's share nor the allowance has room
+    // for it after the slice (the pair is weekly, decision 0002 §1).
+    spend(6_000, "2026-10-17");
     const window = Array.from({ length: 86 }, (_, i) => rotation[(519 + i) % 600]!);
-    assert.ok(projectedGets(window) + pairGets <= 1_214, "floor(8500 / 7)");
+    assert.ok(projectedGets(window) < nightShare(6_000) && nightShare(6_000) - projectedGets(window) < pairGets, "the share binds neither the slice nor fits the pair");
+    assert.ok(projectedGets(window) + pairGets <= 8_500 - 6_000);
     const dry = await nightly({ repo, dataDir: data, dryRun: true, env: {}, run: withGh([]), now: () => new Date("2026-10-18T07:00:00Z") });
     assert.deepEqual([dry.slice.spec, dry.slice.allowance, dry.noisePair], ["519+86/600", projectedGets(window), { seqs: 60, recorded: false }]);
   } finally {

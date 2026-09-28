@@ -44,9 +44,10 @@ const CURSOR = "budget/rotation.json";
 
 /**
  * What a noise pair covers of tonight's scored oracle. `inSample`: the normalization rules were written from this pair,
- * so its floor flatters them (the W0 pair A/D, now noise-a/noise-b, wrote v1.2).
+ * so its floor flatters them (the W0 pair A/D, now noise-a/noise-b, wrote v1.2). `maxAgeDays`: the pair is at most this
+ * many days old (a deferred pair leaves last week's ceiling in place).
  */
-export type Coverage = { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number; strata: string[]; inSample: boolean };
+export type Coverage = { seqs: number; oracleSeqs: number; templates: number; oracleTemplates: number; strata: string[]; inSample: boolean; maxAgeDays: number };
 export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScores> };
 /**
  * Cumulative since the scaffold freeze, from the sealed log, per class. Patches (H2's unit): automatic = JSON-pointer
@@ -58,6 +59,9 @@ export type Patches = { automatic: number; assisted: number };
 const IN_SAMPLE_RUNS = new Set(["20260925T233315-zdmc", "20260926T000140-m0x6"]);
 /** Account keys and ids that must never reach a public file (decision 0001 R8): checked before anything is committed. */
 const SECRET = /\b(sk|rk|rkcs)_(test|live)_|\bacct_[A-Za-z0-9]/;
+
+/** Days since the oldest of `recs` was recorded, rounded up: they are "at most N days old". */
+const maxAgeDays = (now: Date, recs: Recording[]): number => Math.max(0, Math.ceil((now.getTime() - Math.min(...recs.map((r) => Date.parse(r.startedAt)))) / 86_400_000));
 
 /** Records `seqs` on `target` into <dataDir>/runs/<date>/<name>-<runId>.jsonl: on the sandbox, budget-gated and ledgered in <dataDir>/budget. */
 async function recordSandbox(target: Target, dataDir: string, date: string, name: string, seqs: Sequence[]): Promise<Recording[]> {
@@ -112,7 +116,7 @@ function guard(repo: string): string[] {
  * newest `noise-a` recorded before it, on the sequences clean in both (compare --oracle a --target b, score only).
  * A pair with no clean sequence in common is skipped for the one before it. Undefined when there is none.
  */
-function noiseFloor(dataDir: string): (Noise & { pair: [string, string]; seqs: number; templates: Set<string>; inSample: boolean }) | undefined {
+function noiseFloor(dataDir: string, now: Date): (Noise & { pair: [string, string]; seqs: number; templates: Set<string>; inSample: boolean; maxAgeDays: number }) | undefined {
   const runs = join(dataDir, "runs");
   const files = existsSync(runs) ? readdirSync(runs, { recursive: true, encoding: "utf8" }) : [];
   const id = (f: string, side: "a" | "b") => new RegExp(`^noise-${side}-(.+)\\.jsonl$`).exec(basename(f))?.[1];
@@ -126,7 +130,7 @@ function noiseFloor(dataDir: string): (Noise & { pair: [string, string]; seqs: n
     if (!as.length) continue;
     const { overall, byStratum } = compareSets(as, [b, bs], undefined, false).score;
     const inSample = IN_SAMPLE_RUNS.has(id(a, "a")!) || IN_SAMPLE_RUNS.has(id(b, "b")!);
-    return { overall, byStratum, pair: [a, b], seqs: as.length, templates: new Set(as.map((r) => r.template)), inSample };
+    return { overall, byStratum, pair: [a, b], seqs: as.length, templates: new Set(as.map((r) => r.template)), inSample, maxAgeDays: maxAgeDays(now, as) };
   }
   return undefined;
 }
@@ -369,7 +373,7 @@ function publicFiles(o: {
   date: string;
   score: Score;
   results: SeqResult[];
-  noise?: Noise & { seqs: number; templates: Set<string>; inSample: boolean };
+  noise?: Noise & { seqs: number; templates: Set<string>; inSample: boolean; maxAgeDays: number };
   events: string[];
   patches: Patches;
   divergencesRemoved: Patches;
@@ -391,6 +395,7 @@ function publicFiles(o: {
     oracleTemplates: templatesOf(o.results).size,
     strata: strata.sort(),
     inSample: o.noise.inSample,
+    maxAgeDays: o.noise.maxAgeDays,
   };
   const noise = o.noise && {
     ...(whole(o.results) && { overall: o.noise.overall }),
@@ -444,7 +449,7 @@ export interface NightlyResult {
   built: string;
   oracle: Provenance;
   score: Score;
-  noise?: Noise & { pair: [string, string]; seqs: number; inSample: boolean };
+  noise?: Noise & { pair: [string, string]; seqs: number; inSample: boolean; maxAgeDays: number };
   plan: string;
   /** Set when align committed: what failed on the align commit (it was then dropped); [] when the suite and tsc passed. */
   guard?: string[];
@@ -548,11 +553,15 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     if (noiseDue(data, now)) {
       const noiseSeqs = buildCorpus(TEMPLATES, NOISE_SEEDS);
       noisePair = { seqs: noiseSeqs.length, recorded: false };
-      // The pair fits in what is left of the night's share after the slice's projection, or waits for the next night.
+      // The pair fits in what the 30-day budget has left after the reserve and the slice's projection, or waits for the
+      // next night. Not the night's share: a weekly lump gated on one night's share runs about monthly at steady state
+      // (rolling30 ~6,000), and decision 0002 §1 records it weekly. ponytail: near the reserve the pair takes headroom
+      // the next nights' shares would have had (at rolling30 8,000 they drop from ~70 to ~20 GETs until reads age
+      // out); give the slice priority there if a fresh oracle matters more than a weekly floor.
       const need = 2 * projectedGets(noiseSeqs);
-      const left = share - projectedGets(seqs);
+      const left = 10_000 - RESERVE - rolling - projectedGets(seqs);
       if (need > left) {
-        noisePair.refused = `deferred to the next night: ${need} GETs projected for the pair > ${left} left of tonight's share ${share} after the slice (decision 0001 C2)`;
+        noisePair.refused = `deferred to the next night: ${need} GETs projected for the pair > ${left} left of the 30-day budget after the slice = 10000 − ${RESERVE} reserve − ${rolling} GETs in 30 days − ${projectedGets(seqs)} projected for the slice (decision 0001 C2)`;
         notes.push({ step: "record noise pair", error: noisePair.refused });
       } else if (target && !sliceRes.refused) {
         // After a refused slice the sandbox is refusing: the pair waits for the next night.
@@ -580,13 +589,12 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   // 2. oracle build: newest clean recording per sequence (an aborted run is contaminated and never selected).
   const built = oracleBuild(undefined, data).split("\n")[0]!;
   const oracle = provenance(oraclePath);
-  const oldest = Math.min(...readJsonl<Recording>(oraclePath).map((r) => Date.parse(r.startedAt)));
-  const oracleMaxAgeDays = Math.max(0, Math.ceil((now.getTime() - oldest) / 86_400_000));
+  const oracleMaxAgeDays = maxAgeDays(now, readJsonl<Recording>(oraclePath));
   if (notes.length) appendLog(log, runId, notes.map((n) => ({ kind: "note", data: { nightly: { date, ...n, oracleRefreshed }, oracle } })));
 
   // 3. score-twin on the whole oracle, the noise ceiling from the latest pair, one sealed-log `score` entry.
   const { json } = scoreTwinIn(o.repo, oraclePath, []);
-  const noise = noiseFloor(data);
+  const noise = noiseFloor(data, now);
   const commit = run("git", ["rev-parse", "HEAD"], o.repo);
   const logged = noise && { overall: noise.overall, byStratum: noise.byStratum, pair: noise.pair, seqs: noise.seqs, inSample: noise.inSample };
   appendLog(log, runId, [{ kind: "score", data: { label: "nightly", date, commit, normalization: NORMALIZATION_VERSION, method: METHOD.version, score: json.score, ...(logged && { noise: logged }), oracleRefreshed, oracle } }]);
@@ -715,7 +723,7 @@ export function nightlyText(r: NightlyResult): string {
     `${r.built} · sha256 ${r.oracle.oracleSha.slice(0, 12)}… · ${r.oracleRefreshed ? "refreshed tonight" : "NOT refreshed tonight (curve point oracleRefreshed: false)"} · at most ${r.oracleMaxAgeDays} days old`,
     `score: train ${levels(r.score.train)} · held-out ${levels(r.score.heldOut)}`,
     r.noise
-      ? `noise ceiling: ${levels(r.noise.overall)} from ${r.noise.pair.join(" vs ")} (${r.noise.seqs} of ${r.score.overall.L4.n} oracle sequences${r.noise.inSample ? "; in-sample: the normalization was written from this pair" : ""})`
+      ? `noise ceiling: ${levels(r.noise.overall)} from ${r.noise.pair.join(" vs ")} (${r.noise.seqs} of ${r.score.overall.L4.n} oracle sequences; at most ${r.noise.maxAgeDays} days old${r.noise.inSample ? "; in-sample: the normalization was written from this pair" : ""})`
       : "noise ceiling: none (no noise-a/noise-b pair with clean sequences): the page marks the night invalid",
     r.plan,
     ...(r.guard ? [r.guard.length ? `test guard: the align commit was DROPPED, ${r.guard.length} failures on it: ${r.guard.join("; ")}` : "test guard: the suite and tsc pass on the align commit"] : []),
