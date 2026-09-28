@@ -335,7 +335,7 @@ Seeds 1 and 2 ran through `runCorpus` against a listening twin, with the templat
 
 These are the questions the B1 run had to answer, with what the sandbox did. The method and every number are in `reports/2026-09-27-clocks.md`. "Twin:" marks a difference from the twin. Those differences are for the align loop or the assisted pass and are not fixed here.
 
-1. **Advance seconds.** The advance answers 200 with `status=advancing`, the old `frozen_time`, and `status_details.advancing.target_frozen_time` = the target. Once ready: `status_details` = `{}` and `frozen_time` = the target. From the advance to a retrieve that saw `ready`: median 14.7 s (1 month) and 14.6 s (1 year), max 20.3 s, at a poll resolution of 1.1–1.4 s. With 10 clocks at once: median 17.3 s, max 22.1 s. By the clock's own `advancing`/`ready` event timestamps, every advance took 6–24 s, except those that charge a declining card: 208–393 s (6 clocks). Twin: `ready` at once.
+1. **Advance seconds.** The advance answers 200 with `status=advancing`, the old `frozen_time`, and `status_details.advancing.target_frozen_time` = the target. Once ready: `status_details` = `{}` and `frozen_time` = the target. From the advance to a retrieve that saw `ready`: median 14.7 s (1 month) and 14.6 s (1 year), max 20.3 s, at a poll resolution of 1.1–1.4 s. With 10 clocks at once: median 17.3 s, max 22.1 s. By the clock's own `advancing`/`ready` event timestamps, the ordinary advances of #27, #29 and #30 took 7–24 s in run `sgjk` (6–23 s in the unpublished first run `y3tt`; #28 not read), and those that charge a declining card 208–393 s (6 clocks). Twin: `ready` at once.
 2. **Events in the sweep window: yes.** The events of an advance are stamped with the wall clock (fact 3), so `created[gte]=<corpus start − 60 s>` covers them wherever the clock is frozen. They were listed 0–6 s after their `created`. The renewal's events were listed 8–11 s after the advance request, before `ready` (14–19 s). The delete's events were listed within 5 s of the delete. Every validation recording (#28's not read) holds the events of its clock's transitions and of its delete, and the corpus sweep ended in 10.3 s of its 30 s cap. **The sweep needed no change.**
 3. **`created`.**
    - Events: the wall clock, not the frozen time. The renewal's `invoice.created` is stamped seconds after the advance request, while the clock jumps a month or a year.
@@ -360,7 +360,7 @@ These are the questions the B1 run had to answer, with what the sandbox did. The
 ### Deviations and gaps (#27–#30)
 
 - **Advance limit.** The docs (and the spec's parameter text) say two intervals of the **shortest** subscription interval, or two years without subscriptions. The twin follows the docs; the task brief said "longest".
-- `score-twin` strips `waitMs`, and the twin answers `ready` at once (since the final review). On the sandbox, every clock retrieve after the 2026-09-27 waits saw `ready`, so these retrieves compare. #30's 600 s wait makes it the slowest sequence in the corpus.
+- `score-twin` strips `waitMs`, and the twin answers `ready` at once (since the final review). On the sandbox, every clock retrieve of #27, #29 and #30 after the 2026-09-27 waits saw `ready` (#28: statuses only), so these retrieves compare. #30's 600 s wait makes it the slowest sequence in the corpus.
 - Not built (each is a `ponytail:` or refusal in the twin): `incomplete` → `incomplete_expired` after 23 h; `trial_will_end` for trials of 3 days or less; `trial_end` at create; attaching an existing customer to a new clock (the `customer` param answers `not_implemented`); the 3-subscriptions-per-customer cap; item changes during a trial; `invoice.upcoming` (the sandbox sends it at renewal, fact 6).
 
 ### Held-out exposure during W4 Task 4 (ruled 2026-09-26)
@@ -372,3 +372,19 @@ While writing this section, the Task 4 implementer ran a `grep` over this file's
   - Reason: rotating the held-out set now would reset the held-out baseline. The exposure reached an implementer, not patch synthesis (the align loop never saw these rows). The held-out score did not move across the task.
   - Cost: held-out generalization on #7 (cancel at period end) may read slightly optimistic once clock-driven period ends are scored.
   - Records: the sealed log has a `note` entry for this, and the day-0 report's limitations list carries it.
+
+### Held-out exposure during B1-unblock Task 1 (2026-09-27; ruling pending)
+
+The rule: #28's recordings and rows are not opened, except its step statuses in Task 1's own validation.
+
+- **Task 1 (implementer):** a line-count `grep` over this file printed about the first 160 characters of #28's row in the per-template table. That text was its intended steps (the same as #28 in `templates/clocks.ts`, which Task 1 edits) and its result cell of the time, "unvalidated until B1".
+- **Not read:** no #28 response body, event type or event timestamp from either validation run (`y3tt`, `sgjk`). The timing and event scripts skipped held-out sequences; the validation printer showed #28's step statuses only.
+- **Numbers that looked like #28 data, and where they came from:**
+  - The advance range "6–24 s" pooled the ordinary non-held-out advances of both runs; the 6 s came from `y3tt`, which is not published. Now stated per run (7–24 s in `sgjk`).
+  - "12 advances" was the count of advances in the 8 sequences (#27 2, #28 1, #29 1, #30 2, per seed), taken from the templates, not from data.
+  - "every clock retrieve `ready`" in all 8 sequences was an over-claim, not a read: #28's retrieve bodies were never checked. Now restricted to #27, #29 and #30.
+- **Fix round 1 (2026-09-27):**
+  - A listing of both recordings' sequences printed #28's step count (10) and event count (25 per seed, both runs).
+  - A `grep` for line numbers printed the first ~20 characters of #28's three rows in this file (row number and template name).
+  - Nothing else of #28 was printed.
+- **For the orchestrator:** whether #28 stays held out. No ruling has been made.
