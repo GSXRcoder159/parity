@@ -1,0 +1,73 @@
+{
+  "date": "2026-09-28",
+  "targets": [
+    "twin",
+    "sandbox"
+  ],
+  "tests": [
+    {
+      "name": "creates a customer",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "attaches a card as the default payment method",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "creates a monthly price",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "subscribes the customer and charges the first invoice",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "previews a price change with a credit for unused time",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "applies the price change",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "cancels the subscription",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    },
+    {
+      "name": "refunds the first payment",
+      "outcomes": {
+        "twin": "pass",
+        "sandbox": "pass"
+      }
+    }
+  ],
+  "agreement": {
+    "p": 1,
+    "lo": 0.6755843804891231,
+    "hi": 1,
+    "k": 8,
+    "n": 8
+  },
+  "disagreeing": []
+}
