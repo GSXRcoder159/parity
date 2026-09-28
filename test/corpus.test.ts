@@ -61,13 +61,21 @@ test("refs are bound earlier, $run only in headers, list calls are scoped, email
   }
 });
 
-test("clock templates: one clock, at most 3 customers on it, at most 2 advances (5 invoices a subscription), the clock deleted last", () => {
+test("clock templates: one clock, at most 3 customers on it, at most 2 advances (5 invoices a subscription), each waited out, the clock deleted last", () => {
   for (const s of corpus.filter((q) => q.stratum === "clocks")) {
     const count = (f: (step: (typeof s.steps)[number]) => boolean) => s.steps.filter(f).length;
     assert.equal(count((st) => st.method === "POST" && st.path === "/v1/test_helpers/test_clocks"), 1, s.id);
     assert.ok(count((st) => st.method === "POST" && st.path === "/v1/customers") <= 3, s.id);
     // Each advance spans at most two intervals: the first invoice plus two renewals per advance stays within 5.
     assert.ok(count((st) => st.path.endsWith("/advance")) <= 2, s.id);
+    // The next step waits out the advance: sandbox advances reached `ready` within 24 s (reports/2026-09-27-clocks.md),
+    // and an advancing clock refuses modifications (429).
+    for (const [i, st] of s.steps.entries()) {
+      if (!st.path.endsWith("/advance")) continue;
+      const next = s.steps[i + 1];
+      assert.deepEqual([next?.method, next?.path], ["GET", "/v1/test_helpers/test_clocks/$ck.id"], `${s.id} step ${i + 1}`);
+      assert.ok((next?.waitMs ?? 0) >= 40_000, `${s.id} step ${i + 1}: waits ${next?.waitMs} ms`);
+    }
     assert.deepEqual([s.steps.at(-1)!.method, s.steps.at(-1)!.path], ["DELETE", "/v1/test_helpers/test_clocks/$ck.id"], s.id);
   }
 });

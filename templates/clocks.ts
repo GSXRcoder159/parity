@@ -1,12 +1,13 @@
-// Test clock templates #27–#30 (surface-added, W4 Task 4). Written from the public test-clock docs: unvalidated until
-// the sandbox run of B1 (docs/plan/impl/templates-validation.md). One customer per clock (docs cap: 3) and at most
+// Test clock templates #27–#30 (surface-added, W4 Task 4). Written from the public test-clock docs, validated on the
+// sandbox on 2026-09-27 (docs/plan/impl/templates-validation.md). One customer per clock (docs cap: 3) and at most
 // 2 invoices per subscription (cap: 5); every template deletes its clock at the end.
 import type { Gen, Step, Template } from "../src/types.ts";
 import { amount, attach, currency, customer, tag } from "./common.ts";
 
 /**
- * A price, a test clock frozen at the price's `created` (now, so the clock's events fall in the run's event sweep
- * window), a customer on the clock with an attached card, and a subscription paid by that card: refs pr1, ck, c1, pm1, s1.
+ * A price, a test clock frozen at the price's `created` (now), a customer on the clock with an attached card, and a
+ * subscription paid by that card: refs pr1, ck, c1, pm1, s1. The sandbox stamps a clock's events with the wall clock
+ * (so the run's event sweep collects them) and the objects an advance creates with the clock's frozen time.
  */
 function onClock(g: Gen, template: string, sub: Record<string, unknown> = {}): Step[] {
   const n = tag(g);
@@ -26,12 +27,14 @@ function onClock(g: Gen, template: string, sub: Record<string, unknown> = {}): S
 }
 
 /**
- * Advances the clock to `frozenTime` (a ref: the runner has no arithmetic), then waits for `ready`. The runner has no
- * loops either: the docs' "a few seconds" of advancing is waited out by retrieves after 2 s, 3 s and 5 s.
+ * Advances the clock to `frozenTime` (a ref: the runner has no arithmetic), then retrieves it once after `waitMs` (the
+ * runner has no loops either). The sandbox refuses a clock's modifications, its delete included, while it advances
+ * (429). Sandbox advances reached `ready` within 24 s, 10 clocks at once included; one that charges a declining card
+ * took 208–393 s (reports/2026-09-27-clocks.md).
  */
-const advance = (frozenTime: string): Step[] => [
+const advance = (frozenTime: string, waitMs = 40_000): Step[] => [
   { method: "POST", path: "/v1/test_helpers/test_clocks/$ck.id/advance", params: { frozen_time: frozenTime } },
-  ...[2000, 3000, 5000].map((waitMs): Step => ({ method: "GET", path: "/v1/test_helpers/test_clocks/$ck.id", waitMs })),
+  { method: "GET", path: "/v1/test_helpers/test_clocks/$ck.id", waitMs },
 ];
 
 const invoices = (ref?: string): Step => ({ ref, method: "GET", path: "/v1/invoices", params: { customer: "$c1.id" } });
@@ -45,7 +48,8 @@ export const clockPeriodRollover: Template = {
   build(g) {
     return [
       ...onClock(g, "clock-period-rollover"),
-      // The period's end renews the subscription on a draft invoice (the newest), finalized and paid an hour later.
+      // The period's end renews the subscription on a draft invoice (the newest). Its automatically_finalizes_at is 3 days
+      // later on the sandbox (next_payment_attempt 1 h); by then it is finalized and paid.
       ...advance("$s1.items.data.0.current_period_end"),
       invoices("l1"),
       ...advance("$l1.data.0.automatically_finalizes_at"),
@@ -94,7 +98,8 @@ export const clockDeclinedRenewal: Template = {
       { method: "POST", path: "/v1/subscriptions/$s1.id", params: { default_payment_method: "$pm2.id" } },
       ...advance("$s1.items.data.0.current_period_end"),
       invoices("l1"),
-      ...advance("$l1.data.0.automatically_finalizes_at"),
+      // After the declined charge the sandbox clock stays `advancing` for minutes (cause unknown).
+      ...advance("$l1.data.0.automatically_finalizes_at", 600_000),
       retrieve,
       invoices(),
       deleteClock,
