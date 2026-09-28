@@ -573,6 +573,7 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
     '  assert.equal(JSON.parse(readFileSync(new URL("../src/twin/shapes/customer.json", import.meta.url), "utf8")).tax_exempt, "none");',
     "});",
     'test("no key reaches the guard", () => assert.deepEqual([process.env.STRIPE_API_KEY, process.env.PARITY_READ_BUDGET], [undefined, undefined]));',
+    'test("the guard gets its own fresh PARITY_DATA_DIR, not the real one", () => assert.match(process.env.PARITY_DATA_DIR ?? "", /parity-guard-/));',
     'export const typo: number = "not a number";',
     "",
   ].join("\n");
@@ -587,7 +588,7 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
     const r = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-05T07:00:00Z") });
     assert.equal(r.guard?.length, 2);
     assert.equal(r.guard![0], "test: the customer template keeps tax_exempt none");
-    assert.match(r.guard![1]!, /^tsc: test\/pin\.test\.ts\(8,14\): error TS2322: /);
+    assert.match(r.guard![1]!, /^tsc: test\/pin\.test\.ts\(9,14\): error TS2322: /);
     assert.match(nightlyText(r), /^test guard: the align commit was DROPPED, 2 failures on it: test: the customer template keeps tax_exempt none; tsc: /m);
     // Nothing of the align commit is anywhere: not here, not on either origin, and no pending branch was pushed.
     assert.deepEqual(bare(parityOrigin, "log", "--format=%s", "main").split("\n").map((x) => x.replace(/ \(.*/s, "")), ["nightly 2026-10-05: curve point and scores", "init"]);

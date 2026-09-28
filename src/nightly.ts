@@ -8,7 +8,7 @@
 // the curve point says oracleRefreshed: false. A red suite includes one that ran 0 tests or hung past GUARD_TIMEOUT_MS.
 // Any other error (a missing key, a tool the suite spawns missing from the runner, a bug) fails the night.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
@@ -88,45 +88,51 @@ function noiseDue(dataDir: string, now: Date): boolean {
 
 /**
  * The test guard (after 2026-09-28, when an align commit turned CI red: tests pinned catalog placeholders): the suite and
- * tsc on the patched tree `repo`, in a CI-like environment (PATH, HOME and CI only, as the gate's child: no test reaches
- * the nightly's keys, tokens or data dir). Returns what failed: failing test names, tsc's error lines, a suite that ran
+ * tsc on the patched tree `repo`, in a CI-like environment (PATH, HOME, CI and a fresh, empty PARITY_DATA_DIR, as the
+ * gate's child: no test reaches the nightly's keys, tokens, or the real data dir dataDir() would otherwise fall back to
+ * at the sibling `../parity-data` checkout). Returns what failed: failing test names, tsc's error lines, a suite that ran
  * 0 tests, a run killed at `timeout`; none when green. Throws when the suite could not run (a tool it spawns is not on PATH).
  */
 function guard(repo: string, timeout = GUARD_TIMEOUT_MS): string[] {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
-  const exec = (args: string[]): { out: string; failed?: boolean; hung?: boolean } => {
-    try {
-      return { out: execFileSync(process.execPath, args, { cwd: repo, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, timeout }) };
-    } catch (e) {
-      const x = e as { stdout?: string; code?: string; message: string };
-      return { out: x.stdout || x.message, failed: true, hung: x.code === "ETIMEDOUT" };
+  const dataDir = mkdtempSync(join(tmpdir(), "parity-guard-"));
+  try {
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k))), PARITY_DATA_DIR: dataDir };
+    const exec = (args: string[]): { out: string; failed?: boolean; hung?: boolean } => {
+      try {
+        return { out: execFileSync(process.execPath, args, { cwd: repo, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28, timeout }) };
+      } catch (e) {
+        const x = e as { stdout?: string; code?: string; message: string };
+        return { out: x.stdout || x.message, failed: true, hung: x.code === "ETIMEDOUT" };
+      }
+    };
+    const hung = `timed out after ${timeout / 1000} s (killed)`;
+    const failed: string[] = [];
+    const tests = exec(["--test", "--test-reporter=tap", "test/*.test.ts"]);
+    if (tests.hung) failed.push(`test: node --test test/*.test.ts ${hung}`);
+    else if (tests.failed) {
+      // A tool the suite spawns missing from this runner (uv for test/h4.test.ts) is not the commit's failure: it would
+      // drop every align commit while the night stays green, so it fails the night (land() drops this one first).
+      // ponytail: only a missing executable ("spawn[Sync] <cmd> ENOENT") is told apart; other runner gaps still read as failures on the commit.
+      const missing = [...new Set([...tests.out.matchAll(/spawn(?:Sync)? (\S+) ENOENT/g)].map((m) => m[1]))];
+      if (missing.length) throw new Error(`the test guard could not run the suite: ${missing.join(", ")} not on PATH (spawn ENOENT); install it on the runner (.github/workflows/nightly.yml)`);
+      const names = [...parseTap(tests.out)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
+      failed.push(...(names.length ? names : ["test: node --test failed without a failing test"]));
+    } else if ([...tests.out.matchAll(/^# tests (\d+)$/gm)].at(-1)?.[1] === "0") {
+      // A moved or renamed suite: the glob matches nothing and node --test passes. The last `# tests` line is the run's
+      // summary (a test's own output line reads `# <line>` too).
+      failed.push("test: node --test test/*.test.ts ran 0 tests");
     }
-  };
-  const hung = `timed out after ${timeout / 1000} s (killed)`;
-  const failed: string[] = [];
-  const tests = exec(["--test", "--test-reporter=tap", "test/*.test.ts"]);
-  if (tests.hung) failed.push(`test: node --test test/*.test.ts ${hung}`);
-  else if (tests.failed) {
-    // A tool the suite spawns missing from this runner (uv for test/h4.test.ts) is not the commit's failure: it would
-    // drop every align commit while the night stays green, so it fails the night (land() drops this one first).
-    // ponytail: only a missing executable ("spawn[Sync] <cmd> ENOENT") is told apart; other runner gaps still read as failures on the commit.
-    const missing = [...new Set([...tests.out.matchAll(/spawn(?:Sync)? (\S+) ENOENT/g)].map((m) => m[1]))];
-    if (missing.length) throw new Error(`the test guard could not run the suite: ${missing.join(", ")} not on PATH (spawn ENOENT); install it on the runner (.github/workflows/nightly.yml)`);
-    const names = [...parseTap(tests.out)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
-    failed.push(...(names.length ? names : ["test: node --test failed without a failing test"]));
-  } else if ([...tests.out.matchAll(/^# tests (\d+)$/gm)].at(-1)?.[1] === "0") {
-    // A moved or renamed suite: the glob matches nothing and node --test passes. The last `# tests` line is the run's
-    // summary (a test's own output line reads `# <line>` too).
-    failed.push("test: node --test test/*.test.ts ran 0 tests");
+    // The repo's own tsc (npx could fetch a package where node_modules is missing).
+    const tsc = exec([join("node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
+    if (tsc.hung) failed.push(`tsc: ${hung}`);
+    else if (tsc.failed) {
+      const errors = tsc.out.split("\n").filter((l) => /error TS\d+/.test(l)).map((l) => `tsc: ${l.trim()}`);
+      failed.push(...(errors.length ? errors : [`tsc: ${tsc.out.trim().split("\n")[0]}`]));
+    }
+    return failed;
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
   }
-  // The repo's own tsc (npx could fetch a package where node_modules is missing).
-  const tsc = exec([join("node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.json"]);
-  if (tsc.hung) failed.push(`tsc: ${hung}`);
-  else if (tsc.failed) {
-    const errors = tsc.out.split("\n").filter((l) => /error TS\d+/.test(l)).map((l) => `tsc: ${l.trim()}`);
-    failed.push(...(errors.length ? errors : [`tsc: ${tsc.out.trim().split("\n")[0]}`]));
-  }
-  return failed;
 }
 
 /**
