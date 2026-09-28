@@ -620,6 +620,34 @@ test("the test guard: a red suite or tsc on the align commit drops the commit an
   }
 });
 
+test("the test guard: a suite that could not run (a tool it spawns is missing, as uv on a runner without setup-uv) fails the night after dropping the align commit, instead of dropping every commit on a green night", { timeout: 240_000 }, async () => {
+  const TOOL = [
+    'import { test } from "node:test";',
+    'import { execFileSync } from "node:child_process";',
+    'test("the bridge runs", () => { execFileSync("parity-missing-tool", ["--version"]); });',
+    "",
+  ].join("\n");
+  const { git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-guard-tool-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": await reverseOracle() }, { "test/tool.test.ts": TOOL });
+  const head0 = git(repo, "rev-parse", "HEAD");
+  const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
+  process.env.STRIPE_API_KEY = "sk_test_never_sent";
+  process.env.PARITY_READ_BUDGET = "0";
+  try {
+    await assert.rejects(
+      nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-05T07:00:00Z") }),
+      /^Error: nightly: the test guard could not run the suite: parity-missing-tool not on PATH \(spawn ENOENT\); install it on the runner \(\.github\/workflows\/nightly\.yml\); the align commit [0-9a-f]{40} and its sealed-log entries were dropped here: nothing is published tonight$/,
+    );
+    assert.deepEqual([git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")], [head0, ""]);
+    assert.deepEqual([bare(parityOrigin, "log", "--format=%s", "main"), bare(dataOrigin, "for-each-ref", "refs/heads/nightly/")], ["init", ""]);
+    assert.ok(!readJsonl<LogEntry>(logPath(data)).some((e) => e.kind === "patch" || e.kind === "gate"), "the patch and gate entries were dropped with the commit");
+  } finally {
+    for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 const site = (repo: string, f: string) => JSON.parse(readFileSync(join(repo, "site/data", f), "utf8"));
 
 /** The land tests' recording time. */

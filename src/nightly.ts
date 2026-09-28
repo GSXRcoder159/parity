@@ -6,7 +6,7 @@
 // circuit breaker), an allowance of 0, a deferred noise pair (decision 0001 C2) and a red suite on the align commit are
 // sealed-log notes, not failures: the night goes on, and when no slice was recorded it scores the existing oracle and
 // the curve point says oracleRefreshed: false.
-// Any other error (a missing key, a bug) fails the night.
+// Any other error (a missing key, a tool the suite spawns missing from the runner, a bug) fails the night.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,6 +85,7 @@ function noiseDue(dataDir: string, now: Date): boolean {
  * The test guard (after 2026-09-28, when an align commit turned CI red: tests pinned catalog placeholders): the suite and
  * tsc on the patched tree `repo`, in a CI-like environment (PATH, HOME and CI only, as the gate's child: no test reaches
  * the nightly's keys, tokens or data dir). Returns what failed: failing test names, tsc's error lines; none when green.
+ * Throws when the suite could not run (a tool it spawns is not on PATH).
  */
 function guard(repo: string): string[] {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ["PATH", "HOME", "CI"].includes(k)));
@@ -99,6 +100,11 @@ function guard(repo: string): string[] {
   const failed: string[] = [];
   const tests = failure(["--test", "--test-reporter=tap", "test/*.test.ts"]);
   if (tests !== undefined) {
+    // A tool the suite spawns missing from this runner (uv for test/h4.test.ts) is not the commit's failure: it would
+    // drop every align commit while the night stays green, so it fails the night (land() drops this one first).
+    // ponytail: only a missing executable ("spawn[Sync] <cmd> ENOENT") is told apart; other runner gaps still read as failures on the commit.
+    const missing = [...new Set([...tests.matchAll(/spawn(?:Sync)? (\S+) ENOENT/g)].map((m) => m[1]))];
+    if (missing.length) throw new Error(`the test guard could not run the suite: ${missing.join(", ")} not on PATH (spawn ENOENT); install it on the runner (.github/workflows/nightly.yml)`);
     const names = [...parseTap(tests)].filter(([, o]) => o === "fail").map(([n]) => `test: ${n}`);
     failed.push(...(names.length ? names : ["test: node --test failed without a failing test"]));
   }
@@ -247,7 +253,8 @@ const PENDING = "nightly/pending-";
  * origin has its patch entries on the log's main, or, from the moment it is pushed until the next nightly relands them
  * (reland()), on the data repo's branch nightly/pending-<runId>. So:
  *   0. guard() the commit: when the suite or tsc fails on it, the commit and its entries are dropped here, before
- *      anything is pushed, and the failures are returned (the night goes on); else [] once landed;
+ *      anything is pushed, and the failures are returned (the night goes on); else [] once landed. When the suite could
+ *      not run (a tool it spawns is missing), they are dropped the same way and the night fails;
  *   1. commit the log (and tonight's other data files) and push it to nightly/pending-<runId>, never to main;
  *   2. push the align commit. If 1 or 2 fails, the entries and the commit are dropped here (so no later push carries
  *      them). After 1 the commit was never pushed: the pending branch is deleted. After 2 it may have landed with the
@@ -276,7 +283,13 @@ function land(o: { data: string; repo: string; branch: string; date: string; run
     if (!kept) quiet(() => git(data, "push", "-q", "origin", "--delete", pending));
     throw new Error(`nightly: ${why} (${(e as Error).message}); the align commit ${o.commit} and its sealed-log entries were dropped here: nothing is published tonight${kept}`);
   };
-  const failed = guard(o.repo);
+  let failed: string[];
+  try {
+    failed = guard(o.repo);
+  } catch (e) {
+    undo(); // nothing is pushed yet
+    throw new Error(`nightly: ${(e as Error).message}; the align commit ${o.commit} and its sealed-log entries were dropped here: nothing is published tonight`);
+  }
   if (failed.length) {
     undo();
     return failed;
