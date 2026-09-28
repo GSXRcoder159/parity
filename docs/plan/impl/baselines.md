@@ -168,6 +168,10 @@ node reports/baseline.ts pair $P/oracle.jsonl $D/v1-noise-oracle.jsonl $D/v1-noi
   $P/runs/2026-09-28/noise-a-20260928T011354-l3w0.jsonl
 node src/cli.ts compare --oracle $D/v1-noise-oracle.jsonl --target $D/v1-noise-partner.jsonl --out $D/v1-noise
 #   60 sequences · L1 100.0% · L2 100.0% · L3 99.3% · L4 95.0% (v1.3, method m2)
+# Nightly's direction (noise-a as expected, as `noiseFloor` does). m2's causal-order constraints come from the expected side, so L4 differs.
+node src/cli.ts compare --oracle $D/v1-noise-partner.jsonl --target $D/v1-noise-oracle.jsonl --out $D/v1-noise-rev
+#   60 sequences · L1 100.0% · L2 100.0% · L3 99.3% · L4 93.3% (v1.3, method m2)
+#   the one extra L4 failure: 4 EVENT_ORDER_MISMATCH on 1 held-out refunds sequence (counts only; the template is held out)
 
 # stripe-mock, pinned by digest; version checked live (Stripe-Mock-Version 0.205.0; -strict-version-check names 2026-08-26.dahlia)
 docker run --rm -d --name parity-stripe-mock -p 12111-12112:12111-12112 \
@@ -196,4 +200,4 @@ node reports/baseline.ts summarize --oracle $P/oracle.jsonl --noise $D/v1-noise.
 - **Waits.** `bench` keeps each step's `waitMs` against every target; only `score-twin` drops them. The stripe-mock run therefore sleeps through the clock templates' waits (40 s after each advance, 600 s after #30's declined charge) and customer-search's 60 s, although stripe-mock answers at once: 2,212 s wall, almost all of it the 20 #30 sequences, which run in 3 waves of 8 at ~640 s each. A skip-waits flag for local targets was not added (YAGNI; score-twin already drops them for the twin).
 - **localstripe's surface** is §4's six templates. #27–#30 are excluded too: they need `POST /v1/prices` and `/v1/test_helpers/test_clocks`. (`surface`, and `summarize` in the JSON, print the clock routes as `/v1/test_helpers/{id}/$ck.id/…`, because `src/align/triage.ts` `endpoint()` treats the segment after `test_helpers` as an id. The report writes them as `/v1/test_helpers/test_clocks/{id}/…`.)
 - **localstripe and the wall clock.** 8 of its 120 oracle sequences were recorded on 2026-09-26 (#1, #2, #4, #14 × seeds 3–4), and localstripe ran on 2026-09-28. Its L4 is 0 on every sequence regardless: none of the 120 agrees on every step.
-- **Noise causes** were diagnosed with scratch scripts (not committed) that open values only in non-held-out recordings. No held-out template diverged in the pair.
+- **Noise causes** were diagnosed with scratch scripts (not committed) that open values only in non-held-out recordings. No held-out template diverges at L1–L3 in either direction, or at all with the oracle as expected. In nightly's direction, one held-out refunds sequence fails on causal event order (4 precedence pairs). That was counted, not opened.
