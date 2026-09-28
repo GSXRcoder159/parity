@@ -36,6 +36,19 @@ Tests cover allowance math at the budget edges, the rotation cursor across night
 3. `bench` against a non-sandbox target skips template `waitMs`, as `score-twin` does. Waits exist only for sandbox timing. Keep them for the sandbox. Add a test.
 4. `templates/clocks.ts`: add a `// ponytail:` note on #30's 600 s wait naming the ceiling (1.5× the max seen over 6 clocks). `record` against the sandbox ends with a leak check: list test clocks created during the run, delete any left over, and report the count. Add a corpus test that #30's second advance is followed by a wait of at least 600,000 ms.
 
+## Task 4: Nightly leftovers (orchestrator rulings after the Task 1 cap)
+
+**Paths:** `src/nightly.ts`, `test/nightly.test.ts`
+
+1. `IN_SAMPLE_RUNS` gains the 2026-09-28 pair (`20260928T011354-l3w0`, `20260928T012601-q5kb`). The v1.4 rules were written from it, so its published ceiling must say `inSample: true` until the next weekly pair replaces it.
+2. The guard treats a run with `# tests 0` as a failure: a moved or renamed suite must not wave align commits through.
+3. The guard's test and tsc runs get a timeout of 10 minutes. A hang means the align commit is dropped and a note is written, not a 120-minute job timeout.
+4. With an empty oracle, `oracleMaxAgeDays` is `null` and the summary says "no oracle". It must not claim 0 days.
+5. Ruling on record: the noise pair uses the 30-day headroom left after the slice, i.e. weekly cadence (1f9720c). Keep it.
+6. Not in scope, needs the user: `.github/workflows/nightly.yml` needs `- uses: astral-sh/setup-uv@v6` with `enable-cache: false`, placed before the nightly step. An agent's edit to it was refused by the permission system (2026-09-28), so the orchestrator surfaces the patch to the user.
+
+Tests for items 1–4.
+
 ## Task 3: Docs, status and rulings refresh
 
 **Paths:** `docs/plan/STATUS.md`, `docs/plan/impl/templates-validation.md`, `reports/2026-09-27-clocks.md`, `README.md`, `site/index.html` (text only), `docs/launch/*.md`, `docs/yc/2026-w27-application.md`, `docs/demand/partner-offer.md`
