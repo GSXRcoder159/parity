@@ -69,8 +69,8 @@ local run (the nightly pushes its spend there).
   it was paid for today; then 60/60. Scripted agent on the twin: 60/60, so no new `TWIN_GAPS`. The sandbox passes made
   1+222+2 GET. **The 80-task LLM run is scheduled after 00:00 UTC 2026-09-29** (today's $15 cap has $12.03 left, less
   than the run may cost). Until then the H4 number below is the 20-task one. Stated before that run: the twin's error
-  messages are `parity: <key>` placeholders (decision 0002 §4 rule 3), while the sandbox's are descriptive ("Refund amount
-  … is greater than charge amount …"). The agent reads them as tool results, so on the over-refund, refunded-charge and
+  messages are `parity: <key>` placeholders (decision 0002 §4 rule 3), while the sandbox's say what went wrong (e.g. the
+  requested and the refundable amounts). The agent reads them as tool results, so on the over-refund, refunded-charge and
   canceled-subscription tasks they are a candidate cause of twin-vs-sandbox disagreement.
 - **H4 number (2026-09-28, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs sandbox 100.0% (20/20;
   Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
