@@ -213,6 +213,13 @@ export interface AssistResult {
   outcomes: Outcome[];
 }
 
+/**
+ * max_tokens of an assist call: Sonnet 5's adaptive thinking plus the whole replaced file (subscriptions.ts, the largest,
+ * is ~23K chars). 8,192 cut off events clock-period-rollover on 2026-09-28 (42,780 tokens in, $0.17). The cap estimate
+ * (llm.ts) charges all 16,000 at $10/MTok ($0.16) plus chars/2 input: 3 loci with prompts twice that size still fit the
+ * CI's $3 cap (test/align-assist.test.ts). 16,000 is the Claude API skill's non-streaming default; more would need streaming.
+ */
+export const ASSIST_MAX_TOKENS = 16_000;
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const PR_BODY_MAX = 60_000;
 
@@ -273,7 +280,7 @@ export async function assist(
     const files = [own, ...(source(own).includes('"../billing.ts"') ? ["src/twin/billing.ts"] : [])].map((path) => ({ path, source: source(path) }));
     let reply;
     try {
-      reply = await complete({ system: SYSTEM, user: userPrompt(files, ce), runId: o.runId, purpose: `assist ${out.locus}` }, { ledger, env, now });
+      reply = await complete({ system: SYSTEM, user: userPrompt(files, ce), runId: o.runId, purpose: `assist ${out.locus}`, maxTokens: ASSIST_MAX_TOKENS }, { ledger, env, now });
     } catch (e) {
       Object.assign(out, { result: e instanceof CapRefused ? "cap" : "llm-error", detail: (e as Error).message });
       if (e instanceof CapRefused) break; // the loop stops at the cap
@@ -281,6 +288,7 @@ export async function assist(
     }
     out.cost_usd = reply.cost_usd;
     res.cost_usd += reply.cost_usd;
+    // A max_tokens stop is a bad-reply like any other: its cost is logged and the locus waits for the next run.
     const parsed = reply.stop_reason === "end_turn" ? parseReply(reply.text, files.map((f) => f.path)) : { error: `stop_reason ${reply.stop_reason}` };
     if ("error" in parsed || parsed.content === source(parsed.file)) {
       Object.assign(out, { result: "bad-reply", detail: "error" in parsed ? parsed.error : "the file is unchanged" });

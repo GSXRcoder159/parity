@@ -83,13 +83,13 @@ export interface Reply {
 }
 
 /**
- * One Messages API call (max_tokens 8192; temperature 0 where the model accepts it): one `user` prompt, or a whole
- * `messages` list (a tool-use loop), with optional `tools`. Refused with CapRefused when today's spend, or any of
- * `extraCaps` (a caller's own budgets), plus a worst-case estimate (prompt chars / 2 input tokens, max_tokens output)
+ * One Messages API call (`maxTokens`, default MAX_TOKENS; temperature 0 where the model accepts it): one `user` prompt,
+ * or a whole `messages` list (a tool-use loop), with optional `tools`. Refused with CapRefused when today's spend, or any
+ * of `extraCaps` (a caller's own budgets), plus a worst-case estimate (prompt chars / 2 input tokens, max_tokens output)
  * would pass its cap. A 429 or 529 is retried twice. The reply is ledgered whatever its stop_reason.
  */
 export async function complete(
-  req: { system: string; tools?: unknown[]; runId: string; purpose: string } & ({ user: string } | { messages: unknown[] }),
+  req: { system: string; tools?: unknown[]; runId: string; purpose: string; maxTokens?: number } & ({ user: string } | { messages: unknown[] }),
   o: { ledger: string; env?: Env; now?: () => Date; extraCaps?: { spent: number; cap: number; name: string }[] },
 ): Promise<Reply> {
   const env = o.env ?? process.env;
@@ -102,7 +102,8 @@ export async function complete(
   // ponytail: chars/2 over-estimates input tokens for code and JSON; /v1/messages/count_tokens would make it exact.
   const messages = "user" in req ? [{ role: "user", content: req.user }] : req.messages;
   const chars = req.system.length + ("user" in req ? req.user.length : JSON.stringify(messages).length) + (req.tools ? JSON.stringify(req.tools).length : 0);
-  const estimate = costUsd(model, { input_tokens: Math.ceil(chars / 2), output_tokens: MAX_TOKENS });
+  const maxTokens = req.maxTokens ?? MAX_TOKENS;
+  const estimate = costUsd(model, { input_tokens: Math.ceil(chars / 2), output_tokens: maxTokens });
   if (spent + estimate > cap) {
     throw new CapRefused(`LLM cap: $${spent.toFixed(4)} spent today (UTC) + $${estimate.toFixed(4)} estimated for this call > cap $${cap} (${o.ledger}; PARITY_LLM_CAP_USD)`);
   }
@@ -111,7 +112,7 @@ export async function complete(
   }
   const redact = (s: string) => s.split(apiKey).join("[REDACTED]");
   const url = `${(env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "")}/v1/messages`;
-  const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, ...(p.temperature0 ? { temperature: 0 } : {}), system: req.system, ...(req.tools ? { tools: req.tools } : {}), messages });
+  const body = JSON.stringify({ model, max_tokens: maxTokens, ...(p.temperature0 ? { temperature: 0 } : {}), system: req.system, ...(req.tools ? { tools: req.tools } : {}), messages });
   let res: Response;
   let raw: string;
   for (let attempt = 1; ; attempt++) {
@@ -120,7 +121,9 @@ export async function complete(
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
         body,
-        signal: AbortSignal.timeout(300_000),
+        // Non-streaming, so the whole reply must arrive inside it: 10 minutes (the SDKs' default) is 16K output tokens at
+        // 27 tokens/s (2026-09-28 nightly: 8,192 in under 104 s). An aborted call can be billed yet has no usage to ledger.
+        signal: AbortSignal.timeout(600_000),
       });
     } catch (e) {
       throw new Error(`LLM network error: ${redact(String(e))}`);

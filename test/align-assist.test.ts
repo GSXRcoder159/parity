@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { assist, assistText, parseReply, sh, type Run } from "../src/align/assist.ts";
+import { ASSIST_MAX_TOKENS, assist, assistText, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage } from "../src/align/gate.ts";
 import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -112,6 +112,28 @@ test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday d
   }
 });
 
+test("llm: a call's maxTokens is sent and charged in full in the cap estimate; three assist calls on prompts twice 2026-09-28's largest fit the CI's $3 cap", async () => {
+  // Every reply is cut off at max_tokens, the worst case: billed in full, ledgered, returned as is.
+  const usage = { input_tokens: 85_560, output_tokens: ASSIST_MAX_TOKENS };
+  const api = await fakeApi(() => ({ json: { content: [{ type: "text", text: "FILE: src/twin/billing.ts\n```ts\nexport" }], stop_reason: "max_tokens", usage } }));
+  try {
+    const ledger = join(mkdtempSync(join(tmpdir(), "pb-llm-max-")), "llm.jsonl");
+    const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url, PARITY_LLM_CAP_USD: "3" };
+    // events clock-period-rollover's prompt was 42,780 tokens (~128K chars at 3 a token); twice that is 256K chars.
+    const call = (e: Record<string, string> = {}) =>
+      complete({ system: "s", user: "u".repeat(255_999), runId: "r", purpose: "assist", maxTokens: ASSIST_MAX_TOKENS }, { ledger, env: { ...env, ...e }, now: NOW });
+    // Estimate: 128,000 input tokens at $2/MTok ($0.256) + all 16,000 output tokens at $10/MTok ($0.16).
+    await assert.rejects(call({ PARITY_LLM_CAP_USD: "0.4" }), (e: unknown) => e instanceof CapRefused && /\$0\.0000 spent today \(UTC\) \+ \$0\.4160 estimated for this call > cap \$0\.4 /.test((e as Error).message));
+    assert.equal(api.requests.length, 0);
+    for (let i = 0; i < 3; i++) assert.equal((await call()).stop_reason, "max_tokens"); // the third: $0.6622 spent + $0.4160 < $3
+    assert.deepEqual(api.requests.map((r) => r.body.max_tokens), [16_000, 16_000, 16_000]);
+    // 3 x (85,560 x $2 + 16,000 x $10) / 1e6.
+    assert.equal(readLlmLedger(ledger).reduce((s, e) => s + e.cost_usd, 0).toFixed(4), "0.9934");
+  } finally {
+    api.close();
+  }
+});
+
 test("parseReply: one FILE line naming a file shown plus one fenced block, else an error", () => {
   const allowed = ["src/twin/resources/customers.ts", "src/twin/billing.ts"];
   assert.deepEqual(parseReply("Here:\nFILE: src/twin/billing.ts\n```ts\nexport const x = 1;\n```\n", allowed), { file: "src/twin/billing.ts", content: "export const x = 1;\n" });
@@ -178,7 +200,9 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     .replace("const after = assign(structuredClone(before), params, FIELDS);", "const after = assign(structuredClone(before), params, FIELDS);\n      after.description = after.name;");
   assert.notEqual(fixed, original);
   const replies = [`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${original}// a comment changes nothing\n\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`];
-  const api = await fakeApi((n) => message(replies[n]!));
+  // The fourth request is cut off at the assist max_tokens (2026-09-28's clock-period-rollover prompt size).
+  const truncated = { json: { content: [{ type: "thinking", thinking: "" }, { type: "text", text: `FILE: ${FILE}\n\`\`\`ts\nimport` }], stop_reason: "max_tokens", usage: { input_tokens: 42_780, output_tokens: 16_000 } } };
+  const api = await fakeApi((n) => (n === 3 ? truncated : message(replies[n]!)));
   const gh: string[][] = [];
   // docker: the fake runs the container's command on the host and records its argv (a real run: test/align-gate.test.ts).
   const dockerCalls: string[][] = [];
@@ -201,8 +225,9 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
 
     // The prompt: the owning module, a train counterexample truncated after its first divergent step, the clean-room
     // rule; nothing from held-out sequences.
-    const sent = api.requests[0]!.body as { system: string; messages: { content: string }[] };
+    const sent = api.requests[0]!.body as { system: string; messages: { content: string }[]; max_tokens: number };
     const user = sent.messages[0]!.content;
+    assert.equal(sent.max_tokens, 16_000);
     assert.match(sent.system, /Clean room: write original code/);
     assert.ok(user.includes(`### ${FILE}\n\`\`\`ts\n${original}\`\`\``));
     assert.match(user, /^## Counterexample \(normalized\): customer-crud#1, steps 0\.\.0 of 6$/m);
@@ -247,6 +272,9 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     const capped = await assist(plan, { repo, dataDir: data, runId: "assist-4", env: { ...env, PARITY_LLM_CAP_USD: "0" }, run, now: NOW });
     assert.deepEqual([capped.outcomes.length, capped.outcomes[0]!.result, capped.cost_usd], [1, "cap", 0]);
     assert.match(capped.outcomes[0]!.detail!, /> cap \$0 /);
+    // The estimate charges the whole assist max_tokens (16,000) as output, on the same prompt as assist-1.
+    const estimate = costUsd("claude-sonnet-5", { input_tokens: Math.ceil((sent.system.length + user.length) / 2), output_tokens: 16_000 });
+    assert.ok(capped.outcomes[0]!.detail!.includes(`+ $${estimate.toFixed(4)} estimated for this call`), capped.outcomes[0]!.detail);
     assert.equal(api.requests.length, 2);
 
     // No docker (or the pinned image does not start): refused before any LLM call, logged, no PR. LLM-written code
@@ -273,8 +301,21 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.doesNotMatch(git("ls-remote", "--heads", "origin"), /assisted-2026-09-26-2/);
     assert.equal(git("branch", "--list", "align/*"), "align/assisted-2026-09-26-1");
 
+    // A reply cut off at max_tokens: a bad-reply carrying its cost and ledgered, never sent again in the run and never
+    // scored.
+    const scored = dockerCalls.filter((a) => a.includes("score-twin")).length;
+    const cut = await assist(plan, { repo, dataDir: data, runId: "assist-7", env, run, now: NOW });
+    assert.deepEqual(cut.outcomes.map((x) => [x.result, x.detail, x.cost_usd]), [["bad-reply", "stop_reason max_tokens", 0.24556]]); // (42,780 x $2 + 16,000 x $10) / 1e6
+    assert.equal(cut.cost_usd, 0.24556);
+    assert.equal(api.requests.length, 4, "sent once");
+    assert.equal(dockerCalls.filter((a) => a.includes("score-twin")).length, scored);
+    const last = readLlmLedger(join(data, "budget/llm.jsonl")).at(-1)!;
+    assert.deepEqual([last.purpose, last.stop_reason, last.cost_usd], ["assist customer description", "max_tokens", 0.24556]);
+    assert.match(assistText(cut), /^ {2}bad-reply · \d+ · customer description · \$0\.2456 · stop_reason max_tokens$/m);
+    assert.equal(gh.length, 1, "no PR");
+
     const log = readJsonl<LogEntry>(logPath(data));
-    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 7 });
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 8 });
     assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [
       ["patch", "assist-1", "assisted", "proposed"],
       ["note", "assist-1", undefined, undefined],
@@ -283,7 +324,9 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
       ["note", "assist-4", undefined, undefined],
       ["note", "assist-6", undefined, undefined],
       ["note", "assist-5", undefined, undefined],
+      ["note", "assist-7", undefined, undefined],
     ]);
+    assert.deepEqual((log[7]!.data.assist as AssistResult).outcomes.map((x) => [x.result, x.cost_usd]), [["bad-reply", 0.24556]]);
     assert.equal((log[5]!.data.assist as { skipped: string }).skipped, refused.skipped);
     assert.deepEqual([log[0]!.data.pr, log[0]!.data.branch, log[0]!.data.file], ["https://github.com/example/parity/pull/7", "align/assisted-2026-09-26-1", FILE]);
     assert.deepEqual((log[3]!.data.assist as { skipped?: string }).skipped, none.skipped);
