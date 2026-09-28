@@ -25,6 +25,14 @@ const DEFAULT_PM = "invoice_settings[default_payment_method]";
 const defaultPm = (params: Record<string, unknown>) => (isHash(params.invoice_settings) ? params.invoice_settings.default_payment_method : undefined);
 const ID = /^\/v1\/customers\/(?<customer>[^/]+)$/;
 
+// Docs: a random uppercase alphanumeric prefix is generated for each customer, used on their invoice numbers.
+const randomInvoicePrefix = () => {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let s = "";
+  for (let i = 0; i < 8; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+};
+
 export const routes: Route[] = [
   [
     "POST",
@@ -33,7 +41,17 @@ export const routes: Route[] = [
       checkAttached(ctx, defaultPm(params), undefined, DEFAULT_PM);
       const clock = params.test_clock ? (live(ctx, params.test_clock, "test_helpers.test_clock") ?? ctx.fail("resource_missing_400", { param: "test_clock" })) : undefined;
       if (clock && ctx.all("customer").filter((c) => c.test_clock === clock.id).length >= 3) ctx.fail("test_clock_customer_limit");
-      const c = assign(ctx.build("customer", { id: ctx.id("cus"), created: ctx.now(), test_clock: clock?.id ?? null }), params, FIELDS);
+      const c = assign(
+        ctx.build("customer", {
+          id: ctx.id("cus"),
+          created: ctx.now(),
+          test_clock: clock?.id ?? null,
+          invoice_prefix: randomInvoicePrefix(),
+          next_invoice_sequence: 1,
+        }),
+        params,
+        FIELDS,
+      );
       return { body: c, emits: [{ type: "customer.created", object: c }] };
     },
     "post /v1/customers",
