@@ -166,7 +166,7 @@ The L3 floor is under the plan's 3% bar. The highest stratum is 2.0% at L3 (cloc
 | held-out | 93.2% [91.4–94.7] (886) | 18.1% [15.7–20.7] (886) | 18.1% [15.7–20.7] (886) | 0.0% [0.0–3.1] (120) |
 | noise ceiling | 100.0% [99.2–100.0] (449) | 99.3% [98.1–99.8] (449) | | 93.3% [84.1–97.4] (60) |
 
-The twin passes no held-out sequence yet. The test clocks, built from the docs, get their first score here: every status right (train L1 100%), train L3 38.5% [35.1–41.9] and L4 0.0% [0.0–6.0], with the gaps in values and event order. The noise pair covers 60 of the 600 sequences, all 30 templates. Automation that night: 180 automatic patches and 0 assisted; train divergences removed 7,538 vs 0.
+The twin passes no held-out sequence yet. The test clocks, built from the docs, get their first score here: every status right (train L1 100%), train L3 38.5% [35.1–41.9] and L4 0.0% [0.0–6.0], with the gaps in values and event order. The noise pair covers 60 of the 600 sequences, all 30 templates. Cumulative as of that night (sealed log, since the scaffold freeze): 180 automatic patches and 0 assisted; train divergences removed 7,538 vs 0.
 
 **The assisted pass is live** (2026-09-28). The first run on GitHub sent its first 3 loci to the LLM for $0.23 and opened draft pull requests #1 and #2. #1 was merged: the twin's customer create now sets `invoice_prefix` and `next_invoice_sequence`. On oracle v1 its review gate moved train L3 from 26.8% to 47.5% and held-out L3 from 18.1% to 39.1%. #2 was closed as superseded by #1. The page and its changelog count #1 from the next nightly on, which logs it in the sealed log.
 
@@ -181,7 +181,7 @@ That noise pair covers templates #1–#15 only and is in-sample, so these scores
 
 **Sim-to-real (H4).** An LLM agent (`claude-sonnet-5`, with tools from the pinned Python agent toolkit) does billing-support tasks (refunds, cancellations, plan changes) once on the twin, once on a second twin run (the control: the agent's own run-to-run agreement) and once on the sandbox. H4 is the share of tasks where the twin and the sandbox agree on pass or fail ([`evals/h4`](evals/h4/README.md)).
 - 20 tasks (2026-09-28): 100.0% (20/20; 95% Wilson interval 83.9–100.0%), control 100.0% ([report](reports/2026-09-28-h4.md)).
-- 80 tasks (2026-09-29): the 20 plus 60 written before any result, because the 20-task lower bound was under 90%. **93.8% (75/80; 86.2–97.3%)**, control 95.0% (76/80; 87.8–98.0%), so the noise floor is 5.0% and the verdict is inconclusive (90–95%) ([report](reports/2026-09-28-h4-80.md)). All 5 disagreements are in the 12 tasks that need `cancel_at_period_end`, which the agent's tool did not offer. The control attributes 3 of them to agent variance and a 4th probably; the 5th, `cancel-addon-at-period-end`, is unattributed, and a twin gap is not excluded.
+- 80 tasks (2026-09-29): the 20 plus 60 written before any result, because the 20-task lower bound was under 90%. **93.8% (75/80; 86.2–97.3%)**, control 95.0% (76/80; 87.8–98.0%), so the noise floor is 5.0% and the verdict is inconclusive (90–95%) ([report](reports/2026-09-28-h4-80.md)). All 5 disagreements are in the 12 tasks that need `cancel_at_period_end`, which the agent's tool did not offer. The control shows 3 of them are agent variance; a 4th is probably agent variance too, which the control cannot show (both twin runs pass; on the sandbox the agent stopped without writing); the 5th, `cancel-addon-at-period-end`, is unattributed, and a twin gap is not excluded.
 
 ### Other servers
 
