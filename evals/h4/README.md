@@ -169,7 +169,8 @@ local run (the nightly pushes its spend there).
   - it ledgers every request of the setup, the tools and the checks;
   - it halts the run at the budget or after 10 consecutive 429s, and a halted run produces no report.
 - **What gets written.** The report (`--out`, `.md` and `.json`) holds task ids, outcomes and (`.json`) each tool
-  call's name and input keys, never a value or a response body (decision 0001 C3). The stderr log explains each
+  call's name and input keys, never a value or a response body (decision 0001 C3): a key the model chose that isn't a
+  normal parameter name (an id or email used as a key) is masked to `<other>`. The stderr log explains each
   failure and may quote response values, so never commit it from a sandbox run.
 - **For counsel (B5).** During a sandbox run, response bodies reach the model provider as tool results.
 

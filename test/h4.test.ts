@@ -150,6 +150,22 @@ test("llm agent: stops after 12 model calls; tool errors reach the model as is_e
   }
 });
 
+test("tool log masks input keys that aren't normal parameter names (an id or email the model used as a key), keeping normal ones", async () => {
+  const fake = await fakeAnthropic((body, n) => {
+    if (n === 1) return toolUse(n, "cancel_subscription", { subscription: "sub_missing", cus_ABC123: true, "a@b.com": true });
+    return { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" };
+  });
+  const restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined });
+  try {
+    const r = await runH4({ tasks: [task("cancel-now")], runs: ["twin"], agent: "llm", ledger: join(tmp(), "llm.jsonl"), log: quiet });
+    assert.deepEqual(r.tasks[0]!.tools!.twin, [{ name: "cancel_subscription", keys: ["subscription", "<other>", "<other>"] }]);
+    assert.doesNotMatch(JSON.stringify(r.tasks), /cus_ABC123|a@b\.com/);
+  } finally {
+    restore();
+    fake.close();
+  }
+});
+
 test("llm agent: refused before any call without a key; a cap refusal stops the run and still reports (sandbox half not run)", async () => {
   const fake = await fakeAnthropic(() => ({ content: [], stop_reason: "end_turn" }));
   const one = [task("refund-full")];

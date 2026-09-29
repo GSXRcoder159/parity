@@ -52,11 +52,14 @@ export interface Task {
 export type Outcome = "pass" | "fail" | "error";
 /** control = a second, independent twin run with the same agent: twin vs control is the agent's own agreement. */
 export type Run = "twin" | "control" | "sandbox";
-/** One tool call the agent made: its name and the input's top-level keys, never a value (decision 0001 C3). */
+/** One tool call the agent made: its name and the input's top-level keys, never a value (decision 0001 C3). A key
+ * the model chose that isn't a normal parameter name (e.g. an id or email used as a key) is masked to "<other>". */
 export interface ToolCall {
   name: string;
   keys: string[];
 }
+/** Normal tool-parameter names look like this; anything else (a model-chosen id, email, etc. used as a key) is masked. */
+const PARAM_KEY = /^[a-z][a-z0-9_]*$/;
 export interface TaskResult {
   outcome: Outcome;
   /** Model calls the LLM agent made (absent for the scripted agent). */
@@ -326,7 +329,7 @@ export async function runH4(o: { tasks: Task[]; runs: Run[]; agent: "scripted" |
         const b: Bridge = {
           ...raw,
           call: (name, input) => {
-            calls.push({ name, keys: input && typeof input === "object" ? Object.keys(input) : [] });
+            calls.push({ name, keys: input && typeof input === "object" ? Object.keys(input).map((k) => (PARAM_KEY.test(k) ? k : "<other>")) : [] });
             return raw.call(name, input);
           },
         };
