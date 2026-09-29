@@ -64,7 +64,7 @@ lower) may well stop it; the result is then a partial report with no verdict. Th
 local run (the nightly pushes its spend there). Every purpose counts against the one daily cap, so an H4 run before that
 UTC day's nightly starves the nightly's assisted pass: on 2026-09-29 H4 had spent $12.31, and the nightly's pass (cap $3)
 was refused before its first call. Run H4 only once the day's nightly is published: after pulling the data repo,
-`grep -c '"kind":"publish","data":{"label":"nightly","date":"<UTC date>"' <data dir>/align/log.jsonl` prints 1. The
+`grep -c '"kind":"publish","data":{"label":"nightly","date":"<UTC date>"' <data dir>/align/log.jsonl` prints at least 1. The
 schedule (07:23 UTC, backup 10:47 UTC) is not a guarantee: GitHub can start scheduled runs late.
 
 ## Status (2026-09-29)
