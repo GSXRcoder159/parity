@@ -12,5 +12,54 @@
     "template": "expand-paths",
     "path": "$.data[0].latest_charge.payment_method_details.card.electronic_commerce_indicator",
     "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "GET /v1/invoices",
+    "template": "subscription-update-price",
+    "path": "$.data[0].lines.data[0].description",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "GET /v1/invoices",
+    "template": "subscription-update-price",
+    "path": "$.data[0].lines.data[1].description",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "GET /v1/subscriptions/$s1.id",
+    "template": "expand-paths",
+    "path": "$.latest_invoice.account_name",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "invoice-preview-proration",
+    "path": "$.lines.data[0].description",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "invoice-preview-proration",
+    "path": "$.lines.data[1].description",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "subscription-update-quantity",
+    "path": "$.lines.data[0].description",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-09-29",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "subscription-update-quantity",
+    "path": "$.lines.data[1].description",
+    "cls": "VALUE_MISMATCH"
   }
 ]
