@@ -30,8 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.4");
-  assert.equal(RULES.length, 13);
+  assert.equal(NORMALIZATION_VERSION, "v1.5");
+  assert.equal(RULES.length, 14);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -236,6 +236,29 @@ test("v1.4: payment_method_details.card.electronic_commerce_indicator is opaque 
   assert.equal(body(a, 0).payment_method_details.card.three_d_secure.electronic_commerce_indicator, "e1");
   assert.notDeepEqual(body(a, 0), body(b, 0), "the 3DS ECI still differs");
   assert.equal(body(normalizeRecording(rec([step(0, charge(null))])), 0).payment_method_details.card.electronic_commerce_indicator, null);
+});
+
+test("v1.5: a D Mon YYYY date in text is <date> (steps, lists, events); the line's period is still compared", () => {
+  // Made-up text: the same proration line recorded on two days.
+  const line = (day: number) => ({ object: "line_item", description: `Unused time on Plan after ${day} Sep 2026`, period: { start: T0 + day * 86400, end: T0 + 30 * 86400 } });
+  const run = (day: number) => normalizeRecording(rec([step(0, { object: "invoice", created: T0, lines: { object: "list", data: [line(day)] } })], [{ id: "evt_1AbcDEFghijk", type: "invoice.created", created: T0, data: { object: line(day) } } as unknown as StripeEvent]));
+  const [a, b] = [run(28), run(29)];
+  assert.equal(body(a, 0).lines.data[0].description, "Unused time on Plan after <date>");
+  assert.equal((a.events[0] as any).data.object.description, "Unused time on Plan after <date>");
+  assert.notDeepEqual(body(a, 0), body(b, 0), "the period start still differs by a day");
+  assert.deepEqual(body(a, 0).lines.data[0].period, { start: "<t:+672h>", end: "<t:+720h>" });
+  // Other text with digits and months stays: only the `D Mon YYYY` form.
+  const keep = ["Plan 29 Sept 2026", "2026-09-29", "Sep 29, 2026", "129 Sep 20260"];
+  assert.deepEqual(keep.map((d) => body(normalizeRecording(rec([step(0, { description: d })])), 0).description), keep);
+  assert.equal(body(normalizeRecording(rec([step(0, { description: "1 Jan 2027 to 31 Dec 2027" })])), 0).description, "<date> to <date>");
+});
+
+test("v1.5: account_name is opaque, null included (unclaimed vs claimed sandbox); account_country is compared", () => {
+  const inv = (name: string | null, country: string) => ({ object: "invoice", account_name: name, account_country: country });
+  const [a, b] = [normalizeRecording(rec([step(0, inv(null, "US"))])), normalizeRecording(rec([step(0, { object: "subscription", latest_invoice: inv("Acme", "US") })]))];
+  assert.deepEqual(body(a, 0), { object: "invoice", account_name: "<opaque>", account_country: "US" });
+  assert.deepEqual(body(b, 0).latest_invoice, body(a, 0));
+  assert.notDeepEqual(body(normalizeRecording(rec([step(0, inv("Acme", "GB"))])), 0), body(a, 0));
 });
 
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {

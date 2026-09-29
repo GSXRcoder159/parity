@@ -35,7 +35,7 @@ export type Catalog = Record<string, Record<string, unknown>>;
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
 /** Normalization placeholders (normalize.ts): computed per run, never seeded as a value. */
-const PLACEHOLDER = /<(?:id:[^>]*|t:[^>]*|number:[^>]*|url:[^>]*|run|opaque|secret)>/;
+const PLACEHOLDER = /<(?:id:[^>]*|t:[^>]*|number:[^>]*|url:[^>]*|run|opaque|secret|date)>/;
 const computed = (v: unknown): boolean => PLACEHOLDER.test(JSON.stringify(v) ?? "");
 const pointer = (keys: (string | number)[]): string => keys.map((k) => `/${String(k).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
 const ERROR_FIELDS = new Set(["status", "type", "code", "param", "message"]);

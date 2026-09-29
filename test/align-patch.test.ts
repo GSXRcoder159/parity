@@ -85,10 +85,10 @@ test("determinism: a value identical at every train occurrence is a candidate; o
   assert.deepEqual([marked.candidates, marked.notMechanical.map((n) => n.reason)], [[], ["noise: a divergence at this locus is in the noise set"]]);
 });
 
-test("placeholders are never seeded: ids, times, run nonces and opaques in a field or a message are computed", () => {
+test("placeholders are never seeded: ids, times, dates in text, run nonces and opaques in a field or a message are computed", () => {
   const oracle = [1, 2].map((n) =>
     rec(`a#${n}`, false, [
-      st(0, 200, customer({ default_source: "<id:card>", period: { end: "<t:+720h>" }, invoice_prefix: "<opaque>" })),
+      st(0, 200, customer({ default_source: "<id:card>", period: { end: "<t:+720h>" }, invoice_prefix: "<opaque>", description: "Unused time on Plan after <date>" })),
       st(1, 400, { error: { type: "idempotency_error", message: "Keys for idempotent requests ... other than 'parity-<run>-k1' ..." } }),
       st(2, 404, { error: { type: "invalid_request_error", message: "No such customer: '<id:cus>'", param: "id" } }),
     ]),
@@ -101,12 +101,14 @@ test("placeholders are never seeded: ids, times, run nonces and opaques in a fie
     ...at(seqs, "$.default_source", "VALUE_MISMATCH", field("default_source")),
     ...at(seqs, "$.period.end", "VALUE_MISMATCH", field("period.end")),
     ...at(seqs, "$.invoice_prefix", "VALUE_MISMATCH", field("invoice_prefix")),
+    ...at(seqs, "$.description", "VALUE_MISMATCH", field("description")),
     ...seqs.map((s) => div(s, 1, "$.error.message", "VALUE_MISMATCH", error("idempotency_mismatch", "message"))),
     ...seqs.map((s) => div(s, 2, "$.error.message", "VALUE_MISMATCH", error("resource_missing", "message"))),
   ];
   const { candidates, notMechanical } = propose(divergences, oracle, twin, new Set(), data);
   assert.deepEqual(candidates, []);
   assert.deepEqual(notMechanical.map((n) => n.reason), [
+    "computed: the value holds a normalization placeholder",
     "computed: the value holds a normalization placeholder",
     "computed: the value holds a normalization placeholder",
     "computed: the value holds a normalization placeholder",

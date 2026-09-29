@@ -1,10 +1,10 @@
-// Normalization v1.4: rewrites run-specific values (ids, timestamps, a declined invoice's retry day, nonces, secrets,
-// hosted URLs, per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
+// Normalization v1.5: rewrites run-specific values (ids, timestamps, readable dates in text, a declined invoice's retry
+// day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
 // faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.4";
+export const NORMALIZATION_VERSION = "v1.5";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -16,6 +16,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "timestamps",
     rationale:
       "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset. Not applied to an event's own top-level `created`: events are compared by type set and causal order (compare method m2), never by value, and the order check needs the raw times.",
+  },
+  {
+    name: "readable-dates",
+    rationale:
+      "Proration line descriptions embed the calendar day the sandbox ran (`Unused time on … after 29 Sep 2026`), so recordings of one sequence made on different days differ (drift/2026-09-29.md). v1.5: a date in Stripe's `D Mon YYYY` form inside any string becomes `<date>` (`Unused time on … after <date>`); the `Month D, YYYY` form does not occur in the corpus. Hides: a wrong date in the text (e.g. a twin writing the period end instead of the proration day) and a wrong text date format of that form. The dates themselves are still compared, hour-granular, in the timestamp fields (the line's `period.start`/`period.end`).",
   },
   {
     name: "retry-day",
@@ -40,7 +45,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "per-account-opaques",
     rationale:
-      "`fingerprint` and `invoice_prefix` are per-account → `<opaque>`; invoice `number` keeps only its numeric suffix (`<number:-0002>`). Hides: fingerprints that fail to match across equal cards, wrong invoice prefixes.",
+      "`fingerprint`, `invoice_prefix` and (v1.5) `account_name` are per-account → `<opaque>`; `account_name` also when null, because it is an account setting: the unclaimed sandbox returned null and the claimed one its display name (2026-09-26 vs 2026-09-28 recordings; drift/2026-09-28.md, drift/2026-09-29.md). Invoice `number` keeps only its numeric suffix (`<number:-0002>`). Hides: fingerprints that fail to match across equal cards, wrong invoice prefixes, a wrong account name, and a null-vs-name difference in `account_name` (a twin that never fills it in).",
   },
   {
     name: "card-network-opaques",
@@ -76,6 +81,8 @@ export const RULES: { name: string; rationale: string }[] = [
 
 // Same grammar as run.ts ID, word-bounded so ids inside messages match too (`_` is a word char: `pi_…_secret_…` does not).
 const ID = /\b([a-z]+(?:_[a-z]+)*)_(?=[A-Za-z0-9]*[A-Z0-9])[A-Za-z0-9]{10,}\b/g;
+// Stripe's human-readable date in text (proration line descriptions): `29 Sep 2026`.
+const DATE = /\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b/g;
 const BANNER = "This is an unclaimed Stripe sandbox. Dashboard links in this error message will not work until the sandbox is claimed. ";
 const TS_KEYS = new Set([
   "created",
@@ -130,10 +137,11 @@ export function normalizeRecording(r: Recording): Recording {
         if (STRIPE_HOST.test(host)) return `<url:${host}>`;
       } catch {}
     }
-    return s.replaceAll(nonce, "<run>").replace(ID, (_, prefix: string) => `<id:${prefix}>`);
+    return s.replaceAll(nonce, "<run>").replace(ID, (_, prefix: string) => `<id:${prefix}>`).replace(DATE, "<date>");
   };
 
   const field = (parent: Obj, k: string, v: unknown): unknown => {
+    if (k === "account_name") return "<opaque>"; // null too: an unclaimed sandbox has no account name
     if (typeof v === "string") {
       if (k === "client_secret") return "<secret>";
       if (k === "fingerprint" || k === "invoice_prefix") return "<opaque>";
