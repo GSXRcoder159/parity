@@ -70,7 +70,9 @@ local run (the nightly pushes its spend there).
   1+222+2 GET. Stated before the LLM run: the twin's error messages are `parity: <key>` placeholders (decision 0002 §4
   rule 3), while the sandbox's say what went wrong (e.g. the requested and the refundable amounts). The agent reads them
   as tool results, so on the over-refund, refunded-charge and canceled-subscription tasks they were a candidate cause of
-  twin-vs-sandbox disagreement. The run did not show it: all 8 such tasks pass on all three runs.
+  twin-vs-sandbox disagreement. The run did not show it on those 8 tasks: they pass on all three runs. That does not
+  cover the model's own calls: in the 12-task `cancel_at_period_end` family, where all 5 disagreements are, an
+  exploratory call with a parameter the twin does not implement gets the same placeholder refusal.
 - **H4 number (80 tasks; run 2026-09-29 00:01 UTC, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs
   sandbox 93.8% (75/80; Wilson 95% CI 86.2%–97.3%) → inconclusive (90–95%)**; control (twin vs a second twin run)
   95.0% (76/80; CI 87.8%–98.0%), noise floor 5.0%. Runs: twin 75 pass / 5 fail, control 77/3, sandbox 78/2, 0 error.
@@ -79,10 +81,13 @@ local run (the nightly pushes its spend there).
   Its "Reading": all 5 disagreements are in the 12 tasks that need `cancel_at_period_end`, which the ported
   `update_subscription` schema does not offer. There the agent's own twin-vs-control agreement is 8/12; on the other
   68 tasks twin vs sandbox and twin vs control are both 68/68. Three disagreements are agent variance shown by the
-  control (the twin passes them on its control run). Two are probable agent variance that the control cannot show,
-  since the tool inputs are not logged: `cancel-all-at-period-end` (the sandbox run stopped without writing) and
-  `cancel-addon-at-period-end` (both twin runs canceled now, the sandbox run set the period end; the twin answers the
-  scripted call correctly). `switch-to-annual` is fail/fail for different reasons again; 74/79 without it.
+  control (the twin passes them on its control run). `cancel-all-at-period-end` is probable agent variance that the
+  control cannot show (both twin runs pass; the sandbox run stopped without writing). `cancel-addon-at-period-end` is
+  unattributed, and a twin gap is not excluded: both twin runs failed the same way (canceled now), the sandbox run set
+  the period end, and tool inputs are not logged. Recorded hypothesis: the agent sends `cancel_at` (not in the ported
+  schema, forwarded by the bridge), which the twin refuses with `parity: not_implemented` (`UPDATABLE` in
+  `src/twin/resources/subscriptions.ts` lacks it) and the real API accepts; a twin-only rerun with tool inputs logged
+  (about $0.05) would test it. `switch-to-annual` is fail/fail for different reasons again; 74/79 without it.
 - **20-task H4 number (2026-09-28, superseded by the 80-task one), LLM agent `claude-sonnet-5`: twin vs sandbox
   100.0% (20/20; Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
   noise floor 0.0%. Every run: 19 pass, 1 fail (`switch-to-annual`), 0 error. 250 model calls, $2.7459; the sandbox half
