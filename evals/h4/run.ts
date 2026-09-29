@@ -3,7 +3,8 @@
 // tasks.json, each run once on the twin, once more on a fresh twin (the control) and once on the sandbox by an agent that
 // uses the pinned Python agent toolkit (toolkit.py) against that target. Reports per-task pass/fail on each, the
 // twin-vs-sandbox agreement (the H4 number) with the twin-vs-control agreement as its noise floor, the model and the LLM
-// cost. The report holds task ids and outcomes only, never a response body (decision 0001 C3).
+// cost. The report holds task ids, outcomes and each tool call's name and input keys, never a value or a response body
+// (decision 0001 C3).
 // ponytail: an agent run, not a gym framework: tasks run one after another, one attempt each, no retries or best-of-3.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -51,10 +52,17 @@ export interface Task {
 export type Outcome = "pass" | "fail" | "error";
 /** control = a second, independent twin run with the same agent: twin vs control is the agent's own agreement. */
 export type Run = "twin" | "control" | "sandbox";
+/** One tool call the agent made: its name and the input's top-level keys, never a value (decision 0001 C3). */
+export interface ToolCall {
+  name: string;
+  keys: string[];
+}
 export interface TaskResult {
   outcome: Outcome;
   /** Model calls the LLM agent made (absent for the scripted agent). */
   turns?: number;
+  /** Every tool call of either agent, in order (absent for a task that never ran). */
+  tools?: ToolCall[];
   /** Why it failed or errored (stderr only: may quote values from a response). */
   why?: string;
 }
@@ -63,7 +71,7 @@ export interface H4Report {
   agent: "scripted" | "llm";
   model: string | null;
   runs: Run[];
-  tasks: { id: string; stratum: Stratum; outcomes: Record<string, Outcome>; turns?: Record<string, number> }[];
+  tasks: { id: string; stratum: Stratum; outcomes: Record<string, Outcome>; turns?: Record<string, number>; tools?: Record<string, ToolCall[]> }[];
   /** Twin vs sandbox (the H4 number): tasks with the same outcome on both, among the tasks with no error on either;
    * null without both runs or when no task was measured. */
   agreement: Wilson | null;
@@ -222,7 +230,14 @@ export function report(o: { tasks: Task[]; runs: Run[]; results: Map<string, Map
   const tasks = o.tasks.map((t) => {
     const rs = o.runs.map((run): [string, TaskResult] => [run, o.results.get(run)!.get(t.id)!]);
     const turns = rs.filter(([, x]) => x.turns !== undefined).map(([run, x]) => [run, x.turns!]);
-    return { id: t.id, stratum: t.stratum, outcomes: Object.fromEntries(rs.map(([run, x]) => [run, x.outcome])), ...(turns.length ? { turns: Object.fromEntries(turns) } : {}) };
+    const tools = rs.filter(([, x]) => x.tools !== undefined).map(([run, x]) => [run, x.tools!]);
+    return {
+      id: t.id,
+      stratum: t.stratum,
+      outcomes: Object.fromEntries(rs.map(([run, x]) => [run, x.outcome])),
+      ...(turns.length ? { turns: Object.fromEntries(turns) } : {}),
+      ...(tools.length ? { tools: Object.fromEntries(tools) } : {}),
+    };
   });
   const pair = (x: Run, y: Run): Wilson | null => {
     const m = o.runs.includes(x) && o.runs.includes(y) ? tasks.filter((t) => t.outcomes[x] !== "error" && t.outcomes[y] !== "error") : [];
@@ -305,8 +320,16 @@ export async function runH4(o: { tasks: Task[]; runs: Run[]; agent: "scripted" |
     let halted: string | undefined;
     try {
       bridge = await startBridge(target);
-      const b = bridge;
+      const raw = bridge;
       for (const task of o.tasks) {
+        const calls: ToolCall[] = [];
+        const b: Bridge = {
+          ...raw,
+          call: (name, input) => {
+            calls.push({ name, keys: input && typeof input === "object" ? Object.keys(input) : [] });
+            return raw.call(name, input);
+          },
+        };
         const act =
           o.agent === "llm"
             ? (instruction: string) => llmAgent(instruction, b, llm)
@@ -324,7 +347,7 @@ export async function runH4(o: { tasks: Task[]; runs: Run[]; agent: "scripted" |
           res = { outcome: "error", why: (e as Error).message };
           if (e instanceof CapRefused || e instanceof BridgeDied) stopped = res.why;
         }
-        out.set(task.id, res);
+        out.set(task.id, { ...res, tools: calls });
         log(`h4: ${run}: ${task.id}: ${res.outcome}${res.turns === undefined ? "" : ` (${res.turns} turns)`}${res.why ? `: ${res.why}` : ""}`);
         if (stopped) break;
       }

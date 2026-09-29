@@ -20,8 +20,9 @@ plan §6.4, for use when no partner suite exists. It is an agent run, not a gym 
   - Invoice retrieve is exercised by the checks (`GET /v1/invoices/:id`); the agent finds invoices with `list_invoices`.
   - The `preview-*` tasks make the instruction's choice depend on the prorated amount. No tool previews it, so the agent
     works it out from the prices; the checks' `POST /v1/invoices/create_preview` reads the result.
-  - `cancel_at_period_end` is not in the ported `update_subscription` schema. The bridge forwards extra properties to
-    `Subscription.modify`, so the scripted solutions pass it; whether the model does is part of its outcome.
+  - `cancel_at_period_end` was not in the v1 `update_subscription` schema, so the model had to add it unprompted (the
+    bridge forwards extra properties to `Subscription.modify`, which is how the scripted solutions pass it). v2 offers
+    it, with `billing_cycle_anchor` (Status). The bridge still forwards any other property, e.g. `cancel_at`.
 - `toolkit.py` is the agent's tools. It runs the pinned Python `stripe-agent-toolkit==0.6.1` with `stripe.api_base`
   set to the target (W0 verifications §10), as a JSON-lines server under `uv run --script`.
 - `run.ts` is the runner. It runs every task on the twin, on a second fresh twin (the control) and on the sandbox,
@@ -51,6 +52,9 @@ node evals/h4/run.ts --runs twin --agent llm --cap-usd 10  # needs ANTHROPIC_API
 node evals/h4/run.ts --runs twin,control --agent llm       # the agent's own agreement, no sandbox
 node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
                                                            # the H4 number: twin, control, sandbox (after B1)
+node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2
+                                                           # queued: H4 v2 (Status), on a UTC day after the
+                                                           # nightly's assisted pass
 ```
 
 A full run (twin, control, sandbox) is up to 240 × 12 = 2,880 model calls, half again the 1,920 of twin + sandbox alone.
@@ -61,6 +65,23 @@ local run (the nightly pushes its spend there).
 
 ## Status (2026-09-29)
 
+- **H4 v2 (prepared 2026-09-29, not run): `update_subscription` offers `cancel_at_period_end` and
+  `billing_cycle_anchor`, and the report logs every tool call's name and input keys.** This is motivated by the v1
+  80-task result below: all 5 twin-vs-sandbox and all 4 twin-vs-control disagreements are in the 12 tasks that need
+  `cancel_at_period_end`, which the v1 tool did not offer, so the agent improvised. `billing_cycle_anchor` lets it ask
+  for a new billing period to start now, which `switch-to-annual` asks for ("starting now"). The descriptions are ours
+  and say what each value does, not when to use it.
+  - The change is agent-side only. The same `toolkit.py` serves the twin, the control and the sandbox, and no twin code
+    changed. It was made after seeing v1, so v2 measures a changed agent; it does not re-score v1. v1's numbers (the
+    80-task and the 20-task ones below) stay published next to v2's.
+  - The twin implements an interval swap only with `billing_cycle_anchor=now` (the `switch-to-annual` gap below). An
+    agent that sends it passes that task on the twin (checked with a scripted call on 2026-09-29); what the sandbox does
+    with it is unobserved. The scripted solution sends no anchor, so `TWIN_GAPS` still pins the gap.
+  - Scripted agent with the v2 tools: 79/80 on the twin and 79/80 on the control (`switch-to-annual` fails, as before).
+  - The tool log is `tools` per task and run in the report's `.json`: names and top-level input keys in call order,
+    never a value (decision 0001 C3). Attribution reads it instead of guessing.
+  - Queued, no LLM spend before then: `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2`, to be
+    run on a UTC day after the nightly's assisted pass.
 - **Suite expansion to 80 tasks (2026-09-28), because the 20-task CI's lower bound (83.9%) is below the 90% stop line.**
   The 60 new tasks were written before any twin or sandbox result for them (tasks.json sha256 `0d7720d0…` before the
   first run). Scripted agent on the sandbox, the ground truth: 59/60 pass. The one failure was a wrong setup:
@@ -84,10 +105,10 @@ local run (the nightly pushes its spend there).
   control (the twin passes them on its control run). `cancel-all-at-period-end` is probable agent variance that the
   control cannot show (both twin runs pass; the sandbox run stopped without writing). `cancel-addon-at-period-end` is
   unattributed, and a twin gap is not excluded: both twin runs failed the same way (canceled now), the sandbox run set
-  the period end, and tool inputs are not logged. Recorded hypothesis: the agent sends `cancel_at` (not in the ported
-  schema, forwarded by the bridge), which the twin refuses with `parity: not_implemented` (`UPDATABLE` in
-  `src/twin/resources/subscriptions.ts` lacks it) and the real API accepts; a twin-only rerun with tool inputs logged
-  (about $0.05) would test it. `switch-to-annual` is fail/fail for different reasons again; 74/79 without it.
+  the period end, and tool inputs are not logged (v1; v2 logs their keys). Recorded hypothesis: the agent sends
+  `cancel_at` (not in the ported schema, forwarded by the bridge), which the twin refuses with
+  `parity: not_implemented` (`UPDATABLE` in `src/twin/resources/subscriptions.ts` lacks it) and the real API accepts;
+  a twin-only rerun with tool inputs logged (about $0.05) would test it. `switch-to-annual` is fail/fail for different reasons again; 74/79 without it.
 - **20-task H4 number (2026-09-28, superseded by the 80-task one), LLM agent `claude-sonnet-5`: twin vs sandbox
   100.0% (20/20; Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
   noise floor 0.0%. Every run: 19 pass, 1 fail (`switch-to-annual`), 0 error. 250 model calls, $2.7459; the sandbox half
@@ -131,8 +152,9 @@ local run (the nightly pushes its spend there).
   - `--cap-usd` for this run (default $10).
 - **Tools.** 0.6.1 has no subscription tools. `list_subscriptions`, `cancel_subscription` and `update_subscription` are
   therefore ported into `toolkit.py` from `@stripe/agent-toolkit` 0.7.12, keeping their names, descriptions and
-  parameters. The 0.6.1 tools on offer are customers, products, prices and invoices (read), payment intents (read) and
-  refunds (create).
+  parameters; v2 adds `cancel_at_period_end` and `billing_cycle_anchor` to `update_subscription`, with our own
+  descriptions (Status). The 0.6.1 tools on offer are customers, products, prices and invoices (read), payment
+  intents (read) and refunds (create).
   - A failed call goes back to the model as an `is_error` result. (0.7.12's own subscription tools return a bare
     "Failed to …" string instead.)
 - **Pins.** 0.6.1 declares no dependencies, so `stripe==11.6.0` (the release current when 0.6.1 shipped) is pinned in the
@@ -146,8 +168,9 @@ local run (the nightly pushes its spend there).
   - it holds 20 req/s;
   - it ledgers every request of the setup, the tools and the checks;
   - it halts the run at the budget or after 10 consecutive 429s, and a halted run produces no report.
-- **What gets written.** The report (`--out`, `.md` and `.json`) holds task ids and outcomes only (decision 0001 C3). The
-  stderr log explains each failure and may quote response values, so never commit it from a sandbox run.
+- **What gets written.** The report (`--out`, `.md` and `.json`) holds task ids, outcomes and (`.json`) each tool
+  call's name and input keys, never a value or a response body (decision 0001 C3). The stderr log explains each
+  failure and may quote response values, so never commit it from a sandbox run.
 - **For counsel (B5).** During a sandbox run, response bodies reach the model provider as tool results.
 
 ## Credits

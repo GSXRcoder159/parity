@@ -54,6 +54,14 @@ test("scripted agent on the twin: every task passes but the twin's known gaps (h
   assert.equal(r.model, null);
   assert.equal(r.costUsd, 0);
   assert.match(h4Text(r), /twin: 79 pass, 1 fail, 0 error/);
+  // The tool log: each call's name and input keys, in order; no value reaches the report.
+  const tools = (id: string) => r.tasks.find((t) => t.id === id)!.tools!.twin;
+  assert.deepEqual(tools("cancel-at-period-end"), [{ name: "update_subscription", keys: ["subscription", "cancel_at_period_end"] }]);
+  assert.deepEqual(tools("cancel-at-period-end-and-credit"), [
+    { name: "update_subscription", keys: ["subscription", "cancel_at_period_end"] },
+    { name: "create_refund", keys: ["payment_intent", "amount"] },
+  ]);
+  assert.doesNotMatch(JSON.stringify(r), /sub_|pi_|@example\.com|true/);
 });
 
 test("an agent that does nothing fails every task: no predicate holds on the setup state alone", async () => {
@@ -91,7 +99,14 @@ test("llm agent: the tool-use loop runs the model's calls through the toolkit, f
   const restore = withEnv({ ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: fake.url, PARITY_LLM_MODEL: undefined, PARITY_LLM_CAP_USD: undefined });
   try {
     const r = await runH4({ tasks: [task("refund-full")], runs: ["twin"], agent: "llm", ledger, log: quiet });
-    assert.deepEqual(r.tasks[0], { id: "refund-full", stratum: "refunds", outcomes: { twin: "pass" }, turns: { twin: 4 } });
+    // The tool log holds names and input keys only: the email, the ids and amount's null are not in the report.
+    const log = [
+      { name: "list_customers", keys: ["email"] },
+      { name: "list_payment_intents", keys: ["customer"] },
+      { name: "create_refund", keys: ["payment_intent", "amount"] },
+    ];
+    assert.deepEqual(r.tasks[0], { id: "refund-full", stratum: "refunds", outcomes: { twin: "pass" }, turns: { twin: 4 }, tools: { twin: log } });
+    assert.doesNotMatch(JSON.stringify(r.tasks), /cus_|pi_|@example\.com|null/);
     assert.equal(r.model, "claude-sonnet-5");
     assert.equal(fake.calls.length, 4);
     const first = fake.calls[0]!;
@@ -102,6 +117,11 @@ test("llm agent: the tool-use loop runs the model's calls through the toolkit, f
     assert.deepEqual(first.body.tools.map((t: { name: string }) => t.name).sort(), [
       "cancel_subscription", "create_refund", "list_customers", "list_invoices", "list_payment_intents", "list_prices", "list_products", "list_subscriptions", "update_subscription",
     ]);
+    // H4 v2: update_subscription offers cancel_at_period_end and billing_cycle_anchor, in its schema and its description.
+    const update = first.body.tools.find((t: { name: string }) => t.name === "update_subscription");
+    assert.equal(update.input_schema.properties.cancel_at_period_end.type, "boolean");
+    assert.deepEqual(update.input_schema.properties.billing_cycle_anchor.enum, ["now", "unchanged"]);
+    assert.match(update.description, /- cancel_at_period_end \(bool, optional\):[\s\S]*- billing_cycle_anchor \(str, optional\): 'now'/);
     // The toolkit's own create_refund result serializes (it json.dumps the API object): no is_error.
     assert.equal(lastResult(fake.calls[3]!.body).is_error, undefined);
     assert.equal(JSON.parse(lastResult(fake.calls[3]!.body).content).amount, 2000);

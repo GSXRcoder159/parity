@@ -10,7 +10,8 @@ stdout line 1: {"tools": [{name, description, input_schema}]}; then one reply pe
 
 0.6.1 has no subscription tools, so list_subscriptions, cancel_subscription and update_subscription are ported here
 from @stripe/agent-toolkit 0.7.12 (MIT, Copyright (c) 2024 Stripe; notice in LICENSE-agent-toolkit): same names,
-descriptions and parameters.
+descriptions and parameters, except that H4 v2 adds cancel_at_period_end and billing_cycle_anchor to update_subscription
+(our descriptions; the v1 runs had neither, see README.md).
 
 0.6.1 declares no dependencies. stripe==11.6.0 is the stripe-python release current when 0.6.1 shipped (2025-03-24);
 the toolkit json.dumps API objects, which works only while StripeObject is a dict (11.x yes, 15.x no).
@@ -121,6 +122,8 @@ It takes the following arguments:
     - price (str, optional): The ID of the price to switch to.
     - quantity (int, optional): The quantity of the plan to subscribe to.
     - deleted (bool, optional): Whether to delete this item.
+  - cancel_at_period_end (bool, optional): true cancels the subscription at the end of its current billing period (it stays active until then); false keeps it going past the period end.
+  - billing_cycle_anchor (str, optional): 'now' resets the billing cycle anchor to the current time, so a new billing period starts now; 'unchanged' keeps it.
   """,
         "input_schema": {
             "type": "object",
@@ -132,6 +135,15 @@ It takes the following arguments:
                     "description": "Determines how to handle prorations when the subscription items change.",
                 },
                 "items": {"type": "array", "items": ITEM, "description": "A list of subscription items to update, add, or remove."},
+                "cancel_at_period_end": {
+                    "type": "boolean",
+                    "description": "true cancels the subscription at the end of its current billing period; false keeps it going past the period end.",
+                },
+                "billing_cycle_anchor": {
+                    "type": "string",
+                    "enum": ["now", "unchanged"],
+                    "description": "'now' resets the billing cycle anchor to the current time (a new billing period starts now); 'unchanged' keeps it.",
+                },
             },
             "required": ["subscription"],
         },
