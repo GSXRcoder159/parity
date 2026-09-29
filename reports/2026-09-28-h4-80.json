@@ -1,0 +1,1148 @@
+{
+  "date": "2026-09-29",
+  "agent": "llm",
+  "model": "claude-sonnet-5",
+  "runs": [
+    "twin",
+    "control",
+    "sandbox"
+  ],
+  "tasks": [
+    {
+      "id": "refund-full",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-partial",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-two-credits",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-rest",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-capped",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-addon-only",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-now",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-addon-only",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-all",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-and-refund",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-and-refund-half",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-addon-and-refund",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "upgrade-bill-now",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "upgrade-next-invoice",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "upgrade-no-proration",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-up-bill-now",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-down-no-proration",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "downgrade-credit-next-invoice",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "add-addon-bill-now",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "switch-to-annual",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "fail",
+        "control": "fail",
+        "sandbox": "fail"
+      },
+      "turns": {
+        "twin": 6,
+        "control": 8,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-full-seats",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-one-seat",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-half-seats",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-over-seats",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-addon-partial",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-both-full",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-over-remaining",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-over-addon",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-over-and-cancel",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-refunded-and-cancel",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-refunded-addon",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 5,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-rest-after-two",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-upgrade-charge",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "refund-upgrade-charge-partial",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-at-period-end",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "fail",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 3,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-addon-at-period-end",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "fail",
+        "control": "fail",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 4,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "cancel-all-at-period-end",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "fail"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 3
+      }
+    },
+    {
+      "id": "cancel-pro-now-addon-later",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 6,
+        "sandbox": 6
+      }
+    },
+    {
+      "id": "reactivate",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "reactivate-addon-only",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "fail",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "reactivate-and-upgrade",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "fail",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "reactivate-and-add-seats",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-now-instead",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-all-one-canceled",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-now-refund-rest",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "cancel-at-period-end-and-credit",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "fail",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 6,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "downgrade-bill-now",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "downgrade-no-proration",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-up-next-invoice",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-up-no-proration",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-down-credit-next-invoice",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "seats-down-bill-now",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "remove-addon-item",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "remove-addon-item-credit",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "preview-upgrade-within-limit",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "preview-upgrade-over-limit",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "preview-seats-within-limit",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "preview-downgrade-credit",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 5,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "swap-addon-up",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "upgrade-with-seats",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "addon-seats-no-proration",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "add-addon-next-invoice",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "invoice-refund-first",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "invoice-open-cancel",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "invoice-open-at-period-end",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "invoice-refund-paid",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "invoice-close-account",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "invoice-largest-refund",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "invoice-addon-extra-seats",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "invoice-seats-charge-refund",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 5,
+        "control": 5,
+        "sandbox": 5
+      }
+    },
+    {
+      "id": "lookup-refund",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-refund-other",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-cancel",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-cancel-other-at-period-end",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-reactivate-other",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-upgrade",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-seats-other",
+      "stratum": "proration",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-three",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-email-changed",
+      "stratum": "cancellation",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    },
+    {
+      "id": "lookup-deleted-duplicate",
+      "stratum": "refunds",
+      "outcomes": {
+        "twin": "pass",
+        "control": "pass",
+        "sandbox": "pass"
+      },
+      "turns": {
+        "twin": 4,
+        "control": 4,
+        "sandbox": 4
+      }
+    }
+  ],
+  "agreement": {
+    "p": 0.9375,
+    "lo": 0.8618967084664824,
+    "hi": 0.9730110223020145,
+    "k": 75,
+    "n": 80
+  },
+  "control": {
+    "p": 0.95,
+    "lo": 0.878375474489178,
+    "hi": 0.9803867628727044,
+    "k": 76,
+    "n": 80
+  },
+  "verdict": "inconclusive (90-95%)",
+  "costUsd": 12.309376000000023
+}

@@ -59,7 +59,7 @@ lower) may well stop it; the result is then a partial report with no verdict. Th
 `<data dir>/budget/llm.jsonl`: it is shared with the nightly's assisted pass only if you pull the data repo before a
 local run (the nightly pushes its spend there).
 
-## Status (2026-09-28)
+## Status (2026-09-29)
 
 - **Suite expansion to 80 tasks (2026-09-28), because the 20-task CI's lower bound (83.9%) is below the 90% stop line.**
   The 60 new tasks were written before any twin or sandbox result for them (tasks.json sha256 `0d7720d0…` before the
@@ -67,13 +67,24 @@ local run (the nightly pushes its spend there).
   `remove-addon-item-credit` removed an add-on that had been added without proration, so it was never invoiced, and the
   real API makes no proration credit for it. The setup now adds the add-on with `always_invoice` and the instruction says
   it was paid for today; then 60/60. Scripted agent on the twin: 60/60, so no new `TWIN_GAPS`. The sandbox passes made
-  1+222+2 GET. **The 80-task LLM run is scheduled after 00:00 UTC 2026-09-29** (today's $15 cap has $12.03 left, less
-  than the run may cost). Until then the H4 number below is the 20-task one. Stated before that run: the twin's error
-  messages are `parity: <key>` placeholders (decision 0002 §4 rule 3), while the sandbox's say what went wrong (e.g. the
-  requested and the refundable amounts). The agent reads them as tool results, so on the over-refund, refunded-charge and
-  canceled-subscription tasks they are a candidate cause of twin-vs-sandbox disagreement.
-- **H4 number (2026-09-28, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs sandbox 100.0% (20/20;
-  Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
+  1+222+2 GET. Stated before the LLM run: the twin's error messages are `parity: <key>` placeholders (decision 0002 §4
+  rule 3), while the sandbox's say what went wrong (e.g. the requested and the refundable amounts). The agent reads them
+  as tool results, so on the over-refund, refunded-charge and canceled-subscription tasks they were a candidate cause of
+  twin-vs-sandbox disagreement. The run did not show it: all 8 such tasks pass on all three runs.
+- **H4 number (80 tasks; run 2026-09-29 00:01 UTC, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs
+  sandbox 93.8% (75/80; Wilson 95% CI 86.2%–97.3%) → inconclusive (90–95%)**; control (twin vs a second twin run)
+  95.0% (76/80; CI 87.8%–98.0%), noise floor 5.0%. Runs: twin 75 pass / 5 fail, control 77/3, sandbox 78/2, 0 error.
+  1,002 model calls, $12.3094 (run after 00:00 UTC for the daily cap); the sandbox half made 1+474 GET, 534 POST,
+  21 DELETE. Report: `reports/2026-09-28-h4-80.md` (+ `.json`; the name is the brief's, the run's date is 2026-09-29).
+  Its "Reading": all 5 disagreements are in the 12 tasks that need `cancel_at_period_end`, which the ported
+  `update_subscription` schema does not offer. There the agent's own twin-vs-control agreement is 8/12; on the other
+  68 tasks twin vs sandbox and twin vs control are both 68/68. Three disagreements are agent variance shown by the
+  control (the twin passes them on its control run). Two are probable agent variance that the control cannot show,
+  since the tool inputs are not logged: `cancel-all-at-period-end` (the sandbox run stopped without writing) and
+  `cancel-addon-at-period-end` (both twin runs canceled now, the sandbox run set the period end; the twin answers the
+  scripted call correctly). `switch-to-annual` is fail/fail for different reasons again; 74/79 without it.
+- **20-task H4 number (2026-09-28, superseded by the 80-task one), LLM agent `claude-sonnet-5`: twin vs sandbox
+  100.0% (20/20; Wilson 95% CI 83.9%–100.0%) → confirm (≥95%)**; control (twin vs a second twin run) 100.0% (20/20; CI 83.9%–100.0%),
   noise floor 0.0%. Every run: 19 pass, 1 fail (`switch-to-annual`), 0 error. 250 model calls, $2.7459; the sandbox half
   made 112 GET, 117 POST, 7 DELETE through the metered proxy. Report: `reports/2026-09-28-h4.md` (+ `.json`). Two caveats
   (the report's "Reading"): the CI's lower bound is below the 90% stop line, so 20 tasks meet ≥95% on the point estimate
@@ -91,7 +102,9 @@ local run (the nightly pushes its spend there).
   monthly → annual swap on the claimed sandbox, then implement what it shows). `test/h4.test.ts` pins the failure in
   `TWIN_GAPS`; the fix removes it from there.
 - **Booleans: fixed.** stripe-python 11.6 sends Python booleans as `True`/`False` (e.g. `items[0][deleted]=True`). W4
-  Task 3 made the twin accept them (`src/twin/validate.ts`); the real API's acceptance is unverified until B1.
+  Task 3 made the twin accept them (`src/twin/validate.ts`). The real API accepts them too: the 2026-09-28 scripted
+  sandbox pass sent `cancel_at_period_end=True` and `items[0][deleted]=True` through the toolkit, and the checks saw
+  both take effect.
 
 ## The agent
 
