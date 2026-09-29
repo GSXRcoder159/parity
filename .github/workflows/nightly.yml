@@ -1,7 +1,10 @@
 name: nightly
 on:
   schedule:
-    - cron: "0 7 * * *" # 07:00 UTC
+    # GitHub's schedule is best-effort and the top of the hour is congested: on 2026-09-29 "0 7 * * *" never fired.
+    # Two attempts off the hour; a scheduled run passes --once-per-day, so the backup does nothing once a night is published.
+    - cron: "23 7 * * *" # 07:23 UTC
+    - cron: "47 10 * * *" # 10:47 UTC, the backup
   workflow_dispatch:
 permissions:
   contents: write # align --apply commits and the public-safe files are pushed; align --assist pushes branches
@@ -64,4 +67,4 @@ jobs:
           export GIT_CONFIG_KEY_1="http.https://github.com/GSXRcoder159/parity-data.extraheader"
           export GIT_CONFIG_VALUE_1="$(auth "$PARITY_DATA_TOKEN")"
           unset PARITY_TOKEN PARITY_DATA_TOKEN
-          node src/cli.ts nightly
+          node src/cli.ts nightly ${{ github.event_name == 'schedule' && '--once-per-day' || '' }}
