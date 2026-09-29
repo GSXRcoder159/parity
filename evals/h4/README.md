@@ -53,15 +53,19 @@ node evals/h4/run.ts --runs twin,control --agent llm       # the agent's own agr
 node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
                                                            # the H4 number: twin, control, sandbox (after B1)
 node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2
-                                                           # queued: H4 v2 (Status), on a UTC day after the
-                                                           # nightly's assisted pass
+                                                           # queued: H4 v2 (Status), only once that UTC
+                                                           # day's nightly publish entry exists
 ```
 
 A full run (twin, control, sandbox) is up to 240 × 12 = 2,880 model calls, half again the 1,920 of twin + sandbox alone.
 The per-run default of $10 may not cover it, and the daily cap ($15 per UTC day, which `PARITY_LLM_CAP_USD` can only
 lower) may well stop it; the result is then a partial report with no verdict. The cap counts the spend in one ledger,
 `<data dir>/budget/llm.jsonl`: it is shared with the nightly's assisted pass only if you pull the data repo before a
-local run (the nightly pushes its spend there).
+local run (the nightly pushes its spend there). Every purpose counts against the one daily cap, so an H4 run before that
+UTC day's nightly starves the nightly's assisted pass: on 2026-09-29 H4 had spent $12.31, and the nightly's pass (cap $3)
+was refused before its first call. Run H4 only once the day's nightly is published: after pulling the data repo,
+`grep -c '"kind":"publish","data":{"label":"nightly","date":"<UTC date>"' <data dir>/align/log.jsonl` prints 1. The
+schedule (07:23 UTC, backup 10:47 UTC) is not a guarantee: GitHub can start scheduled runs late.
 
 ## Status (2026-09-29)
 
@@ -81,7 +85,7 @@ local run (the nightly pushes its spend there).
   - The tool log is `tools` per task and run in the report's `.json`: names and top-level input keys in call order,
     never a value (decision 0001 C3). Attribution reads it instead of guessing.
   - Queued, no LLM spend before then: `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2`, to be
-    run on a UTC day after the nightly's assisted pass.
+    run only once that UTC day's nightly publish entry exists (the ledger paragraph above).
 - **Suite expansion to 80 tasks (2026-09-28), because the 20-task CI's lower bound (83.9%) is below the 90% stop line.**
   The 60 new tasks were written before any twin or sandbox result for them (tasks.json sha256 `0d7720d0…` before the
   first run). Scripted agent on the sandbox, the ground truth: 59/60 pass. The one failure was a wrong setup:

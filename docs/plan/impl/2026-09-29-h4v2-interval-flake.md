@@ -4,7 +4,7 @@ Spec: `docs/plan/2026-09-25-parity-mvp-plan.md` §1 H4, §2.1, §3.3. Binding: d
 
 ## Global Constraints
 
-- **No LLM spend in this plan.** Today's (2026-09-29 UTC) ledger already holds $12.31. The H4 v2 LLM run is queued for 2026-09-30, after the 07:00 UTC nightly.
+- **No LLM spend in this plan.** Today's (2026-09-29 UTC) ledger already holds $12.31. The H4 v2 LLM run is queued for 2026-09-30, and only after that day's nightly `publish` entry exists in the sealed log: pull `../parity-data`, then `grep -c '"kind":"publish","data":{"label":"nightly","date":"2026-09-30"' ../parity-data/align/log.jsonl` must print 1. Not by the clock: the schedule is 07:23 UTC with a 10:47 UTC backup, GitHub can start either late, and the run takes about 13 minutes. The LLM ledger (`budget/llm.jsonl`) and its daily cap are shared by every purpose, so H4 spend before the nightly starves that day's assisted pass, as H4 did on 2026-09-29 (no B7 PR that day).
 - Sandbox reads: pull `../parity-data` first, project, and stop if rolling30 would pass 8,000.
 - Engineering rules and commits as in earlier plans. Stage only your paths. Pull with rebase and push after each task, keeping CI green. Never merge, approve or close PRs.
 - Held-out templates #7, #9, #12, #18, #21 and #28: never open their recordings.
@@ -17,7 +17,7 @@ Spec: `docs/plan/2026-09-25-parity-mvp-plan.md` §1 H4, §2.1, §3.3. Binding: d
 - **v2 change:** expose `cancel_at_period_end` on `update_subscription` (and `billing_cycle_anchor`, which the interval swap needs), with honest descriptions. Log each tool call's name and input keys (not values) per task in the run's output. That makes attribution checkable without guesses.
 - **Honesty:** the change is agent-side and identical for the twin, the control and the sandbox. It is motivated by the v1 result, and the README says so. v1's numbers stay published next to v2's.
 - Validate with the scripted agent on the twin: all tasks except the known `switch-to-annual` gap. Add a test that the tool schema carries both parameters and that the tool log records keys only.
-- Add the queued command to the README: `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2`, to be run on a UTC day after the nightly's assisted pass.
+- Add the queued command to the README: `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2`, to be run only once that UTC day's nightly `publish` entry exists (Global Constraints).
 
 ## Task 2: Interval swap without an anchor, recorded on the sandbox
 
