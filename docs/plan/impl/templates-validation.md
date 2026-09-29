@@ -429,3 +429,17 @@ Target: the claimed sandbox (`sk_test_` key after B1), API version `2026-08-26.d
    - `none`: `customer.subscription.updated` only (17 or 18).
    - `always_invoice`: `customer.subscription.updated`, `invoiceitem.created` ×2, `invoice.created`, `invoice.finalized`, `invoice.paid` and `invoice.payment_succeeded`. Upgrades add `payment_intent.created`, `payment_intent.succeeded` and `charge.succeeded` (26 or 27). The two downgrades add a `customer.updated` for the balance instead (24; both are 8-step seeds).
 7. **Twin: refused, and left refused** (not changed by hand; brief). The twin answers the update 400 `invalid_request_error` with `parity: not_implemented` in all 20 oracle sequences, and the later steps see the monthly subscription. `score-twin` on #31 alone, on the 2026-09-29 oracle (normalization v1.4, method m2): L1 88.1% (148 of 168 steps; the 20 misses are the update step), L2 and L3 40.5%, L4 0 of 20. This is now a scored train divergence for the assisted pass. The twin's `change()` doc comment says a price on another billing period is accepted only with `billing_cycle_anchor=now`; the sandbox accepts it without one (facts 1–3).
+
+### Held-out exposure during H4 v2 Task 2 (2026-09-29)
+
+The rule: this plan's Global Constraint says "never open their recordings" for #7, #9, #12, #18, #21 and #28. The precedents above say more: the W4 rule is "never read their rows in `templates-validation.md` while implementing", and the #28 rule is that its recordings and rows are not opened. Which rule binds here is for the orchestrator's ruling.
+
+- **Task 2 (implementer):** while orienting, the implementer read this file's lines 1–40 and 129–395. That printed these held-out rows:
+  - #7, #9 and #12: their intended steps (the #1–#15 table).
+  - #18 and #21: their intended steps, and their result rows for seeds 1–2 (step statuses and event-type lists).
+  - #28: its intended steps with "every step 200", its results row ("200 ×10 | not read") and its twin dry-run row.
+  - The two exposure sections above, which cite #28's step count (10) and event count (25 per seed).
+- **Not read:** no held-out recording was opened. Every script over `oracle.jsonl` or the runs filtered on a train template name (`subscription-update-price`, `subscription-interval-swap`). `score-twin` ran with `--templates subscription-interval-swap` only.
+- **Fix round 1 (2026-09-29):** a `grep -n '^#'` for this file's section headers also matched line 142, a prose line saying #16–#18, #22 and #26 start with `subscribed()`. So it showed that #18 starts with the prefix, which the rows above had already printed. The only range read was lines 366 to the end: the two exposure sections above and the #31 section. No other held-out text was printed.
+- What suggests nothing was tuned from it (circumstantial only): `src/` has no diff between the task's BASE `23d32b9` and `afd834c` (`git diff --stat 23d32b9..afd834c -- src/` is empty), so no twin code changed. The 30 existing templates build the same corpus, seeds 1–20 (sha256 checked, `416ec3d48c1f251f…`), so the held-out sequences are unchanged.
+- Records: this section and the Task 2 report. The ruling and the sealed-log `note` are the orchestrator's (decision 0002 §4.5 precedent), not this task's.
