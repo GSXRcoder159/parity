@@ -15,10 +15,10 @@ import {
   productPriceCrud,
   subscriptionCreate,
 } from "./lifecycle.ts";
-import { invoicePreviewProration, subscriptionUpdatePrice, subscriptionUpdateQuantity } from "./proration.ts";
+import { invoicePreviewProration, subscriptionIntervalSwap, subscriptionUpdatePrice, subscriptionUpdateQuantity } from "./proration.ts";
 import { refundFull, refundOverAndNegative, refundPartialThenRest } from "./refunds.ts";
 
-/** Catalog order (#1–#30). */
+/** Catalog order (#1–#31). New templates go last: nightly slices index the corpus in this order. */
 export const TEMPLATES: Template[] = [
   customerCrud,
   customerListPagination,
@@ -50,4 +50,5 @@ export const TEMPLATES: Template[] = [
   clockTrialEnd,
   clockCancelAtPeriodEnd,
   clockDeclinedRenewal,
+  subscriptionIntervalSwap,
 ];

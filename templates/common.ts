@@ -25,7 +25,7 @@ export const attach = (card: string, ref = "pm1"): Step => ({
 export function subscribed(
   g: Gen,
   template: string,
-  opts: { card?: string; paymentBehavior?: string } = {},
+  opts: { card?: string; paymentBehavior?: string; interval?: string } = {},
 ): { steps: Step[]; amount: number } {
   const n = tag(g);
   const card = opts.card ?? g.pick(["pm_card_visa", "pm_card_mastercard"]);
@@ -44,7 +44,7 @@ export function subscribed(
       params: {
         currency: cur,
         unit_amount: amt,
-        recurring: { interval: g.pick(["month", "year"]) },
+        recurring: { interval: opts.interval ?? g.pick(["month", "year"]) },
         product_data: { name: `Parity plan ${n}` },
       },
     },

@@ -199,7 +199,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.deepEqual(r.noisePair, { seqs: TEMPLATES.length * 2, recorded: false });
     assert.equal(r.oracleRefreshed, false);
     assert.equal(r.oracle.oracleSeqs, 6);
-    assert.match(text, /^slice 0\+86\/600: 86 sequences · NOT RECORDED: refusing to run/m);
+    assert.ok(text.includes(`\nslice 0+${Math.ceil(corpus / 7)}/${corpus}: ${Math.ceil(corpus / 7)} sequences · NOT RECORDED: refusing to run`), text);
     assert.equal(existsSync(join(data, "budget/rotation.json")), false, "a refused slice leaves the cursor where it was");
     assert.match(text, /NOT refreshed tonight \(curve point oracleRefreshed: false\)/);
 
@@ -210,7 +210,7 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     const at = (kind: string, key: string) => mine.filter((e) => e.kind === kind && key in e.data).map((e) => e.data[key]);
     assert.deepEqual(
       at("note", "nightly").map((n) => ({ ...(n as object), error: "…" })),
-      [{ date: "2026-10-04", step: "record slice 0+86/600", error: "…", oracleRefreshed: false }],
+      [{ date: "2026-10-04", step: `record slice 0+${Math.ceil(corpus / 7)}/${corpus}`, error: "…", oracleRefreshed: false }],
     );
     const scored = mine.filter((e) => e.kind === "score");
     assert.equal(scored.length, 1);
@@ -498,52 +498,53 @@ test("nightly sizes tonight's slice to the read budget and keeps the rotation cu
     const notes = (r: { runId: string }) => readJsonl<LogEntry>(logPath(data)).filter((e) => e.runId === r.runId && e.kind === "note" && "nightly" in e.data).map((e) => e.data.nightly as { step: string; error: string });
     const night = (day: string) => nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date(`${day}T07:00:00Z`), sandbox });
 
-    // Saturday: no cursor yet, so the window starts at slice 6/7 (rotation 515). The share is exactly the first two
-    // sequences' projection, which the third one's GETs would exceed: two are recorded, and the cursor moves to 517.
-    const start = rotation.indexOf(corpus[6]!);
-    assert.equal(start, 515);
-    assert.ok(projectedGets(rotation.slice(515, 518)) > projectedGets(rotation.slice(515, 517)), "the third sequence has a GET");
-    spend(leaving(rotation.slice(515, 517)), "2026-10-09");
+    // Saturday: no cursor yet, so the window starts at slice 6/7 (rotation position `at`). The share is exactly the first
+    // two sequences' projection, which the third one's GETs would exceed: two are recorded, and the cursor moves to at + 2.
+    const size = rotation.length;
+    const at = rotation.indexOf(corpus[6]!);
+    assert.equal(at, size - corpus.filter((_, i) => i % 7 === 6).length);
+    assert.ok(projectedGets(rotation.slice(at, at + 3)) > projectedGets(rotation.slice(at, at + 2)), "the third sequence has a GET");
+    spend(leaving(rotation.slice(at, at + 2)), "2026-10-09");
     const sat = await night("2026-10-10");
-    assert.deepEqual(sat.slice, { spec: "515+2/600", seqs: 2, recorded: 2, allowance: projectedGets(rotation.slice(515, 517)), budget: sat.slice.budget });
-    assert.match(sat.slice.budget, new RegExp(`^allowance ${sat.slice.allowance} GETs = min\\(\\d+ projected for one seventh of the corpus, floor\\(\\(10000 − 1500 reserve − ${leaving(rotation.slice(515, 517))} GETs in 30 days\\) / 7\\) = ${sat.slice.allowance}\\); `));
-    assert.deepEqual(recorded("2026-10-10"), rotation.slice(515, 517).map((x) => x.id));
-    assert.deepEqual(cursor(), { cursor: 517 }, "the cursor is pushed to the data repo");
+    assert.deepEqual(sat.slice, { spec: `${at}+2/${size}`, seqs: 2, recorded: 2, allowance: projectedGets(rotation.slice(at, at + 2)), budget: sat.slice.budget });
+    assert.match(sat.slice.budget, new RegExp(`^allowance ${sat.slice.allowance} GETs = min\\(\\d+ projected for one seventh of the corpus, floor\\(\\(10000 − 1500 reserve − ${leaving(rotation.slice(at, at + 2))} GETs in 30 days\\) / 7\\) = ${sat.slice.allowance}\\); `));
+    assert.deepEqual(recorded("2026-10-10"), rotation.slice(at, at + 2).map((x) => x.id));
+    assert.deepEqual(cursor(), { cursor: at + 2 }, "the cursor is pushed to the data repo");
     assert.equal(sat.noisePair, undefined, "last Sunday's pair is recorded: none due");
     assert.equal(sat.oracleRefreshed, true);
     assert.deepEqual(notes(sat), []);
 
-    // Sunday: the next night goes on at 517, not at slice 0/7. The pair is due, but the 30-day budget has less left after
+    // Sunday: the next night goes on at position at + 2, not at slice 0/7. The pair is due, but the 30-day budget has less left after
     // the slice than the pair projects: it is deferred, and noted.
-    spend(leaving(rotation.slice(517, 518)), "2026-10-10");
+    spend(leaving(rotation.slice(at + 2, at + 3)), "2026-10-10");
     const sun = await night("2026-10-11");
-    assert.deepEqual([sun.slice.spec, sun.slice.recorded], ["517+1/600", 1]);
-    assert.deepEqual(recorded("2026-10-11"), [rotation[517]!.id]);
-    assert.deepEqual(cursor(), { cursor: 518 });
+    assert.deepEqual([sun.slice.spec, sun.slice.recorded], [`${at + 2}+1/${size}`, 1]);
+    assert.deepEqual(recorded("2026-10-11"), [rotation[at + 2]!.id]);
+    assert.deepEqual(cursor(), { cursor: at + 3 });
     const pairGets = 2 * projectedGets(buildCorpus(TEMPLATES, [1, 2]));
-    const one = projectedGets(rotation.slice(517, 518));
-    assert.ok(8_500 - leaving(rotation.slice(517, 518)) - one < pairGets);
-    assert.deepEqual(sun.noisePair, { seqs: 60, recorded: false, refused: `deferred to the next night: ${pairGets} GETs projected for the pair > ${6 * one} left of the 30-day budget after the slice = 10000 − 1500 reserve − ${leaving(rotation.slice(517, 518))} GETs in 30 days − ${one} projected for the slice (decision 0001 C2)` });
+    const one = projectedGets(rotation.slice(at + 2, at + 3));
+    assert.ok(8_500 - leaving(rotation.slice(at + 2, at + 3)) - one < pairGets);
+    assert.deepEqual(sun.noisePair, { seqs: TEMPLATES.length * 2, recorded: false, refused: `deferred to the next night: ${pairGets} GETs projected for the pair > ${6 * one} left of the 30-day budget after the slice = 10000 − 1500 reserve − ${leaving(rotation.slice(at + 2, at + 3))} GETs in 30 days − ${one} projected for the slice (decision 0001 C2)` });
     assert.deepEqual(notes(sun), [{ date: "2026-10-11", step: "record noise pair", error: sun.noisePair!.refused!, oracleRefreshed: true }]);
-    assert.match(nightlyText(sun), /^noise pair: 60 sequences x 2 · NOT RECORDED: deferred to the next night: /m);
+    assert.ok(nightlyText(sun).includes(`\nnoise pair: ${TEMPLATES.length * 2} sequences x 2 · NOT RECORDED: deferred to the next night: `));
 
     // Monday: the 30-day GETs reach the reserve: an allowance of 0, the degraded path. Nothing is recorded, the cursor
     // stays, the oracle is not refreshed, and both the slice and the still-due pair are noted.
     spend(8_500, "2026-10-11");
     const mon = await night("2026-10-12");
-    assert.deepEqual([mon.slice.spec, mon.slice.seqs, mon.slice.recorded, mon.slice.allowance, mon.oracleRefreshed], ["518+0/600", 0, 0, 0, false]);
+    assert.deepEqual([mon.slice.spec, mon.slice.seqs, mon.slice.recorded, mon.slice.allowance, mon.oracleRefreshed], [`${at + 3}+0/${size}`, 0, 0, 0, false]);
     assert.equal(mon.slice.refused, `nothing recorded: ${mon.slice.budget}`);
     assert.ok(mon.slice.budget.endsWith(`; ${join(data, "budget/reads.jsonl")}; decision 0001 C2`), "the allowance reads the data repo's ledger");
     assert.equal(existsSync(join(data, "runs/2026-10-12")), false);
-    assert.deepEqual(cursor(), { cursor: 518 });
-    assert.deepEqual(notes(mon).map((n) => n.step), ["record slice 518+0/600", "record noise pair"]);
-    assert.match(nightlyText(mon), /^slice 518\+0\/600: 0 sequences · NOT RECORDED: nothing recorded: allowance 0 GETs = min\(\d+ projected for one seventh of the corpus, floor\(\(10000 − 1500 reserve − 8500 GETs in 30 days\) \/ 7\) = 0\)/m);
+    assert.deepEqual(cursor(), { cursor: at + 3 });
+    assert.deepEqual(notes(mon).map((n) => n.step), [`record slice ${at + 3}+0/${size}`, "record noise pair"]);
+    assert.match(nightlyText(mon), new RegExp(`^slice ${at + 3}\\+0/${size}: 0 sequences · NOT RECORDED: nothing recorded: allowance 0 GETs = min\\(\\d+ projected for one seventh of the corpus, floor\\(\\(10000 − 1500 reserve − 8500 GETs in 30 days\\) / 7\\) = 0\\)`, "m"));
     assert.match(git(repo, "log", "-1", "--format=%s"), /; oracle not refreshed\)$/);
 
     // Tuesday: room again; the rotation continues where Sunday stopped.
-    spend(leaving(rotation.slice(518, 519)), "2026-10-12");
+    spend(leaving(rotation.slice(at + 3, at + 4)), "2026-10-12");
     const tue = await night("2026-10-13");
-    assert.deepEqual([tue.slice.spec, recorded("2026-10-13"), cursor()], ["518+1/600", [rotation[518]!.id], { cursor: 519 }]);
+    assert.deepEqual([tue.slice.spec, recorded("2026-10-13"), cursor()], [`${at + 3}+1/${size}`, [rotation[at + 3]!.id], { cursor: at + 4 }]);
     assert.equal(tue.noisePair?.recorded, false, "the pair is still due and still does not fit");
     assert.deepEqual([git(repo, "status", "--porcelain"), git(data, "status", "--porcelain")], ["", ""]);
 
@@ -551,11 +552,11 @@ test("nightly sizes tonight's slice to the read budget and keeps the rotation cu
     // pair fits in what the 30-day budget has left after it, though neither the night's share nor the allowance has room
     // for it after the slice (the pair is weekly, decision 0002 §1).
     spend(6_000, "2026-10-17");
-    const window = Array.from({ length: 86 }, (_, i) => rotation[(519 + i) % 600]!);
+    const window = Array.from({ length: Math.ceil(size / 7) }, (_, i) => rotation[(at + 4 + i) % size]!);
     assert.ok(projectedGets(window) < nightShare(6_000) && nightShare(6_000) - projectedGets(window) < pairGets, "the share binds neither the slice nor fits the pair");
     assert.ok(projectedGets(window) + pairGets <= 8_500 - 6_000);
     const dry = await nightly({ repo, dataDir: data, dryRun: true, env: {}, run: withGh([]), now: () => new Date("2026-10-18T07:00:00Z") });
-    assert.deepEqual([dry.slice.spec, dry.slice.allowance, dry.noisePair], ["519+86/600", projectedGets(window), { seqs: 60, recorded: false }]);
+    assert.deepEqual([dry.slice.spec, dry.slice.allowance, dry.noisePair], [`${at + 4}+${Math.ceil(size / 7)}/${size}`, projectedGets(window), { seqs: TEMPLATES.length * 2, recorded: false }]);
   } finally {
     server.closeAllConnections();
     server.close();

@@ -6,9 +6,9 @@ import { TEMPLATES } from "../templates/index.ts";
 const SEEDS = [1, 2, 3, 4, 5];
 const corpus = buildCorpus(TEMPLATES, SEEDS);
 
-test("catalog: 30 unique names, #7/#9/#12/#18/#21/#28 held out", () => {
-  assert.equal(TEMPLATES.length, 30);
-  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 30);
+test("catalog: 31 unique names, #7/#9/#12/#18/#21/#28 held out", () => {
+  assert.equal(TEMPLATES.length, 31);
+  assert.equal(new Set(TEMPLATES.map((t) => t.name)).size, 31);
   assert.deepEqual(
     TEMPLATES.filter((t) => t.heldOut).map((t) => t.name),
     ["subscription-cancel-at-period-end", "refund-partial-then-rest", "invalid-params", "subscription-update-quantity", "boundaries-list-limits", "clock-trial-end"],
@@ -86,6 +86,21 @@ test("clock-declined-renewal: its second advance is waited out for >= 600 s (dec
     assert.equal(advances.length, 2, s.id);
     assert.ok((s.steps[advances[1]! + 1]!.waitMs ?? 0) >= 600_000, `${s.id}: waits ${s.steps[advances[1]! + 1]!.waitMs} ms`);
   }
+});
+
+test("subscription-interval-swap: monthly to annual, no billing_cycle_anchor, seeds 1-20 take every proration_behavior", () => {
+  const seqs = buildCorpus(TEMPLATES.filter((t) => t.name === "subscription-interval-swap"), parseSeeds("1-20"));
+  const behaviors = new Set<unknown>();
+  for (const s of seqs) {
+    const step = (ref: string) => s.steps.find((st) => st.ref === ref)!;
+    assert.deepEqual([step("pr1").params?.recurring, step("pr2").params?.recurring], [{ interval: "month" }, { interval: "year" }], s.id);
+    const [update, retrieve, list] = s.steps.slice(-3);
+    assert.deepEqual([update!.method, update!.path, update!.params?.items], ["POST", "/v1/subscriptions/$s1.id", [{ id: "$s1.items.data.0.id", price: "$pr2.id" }]], s.id);
+    assert.deepEqual(Object.keys(update!.params!).sort(), ["items", "proration_behavior"], s.id);
+    behaviors.add(update!.params!.proration_behavior);
+    assert.deepEqual([retrieve, list], [{ method: "GET", path: "/v1/subscriptions/$s1.id" }, { method: "GET", path: "/v1/invoices", params: { customer: "$c1.id" } }], s.id);
+  }
+  assert.deepEqual([...behaviors].sort(), ["always_invoice", "create_prorations", "none"]);
 });
 
 test("parseSeeds", () => {
