@@ -288,19 +288,20 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     // (d) and "annotated once": the next night, after a surface-added entry and a run that grows the oracle 6 -> 9.
     appendLog(logPath(data), "manual", [{ kind: "patch", data: { class: "surface-added", status: "applied", note: "proration", oracle: ORACLE } }]);
     writeJsonl(join(data, "runs/2026-10-04/extra-20261004T120000-cccc.jsonl"), pair.extra!);
-    // The first point as a pre-m2 night wrote it (no `method`): the next point annotates the compare method change.
+    // The first point as a pre-m2 night under normalization v1.4 wrote it (no `method`): the next point annotates both
+    // method changes, and the page shows the normalization one once (not again as its own "normalization vX" label).
     const curveFile = join(repo, "site/data/curve.json");
-    writeFileSync(curveFile, JSON.stringify(JSON.parse(readFileSync(curveFile, "utf8")).map(({ method: _, ...p }: { method: string }) => p), null, 2) + "\n");
+    writeFileSync(curveFile, JSON.stringify(JSON.parse(readFileSync(curveFile, "utf8")).map(({ method: _, ...p }: { method: string }) => ({ ...p, normalization: "v1.4" })), null, 2) + "\n");
     const r2 = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T07:00:00Z") });
     assert.equal(r2.oracle.oracleSeqs, 9);
     assert.deepEqual(r2.patches, { automatic: 1, assisted: 1 }, "totals: nothing counted twice");
     const curve2 = site("curve.json");
     assert.deepEqual(curve2.map((p: { date: string; oracleSeqs: number; events: string[] }) => [p.date, p.oracleSeqs, p.events]), [
       ["2026-10-04", 6, ["surface-added: test clocks"]],
-      ["2026-10-05", 9, ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order"]],
+      ["2026-10-05", 9, ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order", `method change: normalization ${NORMALIZATION_VERSION}`]],
     ]);
     const d2 = await app.load(async (url: string) => (existsSync(join(repo, "site", url)) ? JSON.parse(readFileSync(join(repo, "site", url), "utf8")) : null));
-    assert.deepEqual(app.series(d2.curve, "all").map((row: { events: string[] }) => row.events), [["surface-added: test clocks"], ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order"]]);
+    assert.deepEqual(app.series(d2.curve, "all").map((row: { events: string[] }) => row.events), [["surface-added: test clocks"], ["surface-added: proration", "oracle expanded: 6→9", "method change: causal event order", `method change: normalization ${NORMALIZATION_VERSION}`]]);
     assert.deepEqual(readJsonl<LogEntry>(logPath(data)).filter((e) => e.kind === "publish").map((e) => [e.data.date, e.data.events]), [["2026-10-04", curve2[0].events], ["2026-10-05", curve2[1].events]]);
     assert.deepEqual(curve2[1].noise.coverage, { seqs: 6, oracleSeqs: 9, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false, maxAgeDays: pairAge("2026-10-05T07:00:00Z") });
     // The public commit message never prints the pair's number without its coverage.

@@ -53,7 +53,9 @@ export function series(curve, stratum) {
     if (!levels) return;
     const noise = stratum === "all" ? pt.noise?.overall : pt.noise?.byStratum?.[stratum];
     const events = [...(pt.events ?? [])];
-    if (i > 0 && pt.normalization !== curve[i - 1].normalization) events.push(`normalization ${pt.normalization}`);
+    // Nights before the nightly annotated it itself ("method change: normalization vX") get the label here.
+    const label = `normalization ${pt.normalization}`;
+    if (i > 0 && pt.normalization !== curve[i - 1].normalization && !events.some((e) => e.endsWith(label))) events.push(label);
     rows.push({ date: pt.date, events, L3: levels.L3, L4: levels.L4, ceiling: { L3: noise?.L3?.p ?? null, L4: noise?.L4?.p ?? null } });
   });
   return rows;

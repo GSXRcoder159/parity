@@ -670,17 +670,20 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   const curveFile = join(root, "site/data/curve.json");
   // A second run on the same date replaces that date's point (one point per night on the chart) and keeps its
   // annotations: the first run's surface-added entries precede its publish entry, so surfaceAdded() no longer returns them.
-  const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; method?: string; events?: string[] }[]) : [];
+  const points = existsSync(curveFile) ? (JSON.parse(readFileSync(curveFile, "utf8")) as { date: string; oracleSeqs?: number; normalization?: string; method?: string; events?: string[] }[]) : [];
   const curve = points.filter((p) => p.date !== date);
   const last = curve.at(-1)?.oracleSeqs; // points before W4 do not carry it: no comparison
-  // A compare method change moves every score: annotated like a surface change (points without `method` are m1). The
-  // point compared is the one this point follows or replaces (a same-date rerun under a new method switches it too).
+  // A compare method or normalization version change moves every score: annotated like a surface change (points
+  // without `method` are m1). The point compared is the one this point follows or replaces (a same-date rerun under a
+  // new method or version switches it too).
   const prior = points.findLast((p) => p.date <= date);
   const methodChanged = prior !== undefined && (prior.method ?? "m1") !== METHOD.version;
+  const normalizationChanged = prior?.normalization !== undefined && prior.normalization !== NORMALIZATION_VERSION;
   const fresh = [
     ...surfaceAdded(log),
     ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : []),
     ...(methodChanged ? [`method change: ${METHOD.change}`] : []),
+    ...(normalizationChanged ? [`method change: normalization ${NORMALIZATION_VERSION}`] : []),
   ];
   const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
   const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, divergencesRemoved, oracleRefreshed, oracleSeqs: oracle.oracleSeqs, oracleMaxAgeDays });

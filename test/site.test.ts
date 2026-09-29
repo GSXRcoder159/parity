@@ -73,9 +73,11 @@ test("a one-point curve: the latest night's scores file, one row per series, fin
   assert.ok(Number.isFinite(app.scales([], 400, 240).x("2026-10-01")));
 });
 
-test("nights are sorted, a normalization change is annotated, and the sample flag is detected", async () => {
+test("nights are sorted, a normalization change is annotated once, and the sample flag is detected", async () => {
+  // 2026-10-03: the nightly annotated the change itself, so the page adds no second label.
+  const noted = point("2026-10-03", { normalization: "v1.4", events: ["method change: normalization v1.4"] });
   const d = await app.load(
-    site({ "data/curve.json": [point("2026-10-02", { normalization: "v1.3" }), point("2026-10-01")], "data/drift.json": [{ sample: true, date: "2026-10-02" }] }).get,
+    site({ "data/curve.json": [noted, point("2026-10-02", { normalization: "v1.3" }), point("2026-10-01")], "data/drift.json": [{ sample: true, date: "2026-10-02" }] }).get,
     "data/",
   );
   assert.deepEqual(
@@ -83,6 +85,7 @@ test("nights are sorted, a normalization change is annotated, and the sample fla
     [
       ["2026-10-01", []],
       ["2026-10-02", ["normalization v1.3"]],
+      ["2026-10-03", ["method change: normalization v1.4"]],
     ],
   );
   assert.equal(d.sample, true);
