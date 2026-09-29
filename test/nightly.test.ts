@@ -12,7 +12,7 @@ import { nightShare, projectedGets } from "../src/bench/budget.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
-import { ceilingText, changelog, logMerged, nightly, nightlyText, removedTotals } from "../src/nightly.ts";
+import { ceilingText, changelog, logMerged, nightly, nightlyCommand, nightlyText, removedTotals } from "../src/nightly.ts";
 import { NORMALIZATION_VERSION } from "../src/bench/normalize.ts";
 import { createTwin } from "../src/twin/server.ts";
 import type { Recording } from "../src/types.ts";
@@ -687,6 +687,43 @@ test("the test guard: a suite that ran 0 tests (moved or renamed) or hung past t
     const hung = await nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-06T07:00:00Z"), guardTimeoutMs: 30_000 });
     dropped(hung, ["test: node --test test/*.test.ts timed out after 30 s (killed)"]);
     assert.match(nightlyText(hung), /^test guard: the align commit was DROPPED, 1 failures on it: test: node --test test\/\*\.test\.ts timed out after 30 s \(killed\)$/m);
+  } finally {
+    for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("nightly --once-per-day: not published today (UTC), the night runs; a later attempt that day pulls the data repo current, finds the publish entry and stops with one line, recording and committing nothing; without the flag a same-day rerun runs", { timeout: 240_000 }, async () => {
+  const { tmp, git, bare, data, dataOrigin, repo, parityOrigin } = fixture("pb-once-", { "runs/2026-09-27/sandbox-20260927T070000-aaaa.jsonl": await reverseOracle() });
+  // The backup attempt's checkout, cloned before the first attempt pushes: its log has no publish entry until it pulls.
+  const stale = join(tmp, "stale");
+  execFileSync("git", ["clone", "-q", dataOrigin, stale]);
+  const publishes = (dir: string) => (existsSync(logPath(dir)) ? readJsonl<LogEntry>(logPath(dir)) : []).filter((e) => e.kind === "publish" && e.data.label === "nightly" && e.data.date === "2026-10-05").length;
+  const saved = { key: process.env.STRIPE_API_KEY, budget: process.env.PARITY_READ_BUDGET };
+  process.env.STRIPE_API_KEY = "sk_test_never_sent";
+  process.env.PARITY_READ_BUDGET = "0"; // the sandbox refuses at the budget gate: the night scores the existing oracle
+  try {
+    const first = await nightlyCommand({ repo, dataDir: data, oncePerDay: true, env: {}, run: withGh([]), now: () => new Date("2026-10-05T07:23:00Z") });
+    assert.match(first, /^nightly 2026-10-05 run \S+\n/);
+    assert.equal(publishes(data), 1);
+    assert.equal(publishes(stale), 0);
+
+    const heads = () => [git(repo, "rev-parse", "HEAD"), bare(parityOrigin, "rev-parse", "main"), bare(dataOrigin, "rev-parse", "main")];
+    const before = heads();
+    const gh: string[][] = [];
+    const second = await nightlyCommand({ repo, dataDir: stale, oncePerDay: true, env: {}, run: withGh([], gh), now: () => new Date("2026-10-05T10:47:00Z") });
+    assert.equal(second, "nightly: already published for 2026-10-05, nothing to do");
+    assert.deepEqual(heads(), before, "no commit here or on either origin");
+    assert.equal(git(stale, "rev-parse", "HEAD"), before[2], "the checkout was pulled current and nothing was added to it");
+    assert.equal(publishes(stale), 1);
+    assert.deepEqual([git(repo, "status", "--porcelain"), git(stale, "status", "--porcelain"), gh], ["", "", []], "nothing recorded, logged or asked of gh");
+
+    const rerun = await nightlyCommand({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date("2026-10-05T12:00:00Z") });
+    assert.match(rerun, /^nightly 2026-10-05 run \S+\n/);
+    assert.equal(publishes(data), 2);
+    assert.notEqual(bare(dataOrigin, "rev-parse", "main"), before[2]);
   } finally {
     for (const [k, v] of [["STRIPE_API_KEY", saved.key], ["PARITY_READ_BUDGET", saved.budget]] as const) {
       if (v === undefined) delete process.env[k];

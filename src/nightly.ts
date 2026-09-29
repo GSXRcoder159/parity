@@ -744,6 +744,22 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   };
 }
 
+/**
+ * The CLI's nightly: the night's summary (nightlyText). `oncePerDay` (the scheduled runs, .github/workflows/nightly.yml:
+ * GitHub's schedule is best-effort, so it has two attempts a day): first the data repo is pulled current, and when its
+ * sealed log already has today's (UTC) nightly `publish` entry, the one line saying so instead, before any sandbox or LLM work.
+ */
+export async function nightlyCommand(o: Parameters<typeof nightly>[0] & { oncePerDay?: boolean }): Promise<string> {
+  if (o.oncePerDay) {
+    const date = (o.now ?? (() => new Date()))().toISOString().slice(0, 10);
+    (o.run ?? sh)("git", ["pull", "-q", "--rebase", "--autostash"], o.dataDir);
+    const log = logPath(o.dataDir);
+    const entries = existsSync(log) ? readJsonl<LogEntry>(log) : [];
+    if (entries.some((e) => e.kind === "publish" && e.data.label === "nightly" && e.data.date === date)) return `nightly: already published for ${date}, nothing to do`;
+  }
+  return nightlyText(await nightly(o));
+}
+
 const levels = (s: LevelScores): string => (["L1", "L2", "L3", "L4"] as const).map((l) => `${l} ${(s[l].p * 100).toFixed(1)}%`).join(" ");
 
 /** 9. The summary. */

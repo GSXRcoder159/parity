@@ -29,7 +29,7 @@ const USAGE = `usage:
   paritybench score-twin --oracle A.jsonl [--templates all|a,b] [--noise C.jsonl] [--json out.json] [--recordings twin.jsonl]
   paritybench align [--apply | --assist] [--max-batches N]
   paritybench align surface --note "<text>" [--commit <sha>]
-  paritybench nightly [--dry-run]
+  paritybench nightly [--dry-run] [--once-per-day]
   paritybench agree --cmd "<test command>" [--junit <path>] [--runs twin,sandbox] [--out reports/<name>]
   paritybench help
 
@@ -87,6 +87,8 @@ const USAGE = `usage:
     entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir
     and writes the public files to a temp dir.
+    --once-per-day (the scheduled runs): pull the data repo, and when its sealed log already has today's (UTC) nightly
+    publish entry, print "nightly: already published for <date>, nothing to do" and exit 0 before any sandbox or LLM work.
   agree: runs the command once per target (--runs order) with STRIPE_API_BASE and STRIPE_API_KEY set: twin = an in-process
     twin on an ephemeral port with sk_test_parity, sandbox = STRIPE_API_KEY and a local metered proxy to
     https://api.stripe.com (refused when the read budget is already reached; the proxy holds 20 req/s, ledgers the
@@ -108,7 +110,7 @@ const FLAGS: Record<string, string[]> = {
   mcp: [],
   "score-twin": ["oracle", "templates", "noise", "json", "recordings"],
   align: ["apply", "assist", "max-batches", "note", "commit"],
-  nightly: ["dry-run"],
+  nightly: ["dry-run", "once-per-day"],
   agree: ["cmd", "junit", "runs", "out"],
 };
 
@@ -116,7 +118,7 @@ class UsageError extends Error {}
 /** The sandbox refused a recording (the read-budget gate, or the circuit breaker after repeated 429s): nightly notes it and goes on. */
 export class Refused extends Error {}
 
-/** `--flag value` pairs (`--raw`, `--apply`, `--assist`, `--dry-run` take none) and positionals; unknown flags and missing values are usage errors. */
+/** `--flag value` pairs (`--raw`, `--apply`, `--assist`, `--dry-run`, `--once-per-day` take none) and positionals; unknown flags and missing values are usage errors. */
 function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
   const positional: string[] = [];
@@ -128,7 +130,7 @@ function parseArgs(cmd: string, argv: string[]): { flags: Record<string, string>
     }
     const name = a.slice(2);
     if (!FLAGS[cmd]!.includes(name)) throw new UsageError(`unknown flag ${a} for ${cmd}`);
-    if (name === "raw" || name === "apply" || name === "assist" || name === "dry-run") {
+    if (name === "raw" || name === "apply" || name === "assist" || name === "dry-run" || name === "once-per-day") {
       flags[name] = "1";
       continue;
     }
@@ -489,8 +491,8 @@ export async function main(argv: string[]): Promise<number> {
     }
 
     if (cmd === "nightly") {
-      const { nightly, nightlyText } = await import("./nightly.ts");
-      console.log(nightlyText(await nightly({ repo: REPO_ROOT, dataDir: dataDir(), dryRun: flags["dry-run"] === "1" })));
+      const { nightlyCommand } = await import("./nightly.ts");
+      console.log(await nightlyCommand({ repo: REPO_ROOT, dataDir: dataDir(), dryRun: flags["dry-run"] === "1", oncePerDay: flags["once-per-day"] === "1" }));
       return 0;
     }
 
