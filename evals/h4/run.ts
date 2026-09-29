@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// H4 sim-to-real (plan §6.4, the fallback when no partner suite exists): the 20 refund/cancel/proration tasks in
+// H4 sim-to-real (plan §6.4, the fallback when no partner suite exists): the 80 refund/cancel/proration tasks in
 // tasks.json, each run once on the twin, once more on a fresh twin (the control) and once on the sandbox by an agent that
 // uses the pinned Python agent toolkit (toolkit.py) against that target. Reports per-task pass/fail on each, the
 // twin-vs-sandbox agreement (the H4 number) with the twin-vs-control agreement as its noise floor, the model and the LLM
