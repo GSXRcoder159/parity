@@ -1,6 +1,6 @@
-# Templates #1–#30: live validation
+# Templates #1–#31: live validation
 
-#1–#15 were validated on 2026-09-25 (this part); #16–#26 on 2026-09-26 (see [Templates #16–#26](#templates-1626-2026-09-26) below). #27–#30 (test clocks) on 2026-09-27 (see [Templates #27–#30](#templates-2730-test-clocks-2026-09-27) at the end).
+#1–#15 were validated on 2026-09-25 (this part); #16–#26 on 2026-09-26 (see [Templates #16–#26](#templates-1626-2026-09-26) below). #27–#30 (test clocks) on 2026-09-27 (see [Templates #27–#30](#templates-2730-test-clocks-2026-09-27) below). #31 (interval swap without an anchor) on 2026-09-29 (see [Template #31](#template-31-interval-swap-without-an-anchor-2026-09-29) at the end).
 
 Date 2026-09-25. Target: the Stripe sandbox (unclaimed, as the error-message prefix below confirms; the key type is `rkcs_test_` according to the Task 4 brief and was not inspected here), API version `2026-08-26.dahlia`. Each template was run for seeds 1 and 2 with `runSequence` via `runCorpus` (concurrency 5, the shared 20 req/s limiter). This ran from a throwaway script, `buildCorpus(TEMPLATES, [1, 2])` followed by `runCorpus(seqs, sandboxTarget(key), …)`, and took 58 s for all 30 sequences.
 
@@ -393,3 +393,39 @@ The rule: #28's recordings and rows are not opened, except its step statuses in 
   - What suggests nothing was tuned from it (circumstantial only): B1-unblock Task 1 changed no twin code. The twin's clock code predates the exposure (d32db08, 2026-09-26), and the only twin change since is align's `errors.json` batch `ae1343c` (6 message and code edits, none from a clock locus; `reports/2026-09-27-twin-v1.md`). Unlike the precedent, there is no before/after held-out score: #28 had no sandbox recording in the oracle before oracle v1, so its first score (held-out clocks L3 50.0%, L4 0.0% on oracle v1) comes after the exposure.
   - Cost: an implementer saw #28's step count (10) and event count (25 per seed). Held-out generalization on #28 may read slightly optimistic if an implementer's later twin change drew on them.
   - Records: this section and the day-0 report's limitations list. The sealed-log `note` is appended by the orchestrator, not by this task.
+
+## Template #31: interval swap without an anchor (2026-09-29)
+
+Written 2026-09-29 (H4 v2 plan Task 2) for H4's `switch-to-annual`: a price swap across billing intervals without `billing_cycle_anchor`, which the twin refuses (`not_implemented`, W4 plan Task 3(b)). A train template in the proration stratum, last in the catalog so the nightly's slices keep every existing sequence's corpus index. The option it adds to `subscribed()` (`interval`) skips the prefix's interval pick, so the other 30 templates build the same corpus as before (seeds 1–20, checked by hash).
+
+| # | template | steps after the prefix (intended status) |
+|---|---|---|
+| 31 | subscription-interval-swap | The prefix with a **monthly** price A. Price B on A's product and currency, **yearly**, 500–50,000 (200). Update the item to B with `proration_behavior` ∈ {`create_prorations`, `always_invoice`, `none`} and no `billing_cycle_anchor` (200). Retrieve `s1` (200). `GET /v1/invoices?customer=` (200) |
+
+Target: the claimed sandbox (`sk_test_` key after B1), API version `2026-08-26.dahlia` on every response. Both runs went through the CLI (budget-gated, ledgered in `budget/reads.jsonl`) and are in the data repo under `runs/2026-09-29/`:
+
+- Validation, `paritybench record --target sandbox --templates subscription-interval-swap --seeds 1-3,8`: run `20260929T015151-kab1`, 4 sequences, 38 requests (12 GETs, 4 of them event-sweep; 26 POSTs), 0 429s, 19.7 s wall. Seeds 1–3 take `create_prorations`, `none` and `create_prorations`; seed 8 is the first `always_invoice`, so it was added.
+- Oracle, the same with `--seeds 1-20`: run `20260929T015254-trjf`, 20 sequences, 177 requests (49 GETs, 9 of them event-sweep; 128 POSTs), 0 429s, 36.2 s wall. `create_prorations` on seeds 1, 3, 6, 7, 10, 12, 14 and 15; `none` on 2, 4, 5, 11, 13 and 17; `always_invoice` on 8, 9, 16, 18, 19 and 20. Seeds 1, 3, 5, 6, 14, 15, 19 and 20 set the default payment method on the customer (9 steps), the others on the subscription (8 steps).
+- `oracle build` then: 620 sequences, the 600 of oracle v1 unchanged plus #31 × 20 from `trjf`. Rolling 30-day sandbox GETs after both runs: 4,769 of 10,000.
+
+**Every step returned 200** in all 24 sequences. The facts below hold for every sequence of both runs (the 4 `kab1` sequences match their `trjf` seeds). A and B are the two prices' `unit_amount`.
+
+1. **Accepted, in flexible mode.** The swap to a yearly price with no `billing_cycle_anchor` answers 200 whatever `proration_behavior`. The subscription stays `active`, with `billing_mode.type: flexible` (the default on dahlia; the template does not set it) and `pending_update: null`.
+2. **Item periods.** `current_period_start` stays the subscription's start (its `created`), and `current_period_end` becomes that start plus one year (it was the start plus one month). The period is lengthened in place, not restarted at the change. The update response and the retrieve agree.
+3. **`billing_cycle_anchor` does not move**: it stays the subscription's start in the update response and in the retrieve, in all three branches. `start_date` does not move either.
+4. **Invoices and `billing_reason`.**
+   - `create_prorations`: no new invoice. The list holds only the first invoice (`subscription_create`, `paid`). The prorations are 2 pending invoice items (`invoice: null`), visible only in the `invoiceitem.created` events.
+   - `always_invoice`: a second invoice at once, `billing_reason: subscription_update`, `status: paid`, `charge_automatically`, holding the 2 proration lines. It becomes `latest_invoice`, and its period runs from the subscription's start to the change. Its total is B − A.
+     - Upgrades (seeds 8, 16, 19, 20): charged at once, with a second PaymentIntent and charge.
+     - Downgrades (seeds 9, 18): a negative total, `amount_due` 0 and `amount_paid` 0, `ending_balance` equal to the total, and still `paid`. The customer's `balance` is credited by the total (a second `customer.updated`, with `balance` in `previous_attributes`). No payment.
+   - `none`: no invoice items and no invoice.
+5. **Proration lines** (`create_prorations` and `always_invoice`, 14 sequences): 2 invoice items, both `proration: true`.
+   - A credit of −A on price A, for the period from the change to the old period end (start + 1 month).
+   - A debit of +B on price B, for the period from the change to the new period end (start + 1 year).
+   - The change came 2–4 s after the subscription started, so both amounts round to the full A and B: the unused and remaining fractions differ from 1 by less than 10⁻⁵. **These recordings cannot show how a swap later in the period is prorated**, for example whether the debit is B times the remaining share of the year. A swap after a test-clock advance would.
+   - Line descriptions: the credit's names the unused time on the product after the change date, and the debit's the remaining time (paraphrased, decision 0001 C3).
+6. **Events.** One `customer.subscription.updated`, with `previous_attributes` keys `items` and `plan` (and `latest_invoice` with `always_invoice`). No `invoice.upcoming` and no `invoice.updated`. The prefix and price B emit 16 events (17 with the prefix's customer update). The swap adds:
+   - `create_prorations`: `customer.subscription.updated` and `invoiceitem.created` ×2 (19 or 20 events in all).
+   - `none`: `customer.subscription.updated` only (17 or 18).
+   - `always_invoice`: `customer.subscription.updated`, `invoiceitem.created` ×2, `invoice.created`, `invoice.finalized`, `invoice.paid` and `invoice.payment_succeeded`. Upgrades add `payment_intent.created`, `payment_intent.succeeded` and `charge.succeeded` (26 or 27). The two downgrades add a `customer.updated` for the balance instead (24; both are 8-step seeds).
+7. **Twin: refused, and left refused** (not changed by hand; brief). The twin answers the update 400 `invalid_request_error` with `parity: not_implemented` in all 20 oracle sequences, and the later steps see the monthly subscription. `score-twin` on #31 alone, on the 2026-09-29 oracle (normalization v1.4, method m2): L1 88.1% (148 of 168 steps; the 20 misses are the update step), L2 and L3 40.5%, L4 0 of 20. This is now a scored train divergence for the assisted pass. The twin's `change()` doc comment says a price on another billing period is accepted only with `billing_cycle_anchor=now`; the sandbox accepts it without one (facts 1–3).
