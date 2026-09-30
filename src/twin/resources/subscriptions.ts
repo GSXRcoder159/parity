@@ -108,6 +108,16 @@ const legacyQuantity = (items: Obj[]) => (items.length === 1 ? items[0]!.quantit
 
 const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.recurring as Obj).interval_count].join();
 
+/** The subscription's items as a list object, with an accurate `total_count`. */
+const itemsList = (base: Obj | undefined, data: Obj[], url: string): Obj => ({
+  ...(base ?? {}),
+  data,
+  has_more: false,
+  object: "list",
+  total_count: data.length,
+  url,
+});
+
 /**
  * `sub` after the changes in `p` at `now`, and the flexible-mode prorations they create. `p` holds an update's params
  * or a preview's `subscription_details`: `items` (`id` + `price`/`price_data`/`quantity`/`metadata`, `deleted`, or a
@@ -206,7 +216,12 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
       const r = (item.price as Obj).recurring as Obj;
       Object.assign(item, { current_period_end: addInterval(now, r.interval as string, r.interval_count as number), current_period_start: now });
     }
-  const after: Obj = { ...structuredClone(sub), items: { ...(sub.items as Obj), data: items }, quantity: legacyQuantity(items) };
+  const sourceItems = sub.items as Obj;
+  const after: Obj = {
+    ...structuredClone(sub),
+    items: itemsList(sourceItems, items, sourceItems.url as string),
+    quantity: legacyQuantity(items),
+  };
   if (reset) after.billing_cycle_anchor = now;
   const billed = reset && changed.length > 0;
   return { after, prorations, reset: billed, immediate: billed || (p.proration_behavior === "always_invoice" && prorations.length > 0), date };
@@ -251,7 +266,7 @@ export const routes: Route[] = [
           customer: customer.id,
           days_until_due: collection === "send_invoice" ? params.days_until_due : null,
           default_payment_method: params.default_payment_method || null,
-          items: { data: items, has_more: false, object: "list", url: `/v1/subscription_items?subscription=${id}` },
+          items: itemsList(undefined, items, `/v1/subscription_items?subscription=${id}`),
           quantity: legacyQuantity(items),
           start_date: now,
           status: trialEnd ? "trialing" : "active",
