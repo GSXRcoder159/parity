@@ -1,10 +1,14 @@
 name: nightly
 on:
   schedule:
-    # GitHub's schedule is best-effort and the top of the hour is congested: on 2026-09-29 "0 7 * * *" never fired.
-    # Two attempts off the hour; a scheduled run passes --once-per-day, so the backup does nothing once a night is published.
+    # GitHub's schedule is best-effort. On 2026-09-29 "0 7 * * *" never fired. On 2026-09-30 the 07:23 slot never fired,
+    # and the 10:47 slot fired at 13:51 (about 3 h late).
+    # So there are four attempts spread over the UTC day. A scheduled run passes --once-per-day, so once a night is
+    # published every later attempt exits in seconds (no sandbox reads, no LLM spend).
     - cron: "23 7 * * *" # 07:23 UTC
-    - cron: "47 10 * * *" # 10:47 UTC, the backup
+    - cron: "47 10 * * *" # 10:47 UTC
+    - cron: "17 14 * * *" # 14:17 UTC
+    - cron: "37 19 * * *" # 19:37 UTC, the last attempt of the UTC day
   workflow_dispatch:
 permissions:
   contents: write # align --apply commits and the public-safe files are pushed; align --assist pushes branches
