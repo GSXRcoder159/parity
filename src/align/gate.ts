@@ -160,6 +160,8 @@ export interface GateResult {
   /** Beyond --max-batches. */
   notGated: Candidate[];
   evaluations: number;
+  /** `after` with its divergence ids: the score of the accepted edits. */
+  final: Eval;
 }
 
 /**
@@ -171,7 +173,7 @@ export interface GateResult {
  */
 export function gate(candidates: Candidate[], evaluate: (edits: Edit[]) => Eval, o: { maxBatches?: number; before?: Eval } = {}): GateResult {
   let base = o.before ?? evaluate([]);
-  const out: GateResult = { before: scores(base), after: scores(base), accepted: [], blocked: [], rejected: [], notGated: [], evaluations: o.before ? 0 : 1 };
+  const out: GateResult = { before: scores(base), after: scores(base), accepted: [], blocked: [], rejected: [], notGated: [], evaluations: o.before ? 0 : 1, final: base };
   const applied: Edit[] = [];
   const judge = (batch: Candidate[]): void => {
     const r = evaluate([...applied, ...batch]);
@@ -197,5 +199,18 @@ export function gate(candidates: Candidate[], evaluate: (edits: Edit[]) => Eval,
   const batches = [...byFile.values()].sort((a, b) => weight(b) - weight(a) || (a[0]!.file < b[0]!.file ? -1 : 1));
   batches.forEach((b, i) => (i < (o.maxBatches ?? Infinity) ? judge(b) : out.notGated.push(...b)));
   out.after = scores(base);
+  out.final = base;
   return out;
+}
+
+/**
+ * The assisted gate (assist.ts) on a code change scored `code` (from `before`): the mechanical candidates proposed on
+ * top of it are gated from `code` as above (`data.before` is the code change's own score), then the combination must
+ * pass the single-edit rule against `before`: one of the locus's own divergences `ids` goes, held-out L3 does not
+ * drop, train divergences fall. So a code change that exposes template fields is judged with the data edits fixing them.
+ */
+export function gatePaired(before: Eval, code: Eval, candidates: Candidate[], evaluate: (edits: Edit[]) => Eval, ids: string[]): { data: GateResult; pass: boolean } {
+  const data = gate(candidates, evaluate, { before: code });
+  const c = data.final;
+  return { data, pass: ids.some((id) => !c.ids.has(id)) && c.heldOut.L3.k >= before.heldOut.L3.k && c.trainDivergences < before.trainDivergences };
 }

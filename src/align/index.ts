@@ -10,7 +10,7 @@ import { contaminated } from "../bench/oracle.ts";
 import type { LevelScores } from "../bench/score.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
-import { applyEdits, evalOf, gate, scoreTwinIn, type Eval, type GateResult, type Judged, type Scores } from "./gate.ts";
+import { applyEdits, evalOf, gate, scoreTwinIn, type Eval, type GateResult, type Judged, type Run, type Scores } from "./gate.ts";
 import { appendLog, logPath, provenance, verifyLog, type Kind, type LogData, type Provenance } from "./log.ts";
 import { CATALOG_FILE, SHAPES_DIR, propose, type Candidate, type NotMechanical } from "./patch.ts";
 import { triage, type Locus, type Triaged } from "./triage.ts";
@@ -40,6 +40,8 @@ export interface AlignResult {
   runId: string;
   oracle: Provenance;
   noise: { keys: number; pairs: number };
+  /** The noise keys themselves: the assisted pass triages the twin with its code change against them. */
+  noiseKeys: Set<string>;
   divergences: Triaged[];
   earliest: Record<string, number | null>;
   candidates: Candidate[];
@@ -63,21 +65,30 @@ export function align(o: { repo: string; dataDir: string; runId: string; apply?:
   const v = o.apply ? verifyLog(logPath(o.dataDir)) : { ok: true as const };
   if (!v.ok) throw new Error(`refusing --apply: the sealed log is broken: ${v.error}`);
   const oracle = provenance(oraclePath);
-  const recs = readJsonl<Recording>(oraclePath);
   const noise = noiseFromRuns(o.dataDir);
-  const base = scoreTwinIn(o.repo, oraclePath, [], true);
-  const { divergences, earliest } = triage(base.json.results, noise.keys, recs, base.twin!);
-  const catalog = JSON.parse(readFileSync(join(o.repo, CATALOG_FILE), "utf8"));
-  const shape = (t: string) => /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(join(o.repo, SHAPES_DIR, `${t}.json`));
-  const { candidates, notMechanical } = propose(divergences, recs.map(normalizeRecording), base.twin!, noise.keys, { shape, catalog });
-  const baseline = evalOf(base.json);
-  const g = gate(candidates, (edits) => evalOf(scoreTwinIn(o.repo, oraclePath, edits).json), { maxBatches: o.maxBatches, before: baseline });
-  const r: AlignResult = { runId: o.runId, oracle, noise: { keys: noise.keys.size, pairs: noise.pairs }, divergences, earliest, candidates, notMechanical, gate: g, baseline, twin: base.twin! };
+  const m = mechanical(o.repo, oraclePath, noise.keys);
+  const g = gate(m.candidates, (edits) => evalOf(scoreTwinIn(o.repo, oraclePath, edits).json), { maxBatches: o.maxBatches, before: m.baseline });
+  const r: AlignResult = { runId: o.runId, oracle, noise: { keys: noise.keys.size, pairs: noise.pairs }, noiseKeys: noise.keys, ...m, gate: g };
   if (o.apply) r.applied = applyAndLog(o.repo, o.dataDir, r);
   return r;
 }
 
-const editOf = (c: Candidate) => ({ file: c.file, pointer: c.pointer, op: c.op, ...(c.op === "set" ? { value: c.value } : {}) });
+/**
+ * The mechanical candidate pass on the twin in `root`: score-twin on the whole oracle (with the twin's recordings),
+ * triage every divergence, propose data-file edits from train sequences only (propose drops held-out). `docker`: every
+ * score-twin runs in the container (the assisted pass: `root` holds a file an LLM wrote).
+ */
+export function mechanical(root: string, oraclePath: string, noise: Set<string>, docker?: Run) {
+  const recs = readJsonl<Recording>(oraclePath);
+  const base = scoreTwinIn(root, oraclePath, [], true, docker);
+  const { divergences, earliest } = triage(base.json.results, noise, recs, base.twin!);
+  const catalog = JSON.parse(readFileSync(join(root, CATALOG_FILE), "utf8"));
+  const shape = (t: string) => /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(join(root, SHAPES_DIR, `${t}.json`));
+  const { candidates, notMechanical } = propose(divergences, recs.map(normalizeRecording), base.twin!, noise, { shape, catalog });
+  return { divergences, earliest, candidates, notMechanical, baseline: evalOf(base.json), twin: base.twin! };
+}
+
+export const editOf = (c: Candidate) => ({ file: c.file, pointer: c.pointer, op: c.op, ...(c.op === "set" ? { value: c.value } : {}) });
 const pts = (a: LevelScores, b: LevelScores): string => `${b.L3.p >= a.L3.p ? "+" : ""}${((b.L3.p - a.L3.p) * 100).toFixed(1)} pts`;
 
 /**
@@ -143,7 +154,7 @@ const levels = (s: LevelScores): string => (["L1", "L2", "L3", "L4"] as const).m
 export const split = (s: Scores): string => `train ${levels(s.train)} (${s.trainDivergences} divergences) · held-out ${levels(s.heldOut)}`;
 export const where = (l: Locus): string =>
   l.kind === "field" ? `${l.objectType} ${l.fieldPath}` : l.kind === "error" ? `error ${l.errorKey} ${l.field}` : l.kind === "route" ? l.route : `events ${l.template}`;
-const line = (c: Candidate): string =>
+export const candidateLine = (c: Candidate): string =>
   `  ${c.file} ${c.pointer} ${c.op}${c.op === "set" ? ` ${JSON.stringify(c.value)}` : ""} · ${c.ids.length} divergences, value seen at ${c.evidence.occurrences} occurrences in ${c.evidence.seqs.length} sequences`;
 
 /** The human-readable plan (and what --apply did). */
@@ -165,7 +176,7 @@ export function planText(r: AlignResult): string {
     `gate: ${g.evaluations} score-twin runs after the baseline · accepted ${g.accepted.length} · blocked-by-code ${g.blocked.length} · rejected ${g.rejected.length}` + (g.notGated.length ? ` · not gated ${g.notGated.length} (--max-batches)` : ""),
     `after: ${split(g.after)}`,
   ];
-  const list = (title: string, js: Candidate[]) => js.length && out.push(`${title}:`, ...js.map(line));
+  const list = (title: string, js: Candidate[]) => js.length && out.push(`${title}:`, ...js.map(candidateLine));
   list("accepted", g.accepted.map((j) => j.candidate));
   list("blocked-by-code (no effect: handler code decides the value)", g.blocked.map((j) => j.candidate));
   list("rejected (made train or held-out worse)", g.rejected.map((j) => j.candidate));

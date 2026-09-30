@@ -1,10 +1,14 @@
 // Assisted patches (decision 0002 §3): for the top K non-mechanical train loci (the plan's not-mechanical loci and its
 // blocked-by-code candidates), the LLM sees the behavior module owning the route, a normalized counterexample from the
 // smallest train sequence showing the locus, and the divergences; it returns one replaced file under src/twin/. The
-// reply is gated in a temp copy (held-out L3 must not drop, train divergences must fall, one of the locus's own must
-// go) inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no pass. A pass becomes a branch align/assisted-<date>-<n> built in a separate worktree, pushed, and a draft PR; the
-// sealed log gets a `patch` entry {class: "assisted", status: "proposed"}. Nothing here merges: merging is a review
-// step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM.
+// reply is gated in a temp copy inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no
+// pass. The mechanical pass runs on top of the code change there (train only, data files only, index.ts mechanical)
+// and the combination is gated (gate.ts gatePaired: held-out L3 must not drop, train divergences must fall, one of the
+// locus's own must go), so a change that exposes template fields is not judged without the data edits fixing them. A
+// pass becomes a branch align/assisted-<date>-<n> built in a separate worktree (the code change, then the data edits,
+// as two commits), pushed, and a draft PR; the sealed log gets a `patch` entry {class: "assisted", status: "proposed"}
+// scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
+// merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,11 +19,11 @@ import { normalizeRecording } from "../bench/normalize.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
 import type { Route } from "../twin/server.ts";
-import { dockerCheck, evalOf, scores, scoreTwinIn, type Eval, type Run, type Scores } from "./gate.ts";
-import { split, where, type AlignResult } from "./index.ts";
+import { applyEdits, dockerCheck, evalOf, gatePaired, scores, scoreTwinIn, type Run, type Scores } from "./gate.ts";
+import { candidateLine, editOf, mechanical, split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
-import { FRAUD_OR_RISK, locusKey } from "./patch.ts";
+import { FRAUD_OR_RISK, locusKey, type Candidate } from "./patch.ts";
 import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
 
 export type { Run } from "./gate.ts";
@@ -137,7 +141,8 @@ FILE: <path as shown>
 <the entire file>
 \`\`\`
 2. Change behavior only as far as the counterexample shows; keep every other route, export and import working.
-3. Clean room: write original code from the evidence shown. Do not use, recall or reproduce code from any third-party emulator or mock of this API (such as stripe-mock or localstripe) or from any other twin.`;
+3. Clean room: write original code from the evidence shown. Do not use, recall or reproduce code from any third-party emulator or mock of this API (such as stripe-mock or localstripe) or from any other twin.
+4. Build every API object you add or return, nested ones too, with \`ctx.build(type, computed)\` and set only what the handler computes; never write an object's fields as a literal. After your change, a mechanical pass fixes the templates' field values against the oracle, so a template field that differs from the counterexample is fixed there, not in code.`;
 
 /** The user message: the files, the counterexample, the instruction. */
 const userPrompt = (files: { path: string; source: string }[], ce: Counterexample): string =>
@@ -158,24 +163,30 @@ export function parseReply(text: string, allowed: string[]): { file: string; con
   return { file: files[0]!, content: blocks[0]! };
 }
 
-/** The gate's single-edit rule (gate.ts): one of the locus's own divergences goes, held-out L3 holds, train divergences fall. */
-const passes = (before: Eval, after: Eval, ids: string[]): boolean =>
-  ids.some((id) => !after.ids.has(id)) && after.heldOut.L3.k >= before.heldOut.L3.k && after.trainDivergences < before.trainDivergences;
-
-/** score-twin with `file` replaced, in a temp copy of the repo, in the container (`run` runs docker). */
-function scoreWith(repo: string, oraclePath: string, file: string, content: string, run: Run): Eval {
+/**
+ * The code change paired with the mechanical pass on top of it, in a temp copy of the repo with `file` replaced, every
+ * score-twin in the container (`run` runs docker): `code` is the change's own score, `data` the gate of the data edits
+ * from there, `pass` the combination's verdict against `r.baseline` (gate.ts gatePaired).
+ */
+function scorePaired(r: AlignResult, repo: string, oraclePath: string, file: string, content: string, ids: string[], run: Run) {
   const tmp = mkdtempSync(join(tmpdir(), "parity-assist-"));
   try {
     for (const p of ["src", "templates", "package.json"]) cpSync(join(repo, p), join(tmp, p), { recursive: true });
     writeFileSync(join(tmp, file), content);
-    return evalOf(scoreTwinIn(tmp, oraclePath, [], false, run).json);
+    // ponytail: re-gates every candidate the pass proposes, the ones the plan already rejected on HEAD too (docker runs
+    // per locus grow with them); skip those if the assisted pass gets slow.
+    const m = mechanical(tmp, oraclePath, r.noiseKeys, run);
+    return { code: m.baseline, ...gatePaired(r.baseline, m.baseline, m.candidates, (edits) => evalOf(scoreTwinIn(tmp, oraclePath, edits, false, run).json), ids) };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-/** Commits `file` on a new branch align/assisted-<date>-<n> from HEAD in a separate worktree, pushes it, opens a draft PR. */
-function openDraftPr(repo: string, run: Run, date: string, file: string, content: string, msg: string, title: string, body: string) {
+/**
+ * On a new branch align/assisted-<date>-<n> from HEAD in a separate worktree: commits `file` (the code change), then
+ * `edits` applied to the data files as a second commit when there are any; pushes it, opens a draft PR.
+ */
+function openDraftPr(repo: string, run: Run, date: string, file: string, content: string, msg: string, edits: { candidates: Candidate[]; msg: string }, title: string, body: string) {
   const prefix = `align/assisted-${date}-`;
   const git = (...args: string[]) => run("git", args, repo);
   const names = [
@@ -193,11 +204,16 @@ function openDraftPr(repo: string, run: Run, date: string, file: string, content
     writeFileSync(join(wt, file), content);
     run("git", ["commit", "-q", "-m", msg, "--", file], wt);
     const commit = run("git", ["rev-parse", "HEAD"], wt);
+    let dataCommit: string | undefined;
+    if (edits.candidates.length) {
+      run("git", ["commit", "-q", "-m", edits.msg, "--", ...applyEdits(wt, edits.candidates)], wt);
+      dataCommit = run("git", ["rev-parse", "HEAD"], wt);
+    }
     run("git", ["push", "-q", "-u", "origin", branch], wt);
     pushed = true;
     const pr = run("gh", ["pr", "create", "--draft", "--head", branch, "--title", title, "--body", body], repo);
     done = true;
-    return { branch, commit, pr };
+    return { branch, commit, pr, dataCommit };
   } finally {
     git("worktree", "remove", "--force", wt);
     rmSync(tmp, { recursive: true, force: true });
@@ -222,7 +238,10 @@ export interface Outcome {
   seq?: string;
   file?: string;
   cost_usd: number;
+  /** The code change's own scores: after = the change alone, before the paired data edits. */
   gate?: { before: Scores; after: Scores };
+  /** The data edits the mechanical pass accepted on top of the change, and the combination's scores. */
+  paired?: { edits: number; after: Scores };
   branch?: string;
   pr?: string;
 }
@@ -317,38 +336,64 @@ export async function assist(
       continue;
     }
     out.file = parsed.file;
-    let after: Eval;
+    const ids = c.divergences.map((d) => divergenceId(d.seq, d.step, d.path));
+    let paired: ReturnType<typeof scorePaired>;
     try {
-      after = scoreWith(o.repo, oraclePath, parsed.file, parsed.content, run);
+      paired = scorePaired(r, o.repo, oraclePath, parsed.file, parsed.content, ids, run);
     } catch (e) {
       Object.assign(out, { result: "gate-failed", detail: (e as Error).message.slice(0, 400) });
       continue;
     }
-    const ids = c.divergences.map((d) => divergenceId(d.seq, d.step, d.path));
-    out.gate = { before: scores(r.baseline), after: scores(after) };
-    if (!passes(r.baseline, after, ids)) {
-      Object.assign(out, { result: "gate-failed", detail: `train divergences ${r.baseline.trainDivergences} -> ${after.trainDivergences}; held-out L3 ${pct(r.baseline.heldOut.L3.p)} -> ${pct(after.heldOut.L3.p)}` });
+    const edits = paired.data.accepted;
+    const g = (out.gate = { before: scores(r.baseline), after: scores(paired.code) });
+    const fin = paired.data.after; // g.after when no data edit was accepted
+    if (edits.length) out.paired = { edits: edits.length, after: fin };
+    const trainTrail = `train divergences ${g.before.trainDivergences} -> ${g.after.trainDivergences}${edits.length ? ` (the code change) -> ${fin.trainDivergences} (with ${edits.length} paired data edits)` : ""}`;
+    if (!paired.pass) {
+      Object.assign(out, { result: "gate-failed", detail: `${trainTrail}; held-out L3 ${pct(g.before.heldOut.L3.p)} -> ${pct(fin.heldOut.L3.p)}` });
       continue;
     }
-    const g = out.gate;
-    const summary = `train divergences ${g.before.trainDivergences} -> ${g.after.trainDivergences}; train L3 ${pct(g.before.train.L3.p)} -> ${pct(g.after.train.L3.p)}; held-out L3 ${pct(g.before.heldOut.L3.p)} -> ${pct(g.after.heldOut.L3.p)}`;
-    // The commit goes public with the repo's history: names and scores only, no response values (0001 C3).
+    const summary = `${trainTrail}; train L3 ${pct(g.before.train.L3.p)} -> ${pct(fin.train.L3.p)}; held-out L3 ${pct(g.before.heldOut.L3.p)} -> ${pct(fin.heldOut.L3.p)}`;
+    // The commits go public with the repo's history: names and scores only, no response values (0001 C3).
     const msg =
       `align: assisted patch to ${parsed.file} (${out.locus})\n\n` +
       `Proposed by ${reply.model} from train sequence ${ce.seq} (steps 0..${ce.last}), sealed log run ${o.runId}; cost_usd ${reply.cost_usd.toFixed(4)}.\n` +
-      `Gate: ${summary}.\nClass assisted (decision 0002 §3): merge only after review (docs/plan/STATUS.md).\n\nCo-Authored-By: ${reply.model} <noreply@anthropic.com>`;
+      `Gate: ${summary}.\nClass assisted (decision 0002 §3): merge only after review (docs/plan/STATUS.md).` +
+      (edits.length ? ` The next commit holds the ${edits.length} data edits the mechanical pass accepted on top of this change (class automatic).` : "") +
+      `\n\nCo-Authored-By: ${reply.model} <noreply@anthropic.com>`;
+    const dataMsg =
+      `align: ${edits.length} automatic patches paired with the assisted patch to ${parsed.file} (${out.locus})\n\n` +
+      `The mechanical pass on top of the previous commit's code change (train sequences only, the same determinism rules, data files only), ` +
+      `gated from the code change's score: train divergences ${g.after.trainDivergences} -> ${fin.trainDivergences}; held-out L3 ${pct(g.after.heldOut.L3.p)} -> ${pct(fin.heldOut.L3.p)}.\n` +
+      `Class automatic (decision 0002 §3), logged with status proposed alongside this draft PR; sealed log run ${o.runId}; oracle ${r.oracle.oracleSeqs} sequences, sha256 ${r.oracle.oracleSha}.`;
     const body = [
       "Assisted patch: class `assisted`, status `proposed` (decision 0002 §3). **Draft: merge only after review** (docs/plan/STATUS.md). Nothing merges it automatically.",
       `- Locus: ${out.locus} (${c.reason}); ${c.divergences.length} train divergences in ${new Set(c.divergences.map((d) => d.seq)).size} sequences`,
       `- File: \`${parsed.file}\` · model ${reply.model} · cost_usd ${reply.cost_usd.toFixed(4)} · sealed log run ${o.runId}`,
       `- Before: ${split(g.before)}`,
-      `- After: ${split(g.after)}`,
+      `- After${edits.length ? " the code change (commit 1, class `assisted`)" : ""}: ${split(g.after)}`,
+      ...(edits.length
+        ? [
+            `- After its ${edits.length} paired data edits (commit 2, class \`automatic\`: the mechanical pass on top of the code change, train sequences only, data files only): ${split(fin)}\n` +
+              edits.map((j) => `  - ${candidateLine(j.candidate).trim()}`).join("\n"),
+          ]
+        : []),
       "> This description holds normalized sandbox response values (decision 0001 C3): delete or scrub it before the repository becomes public.",
       "> CI does not run on this PR when the nightly opened it with the workflow's GITHUB_TOKEN (GitHub starts no workflows for it), and the gate ran score-twin only: run `npx tsc -p tsconfig.json` and `node --test test/*.test.ts` before merging.",
       ce.text,
     ].join("\n\n");
     try {
-      const pr = openDraftPr(o.repo, run, now().toISOString().slice(0, 10), parsed.file, parsed.content, msg, `align: assisted patch to ${parsed.file} (${out.locus})`, body.length > PR_BODY_MAX ? body.slice(0, PR_BODY_MAX) + "\n\n…(truncated)" : body);
+      const { dataCommit, ...pr } = openDraftPr(
+        o.repo,
+        run,
+        now().toISOString().slice(0, 10),
+        parsed.file,
+        parsed.content,
+        msg,
+        { candidates: edits.map((j) => j.candidate), msg: dataMsg },
+        `align: assisted patch to ${parsed.file} (${out.locus})`,
+        body.length > PR_BODY_MAX ? body.slice(0, PR_BODY_MAX) + "\n\n…(truncated)" : body,
+      );
       Object.assign(out, { result: "proposed", ...pr });
       appendLog(log, o.runId, [
         {
@@ -361,12 +406,17 @@ export async function assist(
             sha256: createHash("sha256").update(parsed.content).digest("hex"),
             locus: c.locus,
             evidence: { seq: ce.seq, steps: ce.last + 1, divergences: c.divergences.length, seqs: new Set(c.divergences.map((d) => d.seq)).size },
-            gate: g,
+            gate: g, // after = the code change alone: its divergences removed exclude the data edits'
             model: reply.model,
             cost_usd: reply.cost_usd,
             oracle: r.oracle,
           },
         },
+        // Proposed, not applied: they land only if the PR merges, and the ratio counts merges, never proposals.
+        ...edits.map((j) => ({
+          kind: "patch" as const,
+          data: { class: "automatic", status: "proposed", branch: pr.branch, pr: pr.pr, commit: dataCommit, edit: editOf(j.candidate), locus: j.candidate.locus, evidence: j.candidate.evidence, gate: { before: j.before, after: j.after }, oracle: r.oracle },
+        })),
       ]);
     } catch (e) {
       Object.assign(out, { result: "pr-failed", detail: (e as Error).message.slice(0, 400) });
@@ -380,6 +430,6 @@ export function assistText(a: AssistResult): string {
   if (a.skipped) return `assist: ${a.skipped} (${a.clusters} non-mechanical loci waiting)`;
   return [
     `assist: ${a.outcomes.length} of ${a.clusters} non-mechanical loci tried with ${a.model} · cost_usd ${a.cost_usd.toFixed(4)} this run (daily cap $${a.cap})`,
-    ...a.outcomes.map((x) => `  ${x.result} · ${x.divergences} · ${x.locus}${x.file ? ` · ${x.file}` : ""} · $${x.cost_usd.toFixed(4)}${x.pr ? ` · ${x.pr}` : ""}${x.detail ? ` · ${x.detail}` : ""}`),
+    ...a.outcomes.map((x) => `  ${x.result} · ${x.divergences} · ${x.locus}${x.file ? ` · ${x.file}` : ""}${x.paired ? ` + ${x.paired.edits} paired data edits` : ""} · $${x.cost_usd.toFixed(4)}${x.pr ? ` · ${x.pr}` : ""}${x.detail ? ` · ${x.detail}` : ""}`),
   ].join("\n");
 }

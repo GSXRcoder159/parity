@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
-import { nodeImage } from "../src/align/gate.ts";
+import { nodeImage, type Scores } from "../src/align/gate.ts";
 import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
@@ -38,6 +38,41 @@ async function fakeApi(reply: (n: number) => { status?: number; json: unknown })
 const message = (text: string, usage: Record<string, number> = { input_tokens: 1000, output_tokens: 500 }) => ({
   json: { content: [{ type: "thinking", thinking: "" }, { type: "text", text }], stop_reason: "end_turn", usage },
 });
+
+/**
+ * An oracle: the twin's own recording of customer-crud (train) and subscription-cancel-at-period-end (held out), seeds
+ * 1-2, with every object of each step body (innermost first) passed through `edit`.
+ */
+async function twinOracle(edit: (o: Record<string, unknown>, heldOut: boolean) => Record<string, unknown>): Promise<Recording[]> {
+  const CLOCK = "2026-03-01T00:00:00.000Z";
+  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "oracle", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const walk = (v: unknown, heldOut: boolean): unknown =>
+    Array.isArray(v) ? v.map((x) => walk(x, heldOut)) : v && typeof v === "object" ? edit(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, heldOut)])), heldOut) : v;
+  return recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: walk(s.body, r.heldOut) })) }));
+}
+
+/** A git repo copy of the twin with a bare origin to push to. */
+function gitRepo() {
+  const tmp = mkdtempSync(join(tmpdir(), "pb-assist-"));
+  const repo = join(tmp, "repo");
+  for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "-q", "--bare", join(tmp, "origin.git")]);
+  git("init", "-q");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  git("remote", "add", "origin", join(tmp, "origin.git"));
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  return { repo, git, head: git("rev-parse", "HEAD") };
+}
 
 test("llm: cost from usage, one ledger line per call, text blocks only, temperature 0 only where the model accepts it", async () => {
   const api = await fakeApi(() => message("hello", { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10000 }));
@@ -178,24 +213,9 @@ test("normalizeWithParams: request paths and params normalized like bodies (0001
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {
-  // Oracle: the twin's own recording of customer-crud (train) and subscription-cancel-at-period-end (held out), with
-  // every customer's description set to its name: a per-sequence value no data file can seed, so only code can fix it.
-  const CLOCK = "2026-03-01T00:00:00.000Z";
-  const seqs = buildCorpus(TEMPLATES.filter((t) => ["customer-crud", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
-  const twin = createTwin();
-  const server = await twin.listen(0);
-  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
-  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "oracle", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  const described = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(described);
-    if (!v || typeof v !== "object") return v;
-    const o = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, described(x)]));
-    return o.object === "customer" && !o.deleted ? { ...o, description: o.name ?? null } : o;
-  };
-  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events), steps: r.steps.map((s) => ({ ...s, body: described(s.body) })) }));
+  // Oracle: every customer's description set to its name: a per-sequence value no data file can seed, so only code can
+  // fix it.
+  const oracle = await twinOracle((o) => (o.object === "customer" && !o.deleted ? { ...o, description: o.name ?? null } : o));
   // Fraud and risk fields (0001 R8) in a train response, as a field and nested in another field's value: they must reach
   // neither the prompt nor the PR. Train only: in the held-out customers they would block the L3 match below.
   const RISK = "RISKMARK";
@@ -215,19 +235,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
   const data = mkdtempSync(join(tmpdir(), "pb-assist-data-"));
   writeJsonl(join(data, "oracle.jsonl"), oracle);
 
-  // A git repo copy of the twin with a bare origin to push to.
-  const tmp = mkdtempSync(join(tmpdir(), "pb-assist-"));
-  const repo = join(tmp, "repo");
-  for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
-  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
-  execFileSync("git", ["init", "-q", "--bare", join(tmp, "origin.git")]);
-  git("init", "-q");
-  git("config", "user.email", "test@example.com");
-  git("config", "user.name", "test");
-  git("remote", "add", "origin", join(tmp, "origin.git"));
-  git("add", ".");
-  git("commit", "-q", "-m", "init");
-  const head = git("rev-parse", "HEAD");
+  const { repo, git, head } = gitRepo();
 
   const plan = align({ repo, dataDir: data, runId: "plan" });
   const nm = plan.notMechanical.find((n) => n.locus.kind === "field" && n.locus.objectType === "customer" && n.locus.fieldPath === "description");
@@ -258,11 +266,13 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.ok(o!.gate!.after.trainDivergences < o!.gate!.before.trainDivergences);
     assert.ok(o!.gate!.after.heldOut.L3.k > o!.gate!.before.heldOut.L3.k, "the held-out customers match too");
     assert.match(assistText(ok), /^ {2}proposed · \d+ · customer description · src\/twin\/resources\/customers\.ts · \$0\.0070 · https:\/\/github\.com\/example\/parity\/pull\/7$/m);
-    // The LLM's file was scored only in the container: first a start check of the pinned image, then score-twin there.
+    // The LLM's file was scored only in the container: first a start check of the pinned image, then score-twin there,
+    // with the twin's recordings for the mechanical pass on top of it (which proposes nothing here: no gate run).
     assert.deepEqual(dockerCalls[0], ["run", "--rm", "--network", "none", nodeImage(), "node", "--version"]);
     assert.equal(dockerCalls.length, 2);
     assert.deepEqual(dockerCalls[1]!.slice(0, 4), ["run", "--rm", "--network", "none"]);
-    assert.deepEqual(dockerCalls[1]!.slice(dockerCalls[1]!.indexOf(nodeImage())), [nodeImage(), "node", "src/cli.ts", "score-twin", "--oracle", "/oracle.jsonl", "--json", "/out/score.json"]);
+    assert.deepEqual(dockerCalls[1]!.slice(dockerCalls[1]!.indexOf(nodeImage())), [nodeImage(), "node", "src/cli.ts", "score-twin", "--oracle", "/oracle.jsonl", "--json", "/out/score.json", "--recordings", "/out/twin.jsonl"]);
+    assert.equal(o!.paired, undefined, "no data edit to pair");
 
     // The prompt: the owning module, a train counterexample truncated after its first divergent step, the clean-room
     // rule; nothing from held-out sequences.
@@ -389,4 +399,94 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
   assert.equal(viaCli.status, 0, viaCli.stderr);
   assert.match(viaCli.stdout, /^assist: ANTHROPIC_API_KEY is not set: no LLM call, assisted pass skipped \(1 non-mechanical loci waiting\)$/m);
   assert.equal(readJsonl<LogEntry>(logPath(data)).at(-1)!.kind, "note");
+});
+
+test("assist pairing: a code change the gate rejects alone passes with the data edits the mechanical pass makes on top of it: one PR, two commits, each logged in its class; held-out never feeds a candidate", { timeout: 120_000 }, async () => {
+  // Oracle: every customer carries a cash_balance, which the twin never emits (it holds the customer's id: only code can
+  // build it). Its settings.reconciliation_mode is "manual" in train and "merchant_default" in held-out; the template
+  // says "automatic". Built from the template (PR #4's shape), the object removes one divergence per customer and
+  // exposes one: train does not fall, so the gate alone rejects the honest change.
+  const tpl = JSON.parse(readFileSync(join(REPO, "src/twin/shapes/cash_balance.json"), "utf8"));
+  assert.equal(tpl.settings.reconciliation_mode, "automatic");
+  const oracle = await twinOracle((o, heldOut) =>
+    o.object === "customer" && !o.deleted ? { ...o, cash_balance: { ...tpl, customer: o.id, settings: { ...tpl.settings, reconciliation_mode: heldOut ? "merchant_default" : "manual" } } } : o,
+  );
+  const data = mkdtempSync(join(tmpdir(), "pb-assist-pair-data-"));
+  writeJsonl(join(data, "oracle.jsonl"), oracle);
+  const heldOut = new Set(oracle.filter((r) => r.heldOut).map((r) => r.seq));
+  assert.ok(heldOut.size && heldOut.size < oracle.length);
+  const { repo, git, head } = gitRepo();
+
+  const plan = align({ repo, dataDir: data, runId: "plan" });
+  assert.deepEqual(
+    plan.notMechanical.map((n) => [n.locus, n.reason]),
+    [[{ kind: "field", objectType: "customer", fieldPath: "cash_balance" }, "computed: the value holds a normalization placeholder"]],
+  );
+  assert.deepEqual([plan.candidates, plan.baseline.trainDivergences > 0], [[], true]);
+
+  const FILE = "src/twin/resources/customers.ts";
+  const original = readFileSync(join(repo, FILE), "utf8");
+  const fixed = original.replace(
+    '      return { body: c, emits: [{ type: "customer.created", object: c }] };',
+    '      c.cash_balance = ctx.build("cash_balance", { customer: c.id });\n      return { body: c, emits: [{ type: "customer.created", object: c }] };',
+  );
+  assert.notEqual(fixed, original);
+  const api = await fakeApi(() => message(`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`));
+  const gh: string[][] = [];
+  const dockerCalls: string[][] = [];
+  const docker = fakeDocker(dockerCalls);
+  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/8") : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
+  try {
+    const res = await assist(plan, { repo, dataDir: data, runId: "assist-pair", env: { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url }, run, now: NOW });
+    const [o] = res.outcomes;
+    const n = plan.baseline.trainDivergences;
+    // Alone: n -> n (one divergence per customer removed, one exposed). With the paired data edit: n -> 0.
+    assert.deepEqual([o!.result, o!.gate!.before.trainDivergences, o!.gate!.after.trainDivergences, o!.paired?.edits, o!.paired?.after.trainDivergences], ["proposed", n, n, 1, 0]);
+    assert.ok(o!.paired!.after.heldOut.L3.k >= o!.gate!.before.heldOut.L3.k);
+    assert.match(assistText(res), /^ {2}proposed · \d+ · customer cash_balance · src\/twin\/resources\/customers\.ts \+ 1 paired data edits · \$0\.0070 · https:\/\/github\.com\/example\/parity\/pull\/8$/m);
+    // The prompt steers the model to template builders.
+    assert.match((api.requests[0]!.body as { system: string }).system, /^4\. Build every API object you add or return, nested ones too, with `ctx\.build\(type, computed\)`.*a mechanical pass fixes the templates' field values/m);
+    // Every score of the LLM's code ran in the container: the start check, the code change with recordings, one data batch.
+    assert.deepEqual(dockerCalls.map((a) => [a.slice(0, 4).join(" "), a.includes("score-twin"), a.includes("--recordings")]), [["run --rm --network none", false, false], ["run --rm --network none", true, true], ["run --rm --network none", true, false]]);
+
+    // One draft PR; its branch holds two commits: the code change, then the data edit.
+    const branch = "align/assisted-2026-09-26-1";
+    assert.equal(gh.length, 1);
+    assert.ok(!gh.flat().includes("merge"), "never merges");
+    assert.equal(git("rev-list", "--count", `${head}..${branch}`), "2");
+    assert.equal(git("diff", "--name-only", head, `${branch}~1`), FILE);
+    assert.equal(git("show", `${branch}~1:${FILE}`) + "\n", fixed);
+    assert.equal(git("diff", "--name-only", `${branch}~1`, branch), "src/twin/shapes/cash_balance.json");
+    assert.deepEqual(JSON.parse(git("show", `${branch}:src/twin/shapes/cash_balance.json`)), { ...tpl, settings: { ...tpl.settings, reconciliation_mode: "manual" } });
+    const [codeMsg, dataMsg] = [git("log", "-1", "--format=%B", `${branch}~1`), git("log", "-1", "--format=%B", branch)];
+    assert.match(codeMsg, new RegExp(`^align: assisted patch to src/twin/resources/customers\\.ts \\(customer cash_balance\\)\\n\\n[^]*Gate: train divergences ${n} -> ${n} \\(the code change\\) -> 0 \\(with 1 paired data edits\\);`));
+    assert.match(dataMsg, new RegExp(`^align: 1 automatic patches paired with the assisted patch to src/twin/resources/customers\\.ts \\(customer cash_balance\\)\\n\\n[^]*train divergences ${n} -> 0;`));
+    for (const m of [codeMsg, dataMsg]) assert.ok(!m.includes("manual"), "no response values in the commits");
+    assert.match(git("ls-remote", "--heads", "origin"), /refs\/heads\/align\/assisted-2026-09-26-1$/m);
+    assert.deepEqual([git("rev-parse", "HEAD"), git("status", "--porcelain"), git("worktree", "list").split("\n").length], [head, "", 1]);
+    const body = gh[0]![gh[0]!.indexOf("--body") + 1]!;
+    assert.match(body, /^- After the code change \(commit 1, class `assisted`\): train L1 /m);
+    assert.match(body, /^- After its 1 paired data edits \(commit 2, class `automatic`: [^)]*\): train L1 [^\n]*\n {2}- src\/twin\/shapes\/cash_balance\.json \/settings\/reconciliation_mode set "manual" · \d+ divergences/m);
+
+    // The sealed log: the code change as assisted, scored after it alone (the divergences it removed: n - n = 0), and
+    // the data edit as automatic, gated from that intermediate score (n - 0); both proposed until the PR merges.
+    const log = readJsonl<LogEntry>(logPath(data));
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 3 });
+    assert.deepEqual(log.map((e) => [e.kind, e.data.class, e.data.status, e.data.branch, e.data.commit]), [
+      ["patch", "assisted", "proposed", branch, git("rev-parse", `${branch}~1`)],
+      ["patch", "automatic", "proposed", branch, git("rev-parse", branch)],
+      ["note", undefined, undefined, undefined, undefined],
+    ]);
+    const [assisted, automatic] = log as [LogEntry & { data: { gate: { before: Scores; after: Scores } } }, LogEntry & { data: { gate: { before: Scores; after: Scores }; evidence: { seqs: string[] } } }];
+    assert.deepEqual([assisted.data.gate.before.trainDivergences, assisted.data.gate.after.trainDivergences], [n, n]);
+    assert.deepEqual([automatic.data.gate.before.trainDivergences, automatic.data.gate.after.trainDivergences], [n, 0]);
+    assert.deepEqual([assisted.data.pr, automatic.data.pr, assisted.data.file], ["https://github.com/example/parity/pull/8", "https://github.com/example/parity/pull/8", FILE]);
+    assert.deepEqual(automatic.data.edit, { file: "src/twin/shapes/cash_balance.json", pointer: "/settings/reconciliation_mode", op: "set", value: "manual" });
+    assert.deepEqual(automatic.data.locus, { kind: "field", objectType: "cash_balance", fieldPath: "settings.reconciliation_mode" });
+    // Held-out never feeds a candidate: the value is train's although held-out shows another (read, it would vary and
+    // nothing would pass), and the evidence names train sequences only.
+    assert.ok(automatic.data.evidence.seqs.length && automatic.data.evidence.seqs.every((s) => !heldOut.has(s)), automatic.data.evidence.seqs.join());
+  } finally {
+    api.close();
+  }
 });
