@@ -53,8 +53,8 @@ node evals/h4/run.ts --runs twin,control --agent llm       # the agent's own agr
 node evals/h4/run.ts --agent llm --cap-usd 15 --out reports/h4-<date>
                                                            # the H4 number: twin, control, sandbox (after B1)
 node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2
-                                                           # queued: H4 v2 (Status), only once that UTC
-                                                           # day's nightly publish entry exists
+                                                           # H4 v2 (run 2026-09-30, Status), only once that
+                                                           # UTC day's nightly publish entry exists
 ```
 
 A full run (twin, control, sandbox) is up to 240 × 12 = 2,880 model calls, half again the 1,920 of twin + sandbox alone.
@@ -67,9 +67,30 @@ was refused before its first call. Run H4 only once the day's nightly is publish
 `grep -c '"kind":"publish","data":{"label":"nightly","date":"<UTC date>"' <data dir>/align/log.jsonl` prints at least 1. The
 schedule (07:23 UTC, backup 10:47 UTC) is not a guarantee: GitHub can start scheduled runs late.
 
-## Status (2026-09-29)
+## Status (2026-09-30)
 
-- **H4 v2 (prepared 2026-09-29, not run): `update_subscription` offers `cancel_at_period_end` and
+- **H4 v2 number (80 tasks; run 2026-09-30 13:28–14:25 UTC, after that day's nightly publish entry; LLM agent
+  `claude-sonnet-5`, twin vs control vs sandbox): twin vs sandbox 98.8% (79/80; Wilson 95% CI 93.3%–99.8%) → confirm
+  (≥95%) on the point estimate**; control 100.0% (80/80; CI 95.4%–100.0%), noise floor 0.0%. Runs: twin 80 pass,
+  control 80/0, sandbox 79/1, 0 error. 998 model calls, $11.9413 (H4 cumulative $27.00 of its $50 cap); the sandbox half
+  made 1+483 GET, 535 POST, 21 DELETE. Report: `reports/2026-09-30-h4-v2.md` (+ `.json` with the tool keys), whose
+  "Reading" has the v1-vs-v2 table.
+  - The CI's lower bound is above the 90% stop line for the first time, and below the 95% confirm line, so
+    "inconclusive" is not excluded.
+  - v2 is a changed agent (below), so it does not re-score v1. The twin and `tasks.json` are the same as in v1's
+    80-task run.
+  - The 12-task `cancel_at_period_end` family: v1 7/12 twin vs sandbox, v2 12/12. Every run sent
+    `cancel_at_period_end` on all 12. No run sent `cancel_at`, so v1's `cancel-addon-at-period-end` hypothesis
+    (below) is not tested and that v1 result stays unattributed.
+  - The one disagreement is `preview-seats-within-limit` (twin pass, control pass, sandbox fail): **agent variance,
+    probable.** The control cannot show it, since both twin runs pass. The write had the same keys on all three runs
+    (`subscription`, `items`, `proration_behavior`). The sandbox run made no immediate invoice although the task's
+    arithmetic (at most $40 against a $45 approval) calls for one, and the scripted `always_invoice` call passes this
+    task on both targets. So the agent chose another `proration_behavior` value there. A difference in what it read is
+    not excluded, since values are not logged.
+  - `switch-to-annual` passes on all three runs: every run sent `billing_cycle_anchor`. The twin gap (a swap without
+    the anchor) is unchanged and still pinned in `TWIN_GAPS`.
+- **H4 v2 harness (prepared 2026-09-29): `update_subscription` offers `cancel_at_period_end` and
   `billing_cycle_anchor`, and the report logs every tool call's name and input keys.** This is motivated by the v1
   80-task result below: all 5 twin-vs-sandbox and all 4 twin-vs-control disagreements are in the 12 tasks that need
   `cancel_at_period_end`, which the v1 tool did not offer, so the agent improvised. `billing_cycle_anchor` lets it ask
@@ -79,13 +100,14 @@ schedule (07:23 UTC, backup 10:47 UTC) is not a guarantee: GitHub can start sche
     changed. It was made after seeing v1, so v2 measures a changed agent; it does not re-score v1. v1's numbers (the
     80-task and the 20-task ones below) stay published next to v2's.
   - The twin implements an interval swap only with `billing_cycle_anchor=now` (the `switch-to-annual` gap below). An
-    agent that sends it passes that task on the twin (checked with a scripted call on 2026-09-29); what the sandbox does
-    with it is unobserved. The scripted solution sends no anchor, so `TWIN_GAPS` still pins the gap.
+    agent that sends it passes that task on the twin (checked with a scripted call on 2026-09-29). The sandbox, first
+    observed with it in the v2 run, passes the task's checks too. The scripted solution sends no anchor, so `TWIN_GAPS`
+    still pins the gap.
   - Scripted agent with the v2 tools: 79/80 on the twin and 79/80 on the control (`switch-to-annual` fails, as before).
   - The tool log is `tools` per task and run in the report's `.json`: names and top-level input keys in call order,
     never a value (decision 0001 C3). Attribution reads it instead of guessing.
-  - Queued, no LLM spend before then: `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/<date>-h4-v2`, to be
-    run only once that UTC day's nightly publish entry exists (the ledger paragraph above).
+  - Run on 2026-09-30 (above) with `node evals/h4/run.ts --agent llm --cap-usd 14 --out reports/2026-09-30-h4-v2`,
+    after that UTC day's nightly publish entry (the ledger paragraph above).
 - **Suite expansion to 80 tasks (2026-09-28), because the 20-task CI's lower bound (83.9%) is below the 90% stop line.**
   The 60 new tasks were written before any twin or sandbox result for them (tasks.json sha256 `0d7720d0…` before the
   first run). Scripted agent on the sandbox, the ground truth: 59/60 pass. The one failure was a wrong setup:
@@ -98,7 +120,7 @@ schedule (07:23 UTC, backup 10:47 UTC) is not a guarantee: GitHub can start sche
   twin-vs-sandbox disagreement. The run did not show it on those 8 tasks: they pass on all three runs. That does not
   cover the model's own calls: in the 12-task `cancel_at_period_end` family, where all 5 disagreements are, an
   exploratory call with a parameter the twin does not implement gets the same placeholder refusal.
-- **H4 number (80 tasks; run 2026-09-29 00:01 UTC, LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs
+- **v1 H4 number (80 tasks; run 2026-09-29 00:01 UTC, superseded by v2 above; LLM agent `claude-sonnet-5`, twin vs control vs sandbox): twin vs
   sandbox 93.8% (75/80; Wilson 95% CI 86.2%–97.3%) → inconclusive (90–95%)**; control (twin vs a second twin run)
   95.0% (76/80; CI 87.8%–98.0%), noise floor 5.0%. Runs: twin 75 pass / 5 fail, control 77/3, sandbox 78/2, 0 error.
   1,002 model calls, $12.3094 (run after 00:00 UTC for the daily cap); the sandbox half made 1+474 GET, 534 POST,
