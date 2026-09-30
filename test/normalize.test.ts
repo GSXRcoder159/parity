@@ -276,14 +276,15 @@ test("v1.2: refund destination_details.card reference keys dropped (steps, lists
   assert.deepEqual(a.events[0]!.data.object.destination_details, { type: "card", card: { type: "refund" } });
 });
 
-test("normalizeRecording and normalizeRaw do not mutate the input", () => {
+test("normalizeRecording normalizes step params like bodies, on the bodies' anchor; neither it nor normalizeRaw mutates the input", () => {
   const r = rec([
     step(0, { id: "cus_Ab12Cd34Ef", created: T0 }),
-    step(1, { error: { request_log_url: "https://dashboard.stripe.com/x" } }, 400),
+    { ...step(1, { error: { request_log_url: "https://dashboard.stripe.com/x" } }, 400), params: { customer: "cus_Ab12Cd34Ef", trial_end: T0 + 7200, metadata: { k: "v" } } },
     step(2, { object: "refund", destination_details: { card: { reference: "1", reference_status: "available" } } }),
   ]);
   const before = structuredClone(r);
-  normalizeRecording(r);
+  const n = normalizeRecording(r);
+  assert.deepEqual(n.steps.map((s) => s.params), [undefined, { customer: "<id:cus>", trial_end: "<t:+2h>", metadata: { k: "v" } }, undefined]);
   const raw = normalizeRaw(r);
   assert.deepEqual(r, before);
   assert.deepEqual(raw, before);

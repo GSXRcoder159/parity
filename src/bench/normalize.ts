@@ -181,7 +181,11 @@ export function normalizeRecording(r: Recording): Recording {
   };
 
   const out = structuredClone(r);
-  for (const s of out.steps) s.body = walk(s.body);
+  // Step params by the same rules and the bodies' anchor (they hold resolved ids and run nonces; 0001 C3). Never compared.
+  for (const s of out.steps) {
+    s.body = walk(s.body);
+    if (s.params) s.params = walk(s.params) as Obj;
+  }
   // An event's own `created` stays raw: compare orders events by it (method m2), and events are never compared by value.
   out.events = out.events.map((e) => ({ ...(walk(e) as Recording["events"][number]), created: e.created }));
   return out;

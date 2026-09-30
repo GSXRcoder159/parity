@@ -182,7 +182,7 @@ test("parseReply: one FILE line naming a file shown plus one fenced block, else 
   assert.deepEqual(parseReply("FILE: src/twin/billing.ts\n```ts\n  \n```", allowed), { error: "empty file" });
 });
 
-test("normalizeWithParams: request paths and params normalized like bodies (0001 C3), test tokens kept, bodies' anchor", () => {
+test("normalizeWithParams: request paths and params normalized like bodies (0001 C3; params by normalizeRecording itself), test tokens kept, bodies' anchor", () => {
   const T0 = 1_767_225_600;
   const req = (i: number, method: StepRecord["method"], path: string, params?: Record<string, unknown>, body: unknown = {}): StepRecord => ({ i, method, path, params, status: 200, body, resHeaders: {}, ms: 0 });
   const r: Recording = {
@@ -202,9 +202,9 @@ test("normalizeWithParams: request paths and params normalized like bodies (0001
     [
       ["/v1/customers", { email: "jenny+<run>@example.com" }],
       ["/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: "<id:cus>" }],
-      ["/v1/customers/<id:cus>", {}],
+      ["/v1/customers/<id:cus>", undefined],
       ["/v1/subscriptions/<id:sub>", { trial_end: "<t:+2h>" }],
-      ["/v1/prices/<id:price>", {}],
+      ["/v1/prices/<id:price>", undefined],
     ],
   );
   assert.deepEqual(n.steps.map((s) => s.body), [{ id: "<id:cus>", object: "customer", created: "<t:~0>" }, { id: "<id:pm>" }, {}, {}, {}]);
