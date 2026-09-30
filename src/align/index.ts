@@ -10,7 +10,7 @@ import { contaminated } from "../bench/oracle.ts";
 import type { LevelScores } from "../bench/score.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
-import { applyEdits, evalOf, gate, scoreTwinIn, type Eval, type GateResult, type Judged, type Run, type Scores } from "./gate.ts";
+import { applyEdits, editOf, evalOf, gate, scoreTwinIn, type Eval, type GateResult, type Judged, type Run, type Scores } from "./gate.ts";
 import { appendLog, logPath, provenance, verifyLog, type Kind, type LogData, type Provenance } from "./log.ts";
 import { CATALOG_FILE, SHAPES_DIR, propose, type Candidate, type NotMechanical } from "./patch.ts";
 import { triage, type Locus, type Triaged } from "./triage.ts";
@@ -88,7 +88,6 @@ export function mechanical(root: string, oraclePath: string, noise: Set<string>,
   return { divergences, earliest, candidates, notMechanical, baseline: evalOf(base.json), twin: base.twin! };
 }
 
-export const editOf = (c: Candidate) => ({ file: c.file, pointer: c.pointer, op: c.op, ...(c.op === "set" ? { value: c.value } : {}) });
 const pts = (a: LevelScores, b: LevelScores): string => `${b.L3.p >= a.L3.p ? "+" : ""}${((b.L3.p - a.L3.p) * 100).toFixed(1)} pts`;
 
 /**

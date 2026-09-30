@@ -4,7 +4,8 @@
 // reply is gated in a temp copy inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no
 // pass. The mechanical pass runs on top of the code change there (train only, data files only, index.ts mechanical)
 // and the combination is gated (gate.ts gatePaired: held-out L3 must not drop, train divergences must fall, one of the
-// locus's own must go), so a change that exposes template fields is not judged without the data edits fixing them. A
+// locus's own must go), so a change that exposes template fields is not judged without the data edits fixing them; the
+// plan's own accepted or not-gated edits are never paired (they fix what HEAD already could, not the change's). A
 // pass becomes a branch align/assisted-<date>-<n> built in a separate worktree (the code change, then the data edits,
 // as two commits), pushed, and a draft PR; the sealed log gets a `patch` entry {class: "assisted", status: "proposed"}
 // scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
@@ -19,8 +20,8 @@ import { normalizeRecording } from "../bench/normalize.ts";
 import { readJsonl } from "../jsonl.ts";
 import type { Recording } from "../types.ts";
 import type { Route } from "../twin/server.ts";
-import { applyEdits, dockerCheck, evalOf, gatePaired, scores, scoreTwinIn, type Run, type Scores } from "./gate.ts";
-import { candidateLine, editOf, mechanical, split, where, type AlignResult } from "./index.ts";
+import { applyEdits, dockerCheck, editOf, evalOf, gatePaired, scores, scoreTwinIn, type Run, type Scores } from "./gate.ts";
+import { candidateLine, mechanical, split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
 import { FRAUD_OR_RISK, locusKey, type Candidate } from "./patch.ts";
@@ -173,10 +174,12 @@ function scorePaired(r: AlignResult, repo: string, oraclePath: string, file: str
   try {
     for (const p of ["src", "templates", "package.json"]) cpSync(join(repo, p), join(tmp, p), { recursive: true });
     writeFileSync(join(tmp, file), content);
-    // ponytail: re-gates every candidate the pass proposes, the ones the plan already rejected on HEAD too (docker runs
-    // per locus grow with them); skip those if the assisted pass gets slow.
+    // ponytail: the plan's accepted and not-gated edits are dropped whole (gatePaired `stale`), so when the change also
+    // exposes one's field, those divergences wait for a run after the edit lands. Blocked and rejected ones are re-gated
+    // (docker runs per locus grow with them); skip the rejected if the assisted pass gets slow.
     const m = mechanical(tmp, oraclePath, r.noiseKeys, run);
-    return { code: m.baseline, ...gatePaired(r.baseline, m.baseline, m.candidates, (edits) => evalOf(scoreTwinIn(tmp, oraclePath, edits, false, run).json), ids) };
+    const stale = [...r.gate.accepted.map((j) => j.candidate), ...r.gate.notGated];
+    return { code: m.baseline, ...gatePaired(r.baseline, m.baseline, m.candidates, (edits) => evalOf(scoreTwinIn(tmp, oraclePath, edits, false, run).json), ids, stale) };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

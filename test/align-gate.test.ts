@@ -106,18 +106,41 @@ test("gatePaired (the assisted gate): a code change is judged with the data edit
   const before = ev([...own, other]);
   const code = ev([...exposed, other]); // 3 -> 3: the single-edit rule rejects the change alone
   const mode = cand("src/twin/shapes/cb.json", "/mode", exposed);
-  const p = gatePaired(before, code, [mode], fake([...exposed, other], { "/mode": { fixes: exposed } }).evaluate, own);
+  const p = gatePaired(before, code, [mode], fake([...exposed, other], { "/mode": { fixes: exposed } }).evaluate, own, []);
   assert.equal(p.pass, true);
   assert.deepEqual(p.data.accepted.map((j) => [j.candidate.pointer, j.before.trainDivergences, j.after.trainDivergences]), [["/mode", 3, 1]], "the data edit is gated from the code change's score");
   assert.deepEqual([p.data.before.trainDivergences, p.data.after.trainDivergences, [...p.data.final.ids]], [3, 1, [other]]);
   // No data edit: the change alone fails. A data edit that drops held-out L3 is rejected as in the mechanical gate, so
   // the combination fails too.
-  assert.equal(gatePaired(before, code, [], fake([...exposed, other], {}).evaluate, own).pass, false);
-  const dropping = gatePaired(before, code, [mode], fake([...exposed, other], { "/mode": { fixes: exposed, heldOut: -1 } }).evaluate, own);
+  assert.equal(gatePaired(before, code, [], fake([...exposed, other], {}).evaluate, own, []).pass, false);
+  const dropping = gatePaired(before, code, [mode], fake([...exposed, other], { "/mode": { fixes: exposed, heldOut: -1 } }).evaluate, own, []);
   assert.deepEqual([dropping.pass, dropping.data.rejected.length], [false, 1]);
   // The combination must remove one of the locus's own divergences, not only fall.
   const elsewhere = cand("src/twin/shapes/o.json", "/x", [other]);
-  assert.equal(gatePaired(before, before, [elsewhere], fake([...own, other], { "/x": { fixes: [other] } }).evaluate, own).pass, false);
+  assert.equal(gatePaired(before, before, [elsewhere], fake([...own, other], { "/x": { fixes: [other] } }).evaluate, own, []).pass, false);
+});
+
+test("gatePaired: the plan's own edits (accepted but unapplied, or not gated) are never paired, so they cannot carry a change that makes train worse", () => {
+  // PR #4 fix round 1: baseline 7 (2 of the locus's own + 5 pre-existing, each fixable by an edit the plan accepted on
+  // HEAD but did not apply); the code change removes one of its own and adds 3 non-mechanical ones: 7 -> 9.
+  const own = ["s#1|0|$.cb", "s#2|0|$.cb"];
+  const pre = [1, 2, 3, 4, 5].map((i) => `p#${i}|0|$.p${i}`);
+  const added = [1, 2, 3].map((i) => `n#${i}|0|$.n`);
+  const ev = (ids: string[]): Eval => ({ train: levels(100 - ids.length), heldOut: levels(10), trainDivergences: ids.length, ids: new Set(ids) });
+  const before = ev([...own, ...pre]);
+  const code = ev([own[1]!, ...pre, ...added]);
+  const plan = pre.map((id, i) => cand("src/twin/shapes/p.json", `/p${i + 1}`, [id]));
+  const effects = Object.fromEntries(plan.map((c) => [c.pointer, { fixes: c.ids }]));
+  // Unfiltered, the 5 unrelated edits bring the bundle to 4 < 7 and it would pass.
+  assert.deepEqual([gatePaired(before, code, plan, fake([own[1]!, ...pre, ...added], effects).evaluate, own, []).pass], [true]);
+  const { evaluate, calls } = fake([own[1]!, ...pre, ...added], effects);
+  const p = gatePaired(before, code, plan, evaluate, own, plan);
+  assert.deepEqual([p.pass, p.data.accepted.length, p.data.final.trainDivergences, calls], [false, 0, 9, []], "the plan's edits are never evaluated, and 9 > 7 fails");
+  // Matched by file, pointer, op and value: the same pointer with another value is the change's to gate.
+  const other = { ...plan[0]!, value: 2 };
+  const q = fake([own[1]!, ...pre, ...added], effects);
+  gatePaired(before, code, [other], q.evaluate, own, plan);
+  assert.deepEqual(q.calls, [["/p1"]]);
 });
 
 test("scoreTwinIn: the score-twin child (gate and assisted pass) gets PATH, HOME and CI only, and reads only its copy and the oracle", () => {

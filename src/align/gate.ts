@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { SeqResult } from "../bench/compare.ts";
 import type { LevelScores, Score } from "../bench/score.ts";
 import { readJsonl } from "../jsonl.ts";
@@ -203,14 +204,21 @@ export function gate(candidates: Candidate[], evaluate: (edits: Edit[]) => Eval,
   return out;
 }
 
+/** An edit as logged: file, pointer, op and the value it sets (evidence and targets left out). */
+export const editOf = (c: Edit) => ({ file: c.file, pointer: c.pointer, op: c.op, ...(c.op === "set" ? { value: c.value } : {}) });
+
 /**
  * The assisted gate (assist.ts) on a code change scored `code` (from `before`): the mechanical candidates proposed on
  * top of it are gated from `code` as above (`data.before` is the code change's own score), then the combination must
  * pass the single-edit rule against `before`: one of the locus's own divergences `ids` goes, held-out L3 does not
  * drop, train divergences fall. So a code change that exposes template fields is judged with the data edits fixing them.
+ * A candidate equal (editOf) to one of `stale`, the plan's own edits on HEAD (accepted, or left ungated by --max-batches),
+ * is never paired: it fixes what HEAD already could, so it is not the change's to credit, and bundled it could carry a
+ * change that makes train worse on its own. Blocked and rejected candidates stay (the code change can unblock them).
  */
-export function gatePaired(before: Eval, code: Eval, candidates: Candidate[], evaluate: (edits: Edit[]) => Eval, ids: string[]): { data: GateResult; pass: boolean } {
-  const data = gate(candidates, evaluate, { before: code });
+export function gatePaired(before: Eval, code: Eval, candidates: Candidate[], evaluate: (edits: Edit[]) => Eval, ids: string[], stale: Edit[]): { data: GateResult; pass: boolean } {
+  const old = stale.map(editOf);
+  const data = gate(candidates.filter((c) => !old.some((e) => isDeepStrictEqual(e, editOf(c)))), evaluate, { before: code });
   const c = data.final;
   return { data, pass: ids.some((id) => !c.ids.has(id)) && c.heldOut.L3.k >= before.heldOut.L3.k && c.trainDivergences < before.trainDivergences };
 }

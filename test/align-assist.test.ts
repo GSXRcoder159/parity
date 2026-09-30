@@ -8,10 +8,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
-import { nodeImage, type Scores } from "../src/align/gate.ts";
+import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
+import type { Locus } from "../src/align/triage.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, runNonce, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
@@ -486,6 +487,16 @@ test("assist pairing: a code change the gate rejects alone passes with the data 
     // Held-out never feeds a candidate: the value is train's although held-out shows another (read, it would vary and
     // nothing would pass), and the evidence names train sequences only.
     assert.ok(automatic.data.evidence.seqs.length && automatic.data.evidence.seqs.every((s) => !heldOut.has(s)), automatic.data.evidence.seqs.join());
+
+    // The plan's own edits are never paired (gatePaired `stale`, fake scores in align-gate.test.ts). The wiring: a plan
+    // (synthesized here) that already accepted this very data edit on HEAD without applying it leaves the change alone,
+    // n -> n, and it fails with no data batch scored and no second PR.
+    const edit = automatic.data.edit as { file: string; pointer: string; op: "set"; value: unknown };
+    const stale: Judged = { candidate: { ...edit, locus: automatic.data.locus as Locus, evidence: { occurrences: 1, seqs: [] }, ids: [] }, before: plan.gate.before, after: plan.gate.after };
+    const calls = dockerCalls.length;
+    const again = await assist({ ...plan, gate: { ...plan.gate, accepted: [stale] } }, { repo, dataDir: data, runId: "assist-stale", env: { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url }, run, now: NOW });
+    assert.deepEqual([again.outcomes[0]!.result, again.outcomes[0]!.paired, gh.length, dockerCalls.length - calls], ["gate-failed", undefined, 1, 2]);
+    assert.match(again.outcomes[0]!.detail!, new RegExp(`^train divergences ${n} -> ${n}; held-out L3 `));
   } finally {
     api.close();
   }
