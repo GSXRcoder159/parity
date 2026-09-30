@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { sh } from "../src/align/assist.ts";
 import { applyEdits, gate, gatePaired, nodeImage, scoreTwinIn, type Eval, type Run } from "../src/align/gate.ts";
-import { align, planText } from "../src/align/index.ts";
+import { align, mechanical, planText } from "../src/align/index.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import type { Candidate, Edit } from "../src/align/patch.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
@@ -359,4 +359,31 @@ test("align end to end: a value the oracle shows at every train occurrence is pr
   assert.deepEqual(log[0]!.data.edit, { file: "src/twin/shapes/customer.json", pointer: "/tax_exempt", op: "set", value: "reverse" });
   assert.deepEqual(log.map((e) => e.data.commit), [done.applied?.commit, done.applied?.commit], "every entry names the commit that landed its patch");
   assert.equal(log[0]!.data.oracle.oracleSeqs, oracle.length);
+});
+
+test("mechanical: the echo check reads the request as sent: a message quoting an integer timestamp param is request-derived, never a constant", { timeout: 60_000 }, async () => {
+  // Oracle: the twin's own resource-missing run, with every resource_missing message quoting a trial_end the request
+  // sent. A `created` anchors timestamps, so normalization would turn the param into <t:...> (the message keeps digits).
+  const TS = 1767232800;
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(buildCorpus(TEMPLATES.filter((t) => t.name === "resource-missing"), [1, 2]), target, { concurrency: 2, runId: "oracle" }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const missing = (s: { resHeaders: Record<string, string> }) => s.resHeaders["parity-error-key"] === "resource_missing";
+  const oracle = recordings.map((r) => ({
+    ...r,
+    steps: r.steps.map((s, i) =>
+      missing(s) ? { ...s, params: { ...s.params, trial_end: TS }, body: { error: { ...(s.body as { error: object }).error, message: `No trial ending ${TS}.` }, ...(i ? {} : { created: TS - 7200 }) } } : s,
+    ),
+  }));
+  assert.ok(oracle.every((r) => r.steps[0] && missing(r.steps[0])));
+  const data = mkdtempSync(join(tmpdir(), "pb-echo-"));
+  writeJsonl(join(data, "oracle.jsonl"), oracle);
+  const m = mechanical(REPO, join(data, "oracle.jsonl"), new Set());
+  const message = (l: { kind: string; errorKey?: string; field?: string }) => l.kind === "error" && l.errorKey === "resource_missing" && l.field === "message";
+  assert.deepEqual(m.candidates.filter((c) => message(c.locus)), []);
+  assert.deepEqual(m.notMechanical.filter((n) => message(n.locus)).map((n) => n.reason), ["request-derived: the message quotes a request parameter value"]);
 });

@@ -181,7 +181,8 @@ export function normalizeRecording(r: Recording): Recording {
   };
 
   const out = structuredClone(r);
-  // Step params by the same rules and the bodies' anchor (they hold resolved ids and run nonces; 0001 C3). Never compared.
+  // Step params by the same rules and the bodies' anchor (they hold resolved ids and run nonces; 0001 C3). compare.ts never
+  // reads them; align's echo check (propose) needs them raw, so align's mechanical() puts the raw ones back.
   for (const s of out.steps) {
     s.body = walk(s.body);
     if (s.params) s.params = walk(s.params) as Obj;

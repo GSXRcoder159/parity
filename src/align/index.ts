@@ -84,7 +84,13 @@ export function mechanical(root: string, oraclePath: string, noise: Set<string>,
   const { divergences, earliest } = triage(base.json.results, noise, recs, base.twin!);
   const catalog = JSON.parse(readFileSync(join(root, CATALOG_FILE), "utf8"));
   const shape = (t: string) => /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(join(root, SHAPES_DIR, `${t}.json`));
-  const { candidates, notMechanical } = propose(divergences, recs.map(normalizeRecording), base.twin!, noise, { shape, catalog });
+  // Normalized bodies, raw params: the echo check reads the request as sent (a normalized timestamp hides its digits).
+  const oracle = recs.map((r) => {
+    const n = normalizeRecording(r);
+    for (const [i, s] of n.steps.entries()) s.params = r.steps[i]!.params;
+    return n;
+  });
+  const { candidates, notMechanical } = propose(divergences, oracle, base.twin!, noise, { shape, catalog });
   return { divergences, earliest, candidates, notMechanical, baseline: evalOf(base.json), twin: base.twin! };
 }
 

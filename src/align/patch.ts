@@ -144,8 +144,8 @@ function messageTemplate(message: string, vars: Record<string, string>): string 
 export const locusKey = (l: Locus): string => JSON.stringify(l.kind === "events" ? { kind: "events", template: l.template } : l);
 
 /**
- * Candidates from the train divergences of `divergences`, checked against the train sequences of `oracle` (normalized)
- * and `twin` (raw, for its error keys and rendered vars). Held-out sequences are dropped here, before anything is read.
+ * Candidates from the train divergences of `divergences`, checked against the train sequences of `oracle` (normalized
+ * bodies, raw params: the echo check reads the request as sent) and `twin` (raw, for its error keys and rendered vars). Held-out sequences are dropped here, before anything is read.
  */
 export function propose(
   divergences: Triaged[],
