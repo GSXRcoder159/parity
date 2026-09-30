@@ -53,7 +53,8 @@ export type Coverage = { seqs: number; oracleSeqs: number; templates: number; or
 export type Noise = { overall: LevelScores; byStratum: Record<string, LevelScores> };
 /**
  * Cumulative since the scaffold freeze, from the sealed log, per class. Patches (H2's unit): automatic = JSON-pointer
- * edits applied, assisted = PRs merged. Train divergences removed: the held-out gate's train count before minus after.
+ * edits applied (by align --apply, or paired with an assisted PR that merged), assisted = PRs merged. Train divergences
+ * removed: the held-out gate's train count before minus after.
  */
 export type Patches = { automatic: number; assisted: number };
 
@@ -190,14 +191,25 @@ function surfaceAdded(log: string): string[] {
 }
 
 /**
- * Cumulative align-loop patches in the sealed log (decision 0002 §3): `automatic` entries applied (by align --apply,
- * in a nightly or by hand) and `assisted` entries merged. Totals, not a per-night window: a patch applied outside the
- * nightly still counts, and a rerun of a night cannot count one twice.
+ * An assisted PR's key, the same from its merge entry (pr: number) and its paired data edits' entries (pr: the URL gh
+ * printed): a branch name can come back after a closed PR's branch is deleted, a PR number cannot.
  */
+const prKey = (d: Record<string, unknown>): string => `${String(d.branch)}#${String(d.pr).split("/").pop()}`;
+
+/**
+ * Cumulative align-loop patches in the sealed log (decision 0002 §3): `automatic` entries applied (by align --apply,
+ * in a nightly or by hand) or proposed as an assisted PR's paired data edits (assist.ts) once that PR merged, and
+ * `assisted` entries merged. Totals, not a per-night window: a patch applied outside the nightly still counts, and a
+ * rerun of a night cannot count one twice.
+ */
+// ponytail: the merged PR is the unit: a merge that dropped or edited its data commit still counts its paired edits;
+// check the merged tree's diff (gh pr view --json files) if a reviewer ever merges the code commit alone.
 export function patchTotals(log: string): Patches {
-  const entries = existsSync(log) ? readJsonl<LogEntry>(log) : [];
-  const n = (cls: string, status: string) => entries.filter((e) => e.kind === "patch" && e.data.class === cls && e.data.status === status).length;
-  return { automatic: n("automatic", "applied"), assisted: n("assisted", "merged") };
+  const entries = (existsSync(log) ? readJsonl<LogEntry>(log) : []).filter((e) => e.kind === "patch").map((e) => e.data);
+  const n = (cls: string, status: string) => entries.filter((d) => d.class === cls && d.status === status);
+  const merged = n("assisted", "merged");
+  const landed = new Set(merged.map(prKey));
+  return { automatic: n("automatic", "applied").length + n("automatic", "proposed").filter((d) => landed.has(prKey(d))).length, assisted: merged.length };
 }
 
 /** One row of the public changelog, site/data/changelog.json (the page's contract, site/app.js). No values (0001 C3). */
@@ -213,7 +225,7 @@ export interface Change {
   pr?: number;
   /** surface-added: what the scaffold work added. */
   note?: string;
-  /** automatic, surface-added: the parity commit. */
+  /** automatic, surface-added: the parity commit (none for an assisted PR's paired batch: a squash merge drops it). */
   commit?: string;
   /** Train divergences removed: the gate's before minus after (surface-added: its before/after; negative = added). */
   divergencesRemoved?: number;
@@ -225,7 +237,8 @@ const removed = (g: Counts | undefined): number | undefined => (g?.before && g.a
 /**
  * The public changelog from the sealed log's patch entries, in log order: automatic patches per held-out gate batch
  * (a batch's edits share its before and after, gate.ts, so the batch is the unit that removed divergences), merged
- * assisted PRs (joined with their proposal by branch for the file and gate counts) and surface-added entries.
+ * assisted PRs (joined with their proposal by branch for the file and gate counts), each followed by its paired data
+ * edits' batches (automatic, proposed with the PR, dated by the merge), and surface-added entries.
  * Pointers into fraud or risk fields are withheld and counted, as drift does (0001 R8): the first align run (8bbf612)
  * seeded two `radar_options` keys, before patch.ts refused fraud or risk loci.
  */
@@ -234,24 +247,30 @@ export function changelog(log: string): Change[] {
   const rows: Change[] = [];
   const batches = new Map<string, Change>();
   const proposed = new Map<string | undefined, Patch>();
+  const paired = new Map<string, { runId: string; d: Patch }[]>();
+  const automatic = (runId: string, d: Patch, date: string, commit = d.commit): void => {
+    const key = [runId, d.branch, d.edit?.file, d.gate?.before?.trainDivergences, d.gate?.after?.trainDivergences].join("|");
+    let row = batches.get(key);
+    if (!row) {
+      row = { date, class: "automatic", file: d.edit?.file, pointers: [], ...(commit && { commit }), divergencesRemoved: removed(d.gate) };
+      batches.set(key, row);
+      rows.push(row);
+    }
+    if (d.edit?.pointer.split("/").some((s) => FRAUD_OR_RISK.has(s))) row.withheld = (row.withheld ?? 0) + 1;
+    else if (d.edit) row.pointers!.push(d.edit.pointer);
+  };
   for (const e of existsSync(log) ? readJsonl<LogEntry>(log) : []) {
     if (e.kind !== "patch") continue;
     const d = e.data as Patch;
-    const date = e.ts.slice(0, 10);
-    if (d.class === "automatic" && d.status === "applied") {
-      const key = [e.runId, d.edit?.file, d.gate?.before?.trainDivergences, d.gate?.after?.trainDivergences].join("|");
-      let row = batches.get(key);
-      if (!row) {
-        row = { date, class: "automatic", file: d.edit?.file, pointers: [], commit: d.commit, divergencesRemoved: removed(d.gate) };
-        batches.set(key, row);
-        rows.push(row);
-      }
-      if (d.edit?.pointer.split("/").some((s) => FRAUD_OR_RISK.has(s))) row.withheld = (row.withheld ?? 0) + 1;
-      else if (d.edit) row.pointers!.push(d.edit.pointer);
-    } else if (d.class === "assisted" && d.status === "proposed") proposed.set(d.branch, d);
+    const date = (d.mergedAt ?? e.ts).slice(0, 10);
+    if (d.class === "automatic" && d.status === "applied") automatic(e.runId, d, date);
+    else if (d.class === "automatic" && d.status === "proposed") paired.set(prKey(d), [...(paired.get(prKey(d)) ?? []), { runId: e.runId, d }]);
+    else if (d.class === "assisted" && d.status === "proposed") proposed.set(d.branch, d);
     else if (d.class === "assisted" && d.status === "merged") {
       const p = proposed.get(d.branch); // ponytail: a merge whose proposal is not logged gets no file or count
-      rows.push({ date: (d.mergedAt ?? e.ts).slice(0, 10), class: "assisted", pr: d.pr, ...(p && { file: p.file, divergencesRemoved: removed(p.gate) }) });
+      rows.push({ date, class: "assisted", pr: d.pr, ...(p && { file: p.file, divergencesRemoved: removed(p.gate) }) });
+      // Its data edits landed with it. Their logged commit is the branch's, not on main after a squash merge: no commit.
+      for (const x of paired.get(prKey(d)) ?? []) automatic(x.runId, x.d, date, "");
     } else if (d.class === "surface-added") rows.push({ date, class: "surface-added", note: d.note, commit: d.commit, divergencesRemoved: removed(d) });
   }
   return rows;

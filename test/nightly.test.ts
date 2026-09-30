@@ -12,7 +12,7 @@ import { nightShare, projectedGets } from "../src/bench/budget.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
-import { ceilingText, changelog, logMerged, nightly, nightlyCommand, nightlyText, removedTotals } from "../src/nightly.ts";
+import { ceilingText, changelog, logMerged, nightly, nightlyCommand, nightlyText, patchTotals, removedTotals } from "../src/nightly.ts";
 import { NORMALIZATION_VERSION } from "../src/bench/normalize.ts";
 import { createTwin } from "../src/twin/server.ts";
 import type { Recording } from "../src/types.ts";
@@ -65,12 +65,20 @@ test("ceilingText: the public commit message names a pair's coverage, and a pair
   assert.equal(ceilingText(noise, 88, false), "no whole-corpus noise ceiling (the pair covers 60 of 88 sequences: L3 95.0% on those)");
 });
 
-test("changelog: automatic patches per gate batch, merged PRs joined with their proposal, surface-added with its delta; fraud or risk pointers counted, never named", () => {
+test("changelog: automatic patches per gate batch, merged PRs joined with their proposal and followed by their paired data edits' batches, surface-added with its delta; fraud or risk pointers counted, never named", () => {
   const log = join(mkdtempSync(join(tmpdir(), "pb-changelog-")), "align/log.jsonl");
   const n = (d: number) => ({ trainDivergences: d });
   const auto = (file: string, pointer: string, before: number, after: number) => ({ kind: "patch" as const, data: { class: "automatic", status: "applied", commit: "c1", edit: { file, pointer, op: "set", value: "SECRET_VALUE" }, gate: { before: n(before), after: n(after) }, oracle: ORACLE } });
   appendLog(log, "run-1", [auto("a.json", "/x", 100, 90), auto("a.json", "/radar_options", 100, 90), auto("a.json", "/y", 100, 90), auto("a.json", "/z", 90, 88), auto("b.json", "/w", 88, 80), { kind: "gate", data: { oracle: ORACLE } }], "2026-10-01T07:00:00.000Z");
-  appendLog(log, "run-2", [{ kind: "patch", data: { class: "assisted", status: "proposed", branch: "align/assisted-2026-10-02-1", pr: "https://github.com/x/y/pull/7", file: "src/twin/resources/customers.ts", gate: { before: n(80), after: n(71) }, oracle: ORACLE } }], "2026-10-02T07:00:00.000Z");
+  // PR #7's paired data edits (assist.ts: automatic, proposed, the branch's commit), and closed #6's under the same branch name.
+  const paired = (pr: number, pointer: string) => ({ kind: "patch" as const, data: { class: "automatic", status: "proposed", branch: "align/assisted-2026-10-02-1", pr: `https://github.com/x/y/pull/${pr}`, commit: "c3", edit: { file: "c.json", pointer, op: "set", value: "SECRET_VALUE" }, gate: { before: n(71), after: n(66) }, oracle: ORACLE } });
+  appendLog(log, "run-2", [
+    { kind: "patch", data: { class: "assisted", status: "proposed", branch: "align/assisted-2026-10-02-1", pr: "https://github.com/x/y/pull/7", file: "src/twin/resources/customers.ts", gate: { before: n(80), after: n(71) }, oracle: ORACLE } },
+    paired(7, "/v"),
+    paired(7, "/radar_options"),
+    paired(6, "/u"),
+  ], "2026-10-02T07:00:00.000Z");
+  assert.deepEqual(patchTotals(log), { automatic: 5, assisted: 0 }, "proposed edits count only once their PR merged");
   appendLog(log, "run-3", [
     { kind: "patch", data: { class: "assisted", status: "merged", pr: 7, branch: "align/assisted-2026-10-02-1", mergedAt: "2026-10-03T12:00:00Z", oracle: ORACLE } },
     { kind: "patch", data: { class: "surface-added", status: "applied", note: "invoices", commit: "c2", before: n(71), after: n(75), oracle: ORACLE } },
@@ -81,10 +89,12 @@ test("changelog: automatic patches per gate batch, merged PRs joined with their 
     { date: "2026-10-01", class: "automatic", file: "a.json", pointers: ["/z"], commit: "c1", divergencesRemoved: 2 },
     { date: "2026-10-01", class: "automatic", file: "b.json", pointers: ["/w"], commit: "c1", divergencesRemoved: 8 },
     { date: "2026-10-03", class: "assisted", pr: 7, file: "src/twin/resources/customers.ts", divergencesRemoved: 9 },
+    { date: "2026-10-03", class: "automatic", file: "c.json", pointers: ["/v"], withheld: 1, divergencesRemoved: 5 },
     { date: "2026-10-04", class: "surface-added", note: "invoices", commit: "c2", divergencesRemoved: -4 },
   ]);
   assert.doesNotMatch(JSON.stringify(rows), /SECRET_VALUE|radar/);
-  assert.deepEqual(removedTotals(rows), { automatic: 20, assisted: 9 }, "surface-added counts as neither");
+  assert.deepEqual(removedTotals(rows), { automatic: 25, assisted: 9 }, "surface-added counts as neither");
+  assert.deepEqual(patchTotals(log), { automatic: 7, assisted: 1 }, "#7's 2 paired edits, not closed #6's");
 });
 
 test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run writes nothing; recordings and ledger are pushed before a later failure; the real run scores the existing oracle, aligns, notes drift, publishes a point the page reads, commits and pushes both repos (parity first); the next night annotates only what is new and replaces a same-date point", { timeout: 180_000 }, async () => {
@@ -121,6 +131,19 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     { kind: "score", data: { label: "day-0", oracle: ORACLE } },
     { kind: "patch", data: { class: "automatic", status: "applied", commit: "0".repeat(40), oracle: ORACLE } }, // a manual align --apply
     { kind: "patch", data: { class: "surface-added", status: "applied", note: "test clocks", oracle: ORACLE } },
+  ]);
+  // An assist run's proposals, as assist.ts logs them: PR #7's code change (14 -> 12) and its 2 paired data edits (one
+  // gate batch, 12 -> 9); the still-open #8's paired edit; and closed #6's, whose deleted branch name #7 reused. Only
+  // #7's count, once it merges, and once.
+  const url = (n: number) => `https://github.com/x/parity/pull/${n}`;
+  const count = (d: number) => ({ trainDivergences: d });
+  const paired = (branch: string, n: number, pointer: string) => ({ kind: "patch" as const, data: { class: "automatic", status: "proposed", branch, pr: url(n), commit: "1".repeat(40), edit: { file: "src/twin/shapes/cash_balance.json", pointer, op: "set", value: "PAIRED_VALUE" }, gate: { before: count(12), after: count(9) }, oracle: ORACLE } });
+  appendLog(logPath(data), "assist-0", [
+    { kind: "patch", data: { class: "assisted", status: "proposed", branch: "align/assisted-2026-10-02-1", pr: url(7), commit: "2".repeat(40), file: "src/twin/resources/customers.ts", gate: { before: count(14), after: count(12) }, oracle: ORACLE } },
+    paired("align/assisted-2026-10-02-1", 7, "/settings/reconciliation_mode"),
+    paired("align/assisted-2026-10-02-1", 7, "/livemode"),
+    paired("align/assisted-2026-10-03-1", 8, "/currency"),
+    paired("align/assisted-2026-10-02-1", 6, "/description"),
   ]);
   // The data repo's read ledger (it names the account): the gate counts it (dated yesterday by the wall clock: the gate's
   // 30-day window ends at the real now, not at the pipeline's `now`).
@@ -221,19 +244,21 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     assert.deepEqual(at("patch", "pr"), [7]);
     assert.deepEqual(at("note", "drift"), [{ date: "2026-10-04", compared: 0, withheld: 0, reason: "no clean slice recording tonight with a previous recording to compare" }]);
 
-    // The public files: a point with oracleRefreshed false, the surface-added annotation (not counted), the merged PR.
+    // The public files: a point with oracleRefreshed false, the surface-added annotation (not counted), the merged PR
+    // and its 2 paired data edits.
     const site = (f: string) => JSON.parse(readFileSync(join(repo, "site/data", f), "utf8"));
     const curve = site("curve.json");
     assert.equal(curve.length, 1);
     const pt = curve[0];
     // The failed night left a nightly score entry but never published: its surface-added entry is annotated here.
-    // patches: sealed-log totals since the freeze, the manual --apply included.
-    assert.deepEqual([pt.date, pt.normalization, pt.method, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", NORMALIZATION_VERSION, "m2", false, 6, ["surface-added: test clocks"], { automatic: 1, assisted: 1 }, undefined]);
+    // patches: sealed-log totals since the freeze, the manual --apply and #7's 2 paired data edits included.
+    assert.deepEqual([pt.date, pt.normalization, pt.method, pt.oracleRefreshed, pt.oracleSeqs, pt.events, pt.patches, pt.sample], ["2026-10-04", NORMALIZATION_VERSION, "m2", false, 6, ["surface-added: test clocks"], { automatic: 3, assisted: 1 }, undefined]);
     assert.ok(Number.isInteger(pt.oracleMaxAgeDays) && pt.oracleMaxAgeDays === r.oracleMaxAgeDays);
     assert.equal(site("scores/2026-10-04.json").method, "m2");
-    // Train divergences removed per class: the fixture's manual apply and merged PR carry no gate counts.
-    assert.deepEqual([pt.divergencesRemoved, r.divergencesRemoved], [{ automatic: 0, assisted: 0 }, { automatic: 0, assisted: 0 }]);
-    assert.match(text, /^merged align\/assisted-\* PRs newly logged: 1 · since the scaffold freeze \(sealed log\): patches automatic 1 \(JSON-pointer edits\), assisted 1 \(merged PRs\); train divergences removed automatic 0, assisted 0$/m);
+    // Train divergences removed per class: the manual apply carries no gate counts; #7's code change 14 -> 12 is
+    // assisted, its paired batch 12 -> 9 automatic.
+    assert.deepEqual([pt.divergencesRemoved, r.divergencesRemoved], [{ automatic: 3, assisted: 2 }, { automatic: 3, assisted: 2 }]);
+    assert.match(text, /^merged align\/assisted-\* PRs newly logged: 1 · since the scaffold freeze \(sealed log\): patches automatic 3 \(JSON-pointer edits\), assisted 1 \(merged PRs\); train divergences removed automatic 3, assisted 2$/m);
     assert.equal(mine.find((e) => e.kind === "score")!.data.method, "m2");
     assert.deepEqual(pt.noise.coverage, { seqs: 6, oracleSeqs: 6, templates: 3, oracleTemplates: 3, strata: ["errors", "lifecycle", "refunds"], inSample: false, maxAgeDays: pairAge("2026-10-04T07:00:00Z") });
     assert.equal(r.noise?.maxAgeDays, pairAge("2026-10-04T07:00:00Z"));
@@ -258,14 +283,17 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
       assert.ok(row.ceiling.L3 !== null && row.ceiling.L4 !== null, `${k} has a ceiling`);
       assert.ok(row.L3.n > 0);
     }
-    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 1, assisted: 1, share: 0.5, removed: { automatic: 0, assisted: 0, share: null } }]);
+    assert.deepEqual(app.automation(d.curve), [{ date: "2026-10-04", events: [], automatic: 3, assisted: 1, share: 0.75, removed: { automatic: 3, assisted: 2, share: 0.6 } }]);
 
-    // The changelog: the sealed log's patch entries in log order, merged PRs by number, no values.
+    // The changelog: the sealed log's patch entries in log order, merged PRs by number, each with its paired batch
+    // (dated by the merge, no commit: the branch's is not on main after a squash merge), no values.
     assert.deepEqual(site("changelog.json"), [
       { date: new Date().toISOString().slice(0, 10), class: "automatic", pointers: [], commit: "0".repeat(40) },
       { date: new Date().toISOString().slice(0, 10), class: "surface-added", note: "test clocks" },
-      { date: "2026-10-03", class: "assisted", pr: 7 },
+      { date: "2026-10-03", class: "assisted", pr: 7, file: "src/twin/resources/customers.ts", divergencesRemoved: 2 },
+      { date: "2026-10-03", class: "automatic", file: "src/twin/shapes/cash_balance.json", pointers: ["/settings/reconciliation_mode", "/livemode"], divergencesRemoved: 3 },
     ]);
+    assert.doesNotMatch(readFileSync(join(repo, "site/data/changelog.json"), "utf8"), /PAIRED_VALUE/);
 
     // Public-safe: no ids, no values' telltales, no fraud or risk fields.
     for (const f of ["curve.json", "scores/2026-10-04.json", "changelog.json"]) {
@@ -294,7 +322,8 @@ test("nightly on a refusing sandbox: a missing key fails loudly; --dry-run write
     writeFileSync(curveFile, JSON.stringify(JSON.parse(readFileSync(curveFile, "utf8")).map(({ method: _, ...p }: { method: string }) => ({ ...p, normalization: "v1.4" })), null, 2) + "\n");
     const r2 = await nightly({ repo, dataDir: data, env: {}, run: withGh(PRS), now: () => new Date("2026-10-05T07:00:00Z") });
     assert.equal(r2.oracle.oracleSeqs, 9);
-    assert.deepEqual(r2.patches, { automatic: 1, assisted: 1 }, "totals: nothing counted twice");
+    assert.deepEqual([r2.patches, r2.divergencesRemoved], [{ automatic: 3, assisted: 1 }, { automatic: 3, assisted: 2 }], "totals: nothing counted twice");
+    assert.equal(site("changelog.json").filter((c: { file?: string }) => c.file === "src/twin/shapes/cash_balance.json").length, 1, "#7's paired batch listed once");
     const curve2 = site("curve.json");
     assert.deepEqual(curve2.map((p: { date: string; oracleSeqs: number; events: string[] }) => [p.date, p.oracleSeqs, p.events]), [
       ["2026-10-04", 6, ["surface-added: test clocks"]],
