@@ -55,6 +55,33 @@ function periodEndCancel(sub: Obj, on: boolean, now: number): Obj {
   return { cancel_at: end, cancel_at_period_end: true, canceled_at: now, cancellation_details: cancellation("cancellation_requested") };
 }
 
+/** The legacy `plan` object mirroring a recurring price (kept for API back-compat: both the subscription's and each
+ * subscription item's `plan` field track the same price). */
+function legacyPlan(price: Obj): Obj {
+  const r = price.recurring as Obj;
+  return {
+    id: price.id,
+    object: "plan",
+    active: price.active,
+    amount: price.unit_amount,
+    amount_decimal: price.unit_amount_decimal,
+    billing_scheme: "per_unit",
+    created: price.created,
+    currency: price.currency,
+    interval: r.interval,
+    interval_count: r.interval_count,
+    livemode: price.livemode,
+    metadata: price.metadata,
+    meter: r.meter,
+    nickname: price.nickname ?? null,
+    product: price.product,
+    tiers_mode: null,
+    transform_usage: null,
+    trial_period_days: r.trial_period_days,
+    usage_type: r.usage_type,
+  };
+}
+
 /** The recurring price of `items[i]`: an existing price, or a new inactive one from `price_data` (pushed to `puts`). */
 export function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
   const param = `items[${i}][price]`;
@@ -96,6 +123,7 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
     created: now,
     current_period_end: period?.end ?? addInterval(now, r.interval as string, r.interval_count as number),
     current_period_start: period?.start ?? now,
+    plan: legacyPlan(price),
     price,
     quantity: it.quantity ?? 1,
     subscription: sub,
@@ -157,7 +185,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     if (price.currency !== like.currency || dup || (other && !reset)) ctx.fail("not_implemented");
     moved ||= other;
     const next = old
-      ? assign({ ...old, price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
+      ? { ...assign({ ...old, price, quantity: it.quantity ?? old.quantity }, it, ["metadata"]), plan: legacyPlan(price) }
       : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
     if (!old || (old.price as Obj).id !== price.id || old.quantity !== next.quantity) changed.push([old, next]);
     if (old) items[at] = next;
@@ -206,7 +234,12 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
       const r = (item.price as Obj).recurring as Obj;
       Object.assign(item, { current_period_end: addInterval(now, r.interval as string, r.interval_count as number), current_period_start: now });
     }
-  const after: Obj = { ...structuredClone(sub), items: { ...(sub.items as Obj), data: items }, quantity: legacyQuantity(items) };
+  const after: Obj = {
+    ...structuredClone(sub),
+    items: { ...(sub.items as Obj), data: items },
+    plan: legacyPlan(items[0]!.price as Obj),
+    quantity: legacyQuantity(items),
+  };
   if (reset) after.billing_cycle_anchor = now;
   const billed = reset && changed.length > 0;
   return { after, prorations, reset: billed, immediate: billed || (p.proration_behavior === "always_invoice" && prorations.length > 0), date };
@@ -252,6 +285,7 @@ export const routes: Route[] = [
           days_until_due: collection === "send_invoice" ? params.days_until_due : null,
           default_payment_method: params.default_payment_method || null,
           items: { data: items, has_more: false, object: "list", url: `/v1/subscription_items?subscription=${id}` },
+          plan: legacyPlan(items[0]!.price as Obj),
           quantity: legacyQuantity(items),
           start_date: now,
           status: trialEnd ? "trialing" : "active",
