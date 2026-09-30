@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { ASSIST_MAX_TOKENS, assist, assistText, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
+import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage } from "../src/align/gate.ts";
 import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -16,6 +16,7 @@ import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, runNonce, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { createTwin } from "../src/twin/server.ts";
+import type { Recording, StepRecord } from "../src/types.ts";
 import { fakeDocker } from "./fake-docker.ts";
 
 const REPO = resolve(import.meta.dirname, "..");
@@ -143,6 +144,37 @@ test("parseReply: one FILE line naming a file shown plus one fenced block, else 
   assert.match((parseReply("FILE: src/twin/billing.ts\nno fence", allowed) as { error: string }).error, /got 1 and 0/);
   assert.match((parseReply("FILE:\n```ts\nx\n```", allowed) as { error: string }).error, /got 0 and 1/, "a bare FILE: line names nothing");
   assert.deepEqual(parseReply("FILE: src/twin/billing.ts\n```ts\n  \n```", allowed), { error: "empty file" });
+});
+
+test("normalizeWithParams: request paths and params normalized like bodies (0001 C3), test tokens kept, bodies' anchor", () => {
+  const T0 = 1_767_225_600;
+  const req = (i: number, method: StepRecord["method"], path: string, params?: Record<string, unknown>, body: unknown = {}): StepRecord => ({ i, method, path, params, status: 200, body, resHeaders: {}, ms: 0 });
+  const r: Recording = {
+    seq: "card-declined#3", template: "card-declined", stratum: "errors", seed: 3, heldOut: false, target: "sandbox", runId: "oracle", startedAt: "2026-01-01T00:00:00.000Z", ms: 0, events: [],
+    steps: [
+      req(0, "POST", "/v1/customers", { email: `jenny+${runNonce("oracle", "card-declined#3")}@example.com` }, { id: "cus_TESTa1b2c3d4e5", object: "customer", created: T0 }),
+      req(1, "POST", "/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: "cus_TESTa1b2c3d4e5" }, { id: "pm_1TESTa1b2c3d4e5" }),
+      req(2, "GET", "/v1/customers/cus_TESTa1b2c3d4e5"),
+      req(3, "POST", "/v1/subscriptions/sub_1TESTa1b2c3d4e5", { trial_end: T0 + 7200 }),
+      req(4, "GET", "/v1/prices/price_1TESTa1b2c3d4e5"),
+    ],
+  };
+  const raw = structuredClone(r);
+  const n = normalizeWithParams(r);
+  assert.deepEqual(
+    n.steps.map((s) => [s.path, s.params]),
+    [
+      ["/v1/customers", { email: "jenny+<run>@example.com" }],
+      ["/v1/payment_methods/pm_card_chargeCustomerFail/attach", { customer: "<id:cus>" }],
+      ["/v1/customers/<id:cus>", {}],
+      ["/v1/subscriptions/<id:sub>", { trial_end: "<t:+2h>" }],
+      ["/v1/prices/<id:price>", {}],
+    ],
+  );
+  assert.deepEqual(n.steps.map((s) => s.body), [{ id: "<id:cus>", object: "customer", created: "<t:~0>" }, { id: "<id:pm>" }, {}, {}, {}]);
+  // The brief's C3 grep: no raw object id in any request; the kept test token does not match it either.
+  assert.doesNotMatch(JSON.stringify(n.steps.map((s) => [s.path, s.params])), /(cus|sub|pi|ch|price|pm|prod|in|re)_[A-Za-z0-9]{10,}/);
+  assert.deepEqual(r, raw, "the input is not mutated");
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {

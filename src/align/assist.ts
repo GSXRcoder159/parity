@@ -65,14 +65,26 @@ async function owner(method: string, path: string): Promise<string | undefined> 
   return undefined;
 }
 
+/** Stripe's documented test payment methods (`pm_card_chargeCustomerFail`): our template inputs, never a generated id. */
+const TEST_TOKEN = /^pm_card_/;
+
 /**
- * normalizeRecording, plus each step's params by the same rules as bodies (ids <id:prefix>, run nonce <run>, ...; 0001
- * C3). The params go through as extra steps after the real ones, so the timestamp anchor stays the bodies'.
+ * normalizeRecording, plus each step's params and path segments by the same rules as bodies (ids <id:prefix>, run nonce
+ * <run>, ...; 0001 C3), except test-token segments, which stay: they say why a step declines. The requests go through as
+ * extra steps after the real ones, so the timestamp anchor stays the bodies'.
  */
-function normalizeWithParams(r: Recording): Recording {
+// ponytail: tokens are kept in paths only; no template puts one in params (templates/common.ts attach), add it there if one does.
+export function normalizeWithParams(r: Recording): Recording {
   const n = r.steps.length;
-  const x = normalizeRecording({ ...r, steps: [...r.steps, ...r.steps.map((s) => ({ ...s, body: s.params ?? {} }))] });
-  return { ...x, steps: x.steps.slice(0, n).map((s, i) => ({ ...s, params: x.steps[n + i]!.body as Record<string, unknown> })) };
+  const x = normalizeRecording({ ...r, steps: [...r.steps, ...r.steps.map((s) => ({ ...s, body: { params: s.params ?? {}, path: s.path.split("/") } }))] });
+  return {
+    ...x,
+    steps: x.steps.slice(0, n).map((s, i) => {
+      const q = x.steps[n + i]!.body as { params: Record<string, unknown>; path: string[] };
+      const raw = r.steps[i]!.path.split("/");
+      return { ...s, params: q.params, path: q.path.map((p, j) => (TEST_TOKEN.test(raw[j]!) ? raw[j]! : p)).join("/") };
+    }),
+  };
 }
 
 interface Counterexample {
