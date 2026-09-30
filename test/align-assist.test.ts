@@ -9,10 +9,10 @@ import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
-import { align } from "../src/align/index.ts";
+import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
-import type { Locus } from "../src/align/triage.ts";
+import type { Locus, Triaged } from "../src/align/triage.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, runNonce, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
@@ -211,6 +211,25 @@ test("normalizeWithParams: request paths and params normalized like bodies (0001
   // The brief's C3 grep: no raw object id in any request; the kept test token does not match it either.
   assert.doesNotMatch(JSON.stringify(n.steps.map((s) => [s.path, s.params])), /(cus|sub|pi|ch|price|pm|prod|in|re)_[A-Za-z0-9]{10,}/);
   assert.deepEqual(r, raw, "the input is not mutated");
+});
+
+test("assist: a locus whose route no behavior module serves is reported with the counterexample's normalized path, never a raw id (0001 C3), before any LLM call", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "pb-assist-no-owner-"));
+  const locus: Locus = { kind: "route", route: "GET /v1/unserved/{id}" };
+  const rec = (target: string, status: string): Recording => ({
+    seq: "unserved#1", template: "unserved", stratum: "lifecycle", seed: 1, heldOut: false, target, runId: "oracle", startedAt: "2026-01-01T00:00:00.000Z", ms: 0, events: [],
+    steps: [{ i: 0, method: "GET", path: "/v1/unserved/cus_TESTa1b2c3d4e5?expand[]=customer", status: 200, body: { object: "unserved", status }, resHeaders: {}, ms: 0 }],
+  });
+  writeJsonl(join(dataDir, "oracle.jsonl"), [rec("sandbox", "a")]);
+  const d: Triaged = { seq: "unserved#1", step: 0, path: "$.status", cls: "VALUE_MISMATCH", expected: "a", actual: "b", template: "unserved", heldOut: false, locus };
+  // Only what the pass reads before the owner check: the loci, their divergences, the twin's recordings, the oracle's provenance.
+  const r = { divergences: [d], notMechanical: [{ locus, reason: "status: decided by handler code", divergences: 1 }], gate: { blocked: [] }, twin: [rec("twin", "b")], oracle: { oracleSeqs: 1, oracleSha: "0".repeat(64) } } as unknown as AlignResult;
+  const calls: string[] = [];
+  const run: Run = (cmd, args) => (calls.push(`${cmd} ${args[0]}`), ""); // a clean tree, docker available
+  const res = await assist(r, { repo: REPO, dataDir, runId: "run-no-owner", env: { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9" }, run, now: NOW });
+  assert.deepEqual(res.outcomes.map((o) => [o.result, o.detail, o.cost_usd]), [["no-owner", "no behavior module serves GET /v1/unserved/<id:cus>", 0]]);
+  assert.deepEqual(calls, ["git status", "docker run"], "no LLM call, no gate, no PR");
+  assert.doesNotMatch(assistText(res), /cus_TEST/);
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {

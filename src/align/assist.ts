@@ -95,8 +95,9 @@ interface Counterexample {
   seq: string;
   /** Steps 0..last are shown. */
   last: number;
-  /** The step whose route owns the locus. */
+  /** The step whose route owns the locus, and its path normalized as shown (ids <id:prefix>, test tokens kept). */
   step: number;
+  path: string;
   text: string;
 }
 
@@ -129,7 +130,7 @@ function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recordin
     `## Divergences in these steps (* = the locus to fix: ${where(c.locus)}; ${c.reason}; ${c.divergences.length} train divergences there in ${new Set(c.divergences.map((d) => d.seq)).size} sequences)`,
     ...shown.map((d) => `${ids.has(divergenceId(d.seq, d.step, d.path)) ? "*" : "-"} step ${d.step} ${d.path} ${d.cls} expected ${JSON.stringify(scrub(d.expected))} actual ${JSON.stringify(scrub(d.actual))}`),
   );
-  return { seq, last, step, text: out.join("\n") };
+  return { seq, last, step, path: o.steps[step]!.path, text: out.join("\n") };
 }
 
 const SYSTEM = `You fix one behavior bug in Parity's twin: an open-source emulator of a payments API's Billing surface, in TypeScript for Node 22 (type stripping, explicit .ts imports, \`import type\` for types).
@@ -316,7 +317,7 @@ export async function assist(
     const s = oracle.get(ce.seq)!.steps[ce.step]!;
     const own = await owner(s.method, s.path);
     if (!own) {
-      out.detail = `no behavior module serves ${s.method} ${s.path.split("?")[0]}`;
+      out.detail = `no behavior module serves ${s.method} ${ce.path.split("?")[0]}`;
       continue;
     }
     const source = (p: string) => readFileSync(join(o.repo, p), "utf8");
