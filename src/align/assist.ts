@@ -65,6 +65,16 @@ async function owner(method: string, path: string): Promise<string | undefined> 
   return undefined;
 }
 
+/**
+ * normalizeRecording, plus each step's params by the same rules as bodies (ids <id:prefix>, run nonce <run>, ...; 0001
+ * C3). The params go through as extra steps after the real ones, so the timestamp anchor stays the bodies'.
+ */
+function normalizeWithParams(r: Recording): Recording {
+  const n = r.steps.length;
+  const x = normalizeRecording({ ...r, steps: [...r.steps, ...r.steps.map((s) => ({ ...s, body: s.params ?? {} }))] });
+  return { ...x, steps: x.steps.slice(0, n).map((s, i) => ({ ...s, params: x.steps[n + i]!.body as Record<string, unknown> })) };
+}
+
 interface Counterexample {
   seq: string;
   /** Steps 0..last are shown. */
@@ -81,7 +91,7 @@ interface Counterexample {
 // ponytail: truncation only; step-dropping minimization needs new oracle runs and is deferred until the read budget allows.
 function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recording>, twin: Map<string, Recording>): Counterexample {
   const seq = [...new Set(c.divergences.map((d) => d.seq))].sort((a, b) => oracle.get(a)!.steps.length - oracle.get(b)!.steps.length || (a < b ? -1 : 1))[0]!;
-  const o = normalizeRecording(oracle.get(seq)!);
+  const o = normalizeWithParams(oracle.get(seq)!);
   const t = normalizeRecording(twin.get(seq)!);
   const mine = c.divergences.filter((d) => d.seq === seq);
   const steps = mine.filter((d) => d.step >= 0).map((d) => d.step);

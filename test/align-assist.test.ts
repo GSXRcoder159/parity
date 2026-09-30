@@ -13,7 +13,7 @@ import { align } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
-import { idsIn, runCorpus, touching } from "../src/bench/run.ts";
+import { idsIn, runCorpus, runNonce, touching } from "../src/bench/run.ts";
 import { readJsonl, writeJsonl } from "../src/jsonl.ts";
 import { createTwin } from "../src/twin/server.ts";
 import { fakeDocker } from "./fake-docker.ts";
@@ -171,6 +171,15 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     outcome: { type: "authorized", risk_level: RISK, seller_message: RISK },
     payment: { card: { brand: "visa", checks: { cvc_check: RISK } } },
   });
+  // Request params holding real-looking ids and a run-nonce email (PR #3's did): the prompt and the PR show them
+  // normalized like bodies (0001 C3). Params are not scored.
+  const NONCE = runNonce("oracle", "customer-crud#1");
+  Object.assign(oracle.find((r) => r.seq === "customer-crud#1")!.steps[0]!.params!, {
+    email: `jenny+${NONCE}@example.com`,
+    metadata: { parity: "customer-crud", referred_by: "cus_TESTa1b2c3d4e5", plan: "price_1TESTa1b2c3d4e5" },
+    payment_method: "pm_1TESTa1b2c3d4e5",
+    invoice_settings: { default_payment_method: "pm_1TESTa1b2c3d4e5" },
+  });
   const data = mkdtempSync(join(tmpdir(), "pb-assist-data-"));
   writeJsonl(join(data, "oracle.jsonl"), oracle);
 
@@ -244,6 +253,12 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     for (const text of [ce, body]) {
       assert.ok(!text.includes(RISK) && !/outcome|checks|risk_level|seller_message|cvc_check/.test(text), "no fraud or risk field, key or value");
       assert.match(text, /^- step 0 \$\.payment MISSING_FIELD expected \{"card":\{"brand":"visa"\}\} actual undefined$/m);
+      assert.match(
+        text,
+        /^params: \{"email":"jenny\+<run>@example\.com","name":"Parity \d+","metadata":\{"parity":"customer-crud","referred_by":"<id:cus>","plan":"<id:price>"\},"payment_method":"<id:pm>","invoice_settings":\{"default_payment_method":"<id:pm>"\}\}$/m,
+      );
+      assert.doesNotMatch(text, /(cus|sub|pi|ch|price|pm|prod|in|re)_[A-Za-z0-9]{10,}/, "no raw object id");
+      assert.ok(!text.includes(NONCE), "no run nonce");
     }
     assert.ok(!gh.flat().includes("merge"), "never merges");
     assert.equal(git("rev-parse", "HEAD"), head, "the main working tree stays on HEAD");
