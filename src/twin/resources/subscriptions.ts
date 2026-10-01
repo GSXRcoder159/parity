@@ -106,6 +106,30 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
 /** The legacy `subscription.quantity`: the single item's quantity, null with several items. */
 const legacyQuantity = (items: Obj[]) => (items.length === 1 ? items[0]!.quantity : null);
 
+/** The legacy `subscription.plan`: the first item's price, shaped as a plan object (docs: deprecated in favor of price). */
+function legacyPlan(ctx: Ctx, price: Obj): Obj {
+  const r = price.recurring as Obj;
+  return ctx.build("plan", {
+    id: price.id,
+    active: price.active,
+    amount: price.unit_amount,
+    amount_decimal: price.unit_amount_decimal,
+    billing_scheme: price.billing_scheme,
+    created: price.created,
+    currency: price.currency,
+    interval: r.interval,
+    interval_count: r.interval_count,
+    livemode: price.livemode,
+    metadata: price.metadata,
+    meter: r.meter,
+    nickname: price.nickname,
+    product: price.product,
+    tiers_mode: price.tiers_mode,
+    trial_period_days: r.trial_period_days,
+    usage_type: r.usage_type,
+  });
+}
+
 const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.recurring as Obj).interval_count].join();
 
 /** The subscription's items as a list object, with an accurate `total_count`. */
@@ -221,6 +245,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     ...structuredClone(sub),
     items: itemsList(sourceItems, items, sourceItems.url as string),
     quantity: legacyQuantity(items),
+    plan: legacyPlan(ctx, items[0]!.price as Obj),
   };
   if (reset) after.billing_cycle_anchor = now;
   const billed = reset && changed.length > 0;
@@ -267,6 +292,7 @@ export const routes: Route[] = [
           days_until_due: collection === "send_invoice" ? params.days_until_due : null,
           default_payment_method: params.default_payment_method || null,
           items: itemsList(undefined, items, `/v1/subscription_items?subscription=${id}`),
+          plan: legacyPlan(ctx, items[0]!.price as Obj),
           quantity: legacyQuantity(items),
           start_date: now,
           status: trialEnd ? "trialing" : "active",
