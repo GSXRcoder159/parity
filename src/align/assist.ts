@@ -9,10 +9,11 @@
 // pass becomes a branch align/assisted-<date>-<n> built in a separate worktree (the code change, then the data edits,
 // as two commits), pushed, and a draft PR; the sealed log gets a `patch` entry {class: "assisted", status: "proposed"}
 // scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
-// merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM.
+// merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM. A locus whose last
+// 2 attempts stopped at max_tokens sits out 7 days (`cooldown`, from the sealed log) and the next locus takes its slot.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -22,7 +23,7 @@ import type { Recording } from "../types.ts";
 import type { Route } from "../twin/server.ts";
 import { applyEdits, dockerCheck, editOf, evalOf, gatePaired, scores, scoreTwinIn, type Run, type Scores } from "./gate.ts";
 import { candidateLine, mechanical, split, where, type AlignResult } from "./index.ts";
-import { appendLog, logPath, verifyLog } from "./log.ts";
+import { appendLog, logPath, verifyLog, type LogEntry } from "./log.ts";
 import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
 import { FRAUD_OR_RISK, locusKey, type Candidate } from "./patch.ts";
 import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
@@ -236,7 +237,7 @@ export interface Outcome {
   locus: string;
   reason: string;
   divergences: number;
-  result: "proposed" | "gate-failed" | "bad-reply" | "llm-error" | "no-owner" | "cap" | "pr-failed";
+  result: "proposed" | "gate-failed" | "bad-reply" | "llm-error" | "no-owner" | "cap" | "pr-failed" | "cooldown";
   detail?: string;
   seq?: string;
   file?: string;
@@ -266,6 +267,30 @@ export interface AssistResult {
 export const ASSIST_MAX_TOKENS = 16_000;
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const PR_BODY_MAX = 60_000;
+
+const COOLDOWN_MS = 7 * 86_400_000;
+/** The outcomes that paid for a reply (cap, no-owner, llm-error and cooldown got none): what a cooldown counts. */
+const ATTEMPTS = new Set<Outcome["result"]>(["proposed", "gate-failed", "bad-reply", "pr-failed"]);
+
+/**
+ * Loci on cooldown at `now`, each with the time it ends: the locus's last 2 attempts in the sealed log's assist notes
+ * both stopped at max_tokens, the newer under 7 days ago. events clock-period-rollover did on 2026-09-28, 09-30 and
+ * 10-01, ~$0.24 a night for nothing.
+ */
+export function cooldowns(log: string, now: Date): Map<string, string> {
+  const tries = new Map<string, { ts: string; maxed: boolean }[]>();
+  for (const e of existsSync(log) ? readJsonl<LogEntry>(log) : []) {
+    const outcomes = e.kind === "note" ? ((e.data.assist as AssistResult | undefined)?.outcomes ?? []) : [];
+    for (const x of outcomes.filter((x) => ATTEMPTS.has(x.result)))
+      tries.set(x.locus, [...(tries.get(x.locus) ?? []), { ts: e.ts, maxed: x.result === "bad-reply" && x.detail === "stop_reason max_tokens" }]);
+  }
+  const out = new Map<string, string>();
+  for (const [locus, t] of tries) {
+    const until = Date.parse(t.at(-1)!.ts) + COOLDOWN_MS;
+    if (t.length >= 2 && t.slice(-2).every((x) => x.maxed) && now.getTime() < until) out.set(locus, new Date(until).toISOString());
+  }
+  return out;
+}
 
 /**
  * The assisted pass on the plan `r` (whose baseline is the repo's HEAD). Without ANTHROPIC_API_KEY it only logs that it
@@ -309,7 +334,16 @@ export async function assist(
   const res: AssistResult = { model, cap: capUsd(env), clusters: all.length, cost_usd: 0, outcomes: [] };
   // In the data repo, like the read ledger: the nightly pushes it, so the daily cap survives a failed night and a rerun.
   const ledger = join(o.dataDir, "budget/llm.jsonl");
-  for (const c of all.slice(0, o.k ?? 3)) {
+  const cool = cooldowns(log, now());
+  let tried = 0;
+  for (const c of all) {
+    if (tried === (o.k ?? 3)) break;
+    const until = cool.get(where(c.locus));
+    if (until) {
+      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "cooldown", detail: `its last 2 attempts stopped at max_tokens; next try after ${until}`, cost_usd: 0 });
+      continue; // the next locus takes the slot
+    }
+    tried++;
     const out: Outcome = { locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "no-owner", cost_usd: 0 };
     res.outcomes.push(out);
     const ce = counterexample(c, r.divergences, oracle, twin);
@@ -432,7 +466,7 @@ export async function assist(
 export function assistText(a: AssistResult): string {
   if (a.skipped) return `assist: ${a.skipped} (${a.clusters} non-mechanical loci waiting)`;
   return [
-    `assist: ${a.outcomes.length} of ${a.clusters} non-mechanical loci tried with ${a.model} · cost_usd ${a.cost_usd.toFixed(4)} this run (daily cap $${a.cap})`,
+    `assist: ${a.outcomes.filter((x) => x.result !== "cooldown").length} of ${a.clusters} non-mechanical loci tried with ${a.model} · cost_usd ${a.cost_usd.toFixed(4)} this run (daily cap $${a.cap})`,
     ...a.outcomes.map((x) => `  ${x.result} · ${x.divergences} · ${x.locus}${x.file ? ` · ${x.file}` : ""}${x.paired ? ` + ${x.paired.edits} paired data edits` : ""} · $${x.cost_usd.toFixed(4)}${x.pr ? ` · ${x.pr}` : ""}${x.detail ? ` · ${x.detail}` : ""}`),
   ].join("\n");
 }

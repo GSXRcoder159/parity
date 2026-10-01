@@ -61,7 +61,8 @@ const USAGE = `usage:
     (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, commits
     them, then appends them to the sealed log <dataDir>/align/log.jsonl. --max-batches: gate only the first N per-file batches.
     --assist (after the plan, on HEAD; run align --apply first): the LLM proposes one twin code file per non-mechanical
-    locus (top 3); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
+    locus (top 3; a locus whose last 2 replies stopped at max_tokens sits out 7 days, logged as cooldown, and the next
+    one takes its slot); a reply that passes the same gate becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never
     merged. Needs ANTHROPIC_API_KEY (else skipped and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every
     call's tokens and cost_usd go to <dataDir>/budget/llm.jsonl; daily cap $15 (UTC) per ledger, PARITY_LLM_CAP_USD may
     only lower it. The nightly pushes its ledger to the data repo: pull it before a local LLM run so both count.

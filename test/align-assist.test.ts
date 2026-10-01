@@ -11,7 +11,7 @@ import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply,
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
-import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
+import { appendLog, logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import type { Locus, Triaged } from "../src/align/triage.ts";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { idsIn, runCorpus, runNonce, touching } from "../src/bench/run.ts";
@@ -230,6 +230,58 @@ test("assist: a locus whose route no behavior module serves is reported with the
   assert.deepEqual(res.outcomes.map((o) => [o.result, o.detail, o.cost_usd]), [["no-owner", "no behavior module serves GET /v1/unserved/<id:cus>", 0]]);
   assert.deepEqual(calls, ["git status", "docker run"], "no LLM call, no gate, no PR");
   assert.doesNotMatch(assistText(res), /cus_TEST/);
+});
+
+test("assist: a locus whose last 2 attempts stopped at max_tokens sits out 7 days (sealed log), logged as cooldown; the next locus takes its slot", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "pb-assist-cooldown-"));
+  const a: Locus = { kind: "route", route: "GET /v1/unserved/{id}" };
+  const b: Locus = { kind: "route", route: "GET /v1/unknown/{id}" };
+  const step = (i: number, path: string, status: string): StepRecord => ({ i, method: "GET", path, status: 200, body: { object: "unserved", status }, resHeaders: {}, ms: 0 });
+  const rec = (target: string, status: string): Recording => ({
+    seq: "unserved#1", template: "unserved", stratum: "lifecycle", seed: 1, heldOut: false, target, runId: "oracle", startedAt: "2026-01-01T00:00:00.000Z", ms: 0, events: [],
+    steps: [step(0, "/v1/unserved/cus_TESTa1b2c3d4e5", status), step(1, "/v1/unknown/cus_TESTa1b2c3d4e5", status)],
+  });
+  writeJsonl(join(dataDir, "oracle.jsonl"), [rec("sandbox", "a")]);
+  const d = (step: number, path: string, locus: Locus): Triaged => ({ seq: "unserved#1", step, path, cls: "VALUE_MISMATCH", expected: "a", actual: "b", template: "unserved", heldOut: false, locus });
+  const oracle = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
+  // a has the most divergences, so it holds the one slot (k = 1) unless it is cooling down.
+  const r = {
+    divergences: [d(0, "$.status", a), d(0, "$.object", a), d(1, "$.status", b)],
+    notMechanical: [
+      { locus: a, reason: "status: decided by handler code", divergences: 2 },
+      { locus: b, reason: "status: decided by handler code", divergences: 1 },
+    ],
+    gate: { blocked: [] },
+    twin: [rec("twin", "b")],
+    oracle,
+  } as unknown as AlignResult;
+  // a: max_tokens, a cap (no reply: not an attempt), max_tokens. b: max_tokens, then a reply that reached the gate.
+  const tried = (locus: string, result: string, detail?: string) => ({ locus, reason: "r", divergences: 1, result, detail, cost_usd: result === "cap" ? 0 : 0.24 });
+  const note = (ts: string, ...outcomes: unknown[]) => appendLog(logPath(dataDir), "night", [{ kind: "note", data: { assist: { clusters: 2, cost_usd: 0.24, outcomes }, oracle } }], ts);
+  note("2026-09-19T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "bad-reply", "stop_reason max_tokens"));
+  note("2026-09-20T13:00:00.000Z", tried("GET /v1/unserved/{id}", "cap", "LLM cap: ..."));
+  note("2026-09-21T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "gate-failed", "train divergences 3 -> 3"));
+  const calls: string[] = [];
+  const run: Run = (cmd, args) => (calls.push(`${cmd} ${args[0]}`), ""); // a clean tree, docker available
+  const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9" };
+
+  const res = await assist(r, { repo: REPO, dataDir, runId: "run-cool", k: 1, env, run, now: NOW });
+  assert.deepEqual(
+    res.outcomes.map((o) => [o.locus, o.result, o.cost_usd]),
+    [
+      ["GET /v1/unserved/{id}", "cooldown", 0],
+      ["GET /v1/unknown/{id}", "no-owner", 0],
+    ],
+  );
+  assert.equal(res.outcomes[0]!.detail, "its last 2 attempts stopped at max_tokens; next try after 2026-09-28T13:00:00.000Z");
+  assert.deepEqual(calls, ["git status", "docker run"], "no LLM call");
+  assert.match(assistText(res), /^assist: 1 of 2 non-mechanical loci tried/);
+  assert.match(assistText(res), /^ {2}cooldown · 2 · GET \/v1\/unserved\/\{id\} · \$0\.0000 · its last 2 attempts stopped at max_tokens/m);
+  assert.deepEqual((readJsonl<LogEntry>(logPath(dataDir)).at(-1)!.data.assist as AssistResult).outcomes.map((o) => o.result), ["cooldown", "no-owner"]);
+
+  // Seven days after the second: tried again.
+  const later = await assist(r, { repo: REPO, dataDir, runId: "run-later", k: 1, env, run, now: () => new Date("2026-09-28T13:00:00.000Z") });
+  assert.deepEqual(later.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {
