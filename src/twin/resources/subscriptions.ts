@@ -23,6 +23,7 @@ import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
 import { assign, checkAttached, diff, isHash, live } from "../util.ts";
+import { plan } from "./prices.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -87,28 +88,6 @@ export function itemPrice(ctx: Ctx, item: Obj, i: number, puts: Obj[]): Obj {
   return price;
 }
 
-/** The legacy `plan` object mirroring a recurring price (deprecated, kept for items and the subscription's own `plan`). */
-function planOf(ctx: Ctx, price: Obj): Obj {
-  const r = price.recurring as Obj;
-  return ctx.build("plan", {
-    id: price.id,
-    active: price.active,
-    amount: unitAmount(price),
-    amount_decimal: price.unit_amount_decimal,
-    created: price.created,
-    currency: price.currency,
-    interval: r.interval,
-    interval_count: r.interval_count,
-    livemode: price.livemode,
-    metadata: price.metadata,
-    meter: r.meter,
-    nickname: price.nickname,
-    product: price.product,
-    trial_period_days: r.trial_period_days,
-    usage_type: r.usage_type,
-  });
-}
-
 /** A new item of subscription `sub` at `price` from `items[i]`; its period is `period`, else one interval from now. */
 export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { start: unknown; end: unknown }): Obj {
   const now = ctx.now();
@@ -118,7 +97,7 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
     created: now,
     current_period_end: period?.end ?? addInterval(now, r.interval as string, r.interval_count as number),
     current_period_start: period?.start ?? now,
-    plan: planOf(ctx, price),
+    plan: plan(ctx, price),
     price,
     quantity: it.quantity ?? 1,
     subscription: sub,
@@ -193,7 +172,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     if (price.currency !== like.currency || dup || (other && !reset)) ctx.fail("not_implemented");
     moved ||= other;
     const next = old
-      ? assign({ ...old, plan: planOf(ctx, price), price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
+      ? assign({ ...old, plan: plan(ctx, price), price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
       : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
     if (!old || (old.price as Obj).id !== price.id || old.quantity !== next.quantity) changed.push([old, next]);
     if (old) items[at] = next;

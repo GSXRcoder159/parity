@@ -111,7 +111,7 @@ for (const seed of [1, 2, 3, 4]) {
     assert.deepEqual([item.current_period_start, item.current_period_end], [T0, bound.s1.items.data[0].current_period_end]);
     const invoices = steps[n - 1]!.body.data;
     const updated = twin.store.events.find((e) => e.type === "customer.subscription.updated")!;
-    assert.deepEqual(Object.keys(updated.data.previous_attributes!).sort(), behavior === "always_invoice" ? ["items", "latest_invoice"] : ["items"]);
+    assert.deepEqual(Object.keys(updated.data.previous_attributes!).sort(), behavior === "always_invoice" ? ["items", "latest_invoice", "plan"] : ["items", "plan"]);
     assert.equal((updated.data.previous_attributes as Obj).items.data[0].price.id, bound.pr1.id);
     const items = twin.store.events.filter((e) => e.type === "invoiceitem.created").map((e) => e.data.object as Obj);
 
