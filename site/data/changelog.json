@@ -328,5 +328,12 @@
     "pr": 1,
     "file": "src/twin/resources/customers.ts",
     "divergencesRemoved": 1576
+  },
+  {
+    "date": "2026-09-30",
+    "class": "assisted",
+    "pr": 3,
+    "file": "src/twin/resources/subscriptions.ts",
+    "divergencesRemoved": 553
   }
 ]
