@@ -49,7 +49,7 @@ test("compare writes <out>.md and <out>.json; normalized ids match, --raw ids di
   const norm = cli(["compare", "--oracle", "a.jsonl", "--target", "b.jsonl", "--out", "out/norm"], dir);
   assert.equal(norm.status, 0, norm.stderr);
   const nj = JSON.parse(readFileSync(join(dir, "out/norm.json"), "utf8"));
-  assert.equal(nj.normalization, "v1.5");
+  assert.equal(nj.normalization, "v1.6");
   assert.equal(nj.score.overall.L3.p, 1);
   assert.deepEqual(nj.results.map((r: { seq: string }) => r.seq), ["customer-crud#1", "customer-crud#2"]);
   assert.match(readFileSync(join(dir, "out/norm.md"), "utf8"), /^# ParityBench: b\.jsonl vs a\.jsonl/);
@@ -173,9 +173,9 @@ test("twin: serves the twin until SIGTERM, then exits 0; error responses carry P
 });
 
 test("score-twin: replays the oracle against an in-process twin at each sequence's oracle clock; --templates, --json", { timeout: 30_000 }, async () => {
-  // The oracle is the twin's own recording. subscription-create#1 bills monthly: its period is 28 days from Feb 1 and 31
-  // from Mar 1, so a replay at another month's clock diverges (the control below). customer-search waits 60 s before
-  // its search on the sandbox: the timeout fails the test unless the wait is skipped.
+  // The oracle is the twin's own recording, subscription-create#1 at a Feb 1 clock and the rest at Mar 1; the twin's
+  // recordings show which clock each replay ran at (the control below). customer-search waits 60 s before its search on
+  // the sandbox: the timeout fails the test unless the wait is skipped.
   const FEB = "2026-02-01T00:00:00.000Z";
   const MAR = "2026-03-01T00:00:00.000Z";
   const clock = (seq: string) => (seq === "subscription-create#1" ? FEB : MAR);
@@ -196,12 +196,12 @@ test("score-twin: replays the oracle against an in-process twin at each sequence
   const dir = mkdtempSync(join(tmpdir(), "pb-score-"));
   writeJsonl(join(dir, "oracle.jsonl"), oracle);
 
-  const r = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--json", "out/score.json"], dir);
+  const r = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--json", "out/score.json", "--recordings", "out/twin.jsonl"], dir);
   assert.match(r.stdout, /^# ParityBench: twin vs oracle\.jsonl$/m);
   assert.match(r.stdout, /^\*\*Summary:\*\* L1 100\.0% .* L4 100\.0% \[[\d.–]+\] \(6\)/m);
   assert.match(r.stderr, /^score-twin: 6 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s; wrote out\/score\.json$/m);
   const j = JSON.parse(readFileSync(join(dir, "out/score.json"), "utf8"));
-  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.5", 6]);
+  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.6", 6]);
   assert.ok(j.results.every((x: { eventsMatch: boolean; eventsSkipped: boolean }) => x.eventsMatch && !x.eventsSkipped), "the twin's events are compared");
 
   const only = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--templates", "subscription-create,customer-crud"], dir);
@@ -210,12 +210,19 @@ test("score-twin: replays the oracle against an in-process twin at each sequence
   assert.match(only.stderr, /^score-twin: 4 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s$/m, "no --json, no file");
   assert.deepEqual(readdirSync(dir).sort(), ["oracle.jsonl", "out"]);
 
-  // Control: the same oracle claiming a Mar 1 start for subscription-create#1 diverges on its period end.
+  // Control: the same oracle claiming a Mar 1 start for subscription-create#1 replays it at Mar 1. Its period end no
+  // longer tells (28 days from Feb 1, 31 from Mar 1: normalization v1.6 renders both <t:+1mo>), so the twin's own
+  // recordings show the clock: the first object's `created` is the oracle's start.
   writeJsonl(join(dir, "moved.jsonl"), oracle.map((o) => ({ ...o, startedAt: MAR })));
-  await cliAsync(["score-twin", "--oracle", "moved.jsonl", "--templates", "subscription-create", "--json", "moved.json"], dir);
+  await cliAsync(["score-twin", "--oracle", "moved.jsonl", "--templates", "subscription-create", "--json", "moved.json", "--recordings", "moved-twin.jsonl"], dir);
   const moved = JSON.parse(readFileSync(join(dir, "moved.json"), "utf8"));
-  assert.deepEqual(moved.results.map((x: { seq: string; L4: boolean }) => [x.seq, x.L4]), [["subscription-create#1", false], ["subscription-create#2", true]]);
-  assert.ok(moved.results[0].divergences.some((d: { path: string }) => d.path === "$.items.data[0].current_period_end"));
+  assert.deepEqual(moved.results.map((x: { seq: string; L4: boolean }) => [x.seq, x.L4]), [["subscription-create#1", true], ["subscription-create#2", true]]);
+  const startOf = (file: string, seq: string) => {
+    const rec = readJsonl<Recording>(join(dir, file)).find((x) => x.seq === seq)!;
+    const created = rec.steps.map((s) => (s.body as { created?: unknown }).created).find(Number.isInteger) as number;
+    return new Date(Math.floor(created / 60) * 60_000).toISOString();
+  };
+  assert.deepEqual([startOf("out/twin.jsonl", "subscription-create#1"), startOf("moved-twin.jsonl", "subscription-create#1"), startOf("out/twin.jsonl", "subscription-create#2")], [FEB, MAR, MAR]);
   assert.equal(existsSync(join(dir, "recordings")), false, "score-twin writes no recordings");
 });
 

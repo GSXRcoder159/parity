@@ -30,8 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.5");
-  assert.equal(RULES.length, 14);
+  assert.equal(NORMALIZATION_VERSION, "v1.6");
+  assert.equal(RULES.length, 16);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -116,7 +116,7 @@ test("timestamps: hour offsets from t0 = first created in step order", () => {
   assert.equal(body(r, 1).items.data[0].created, "<t:~0>");
   assert.deepEqual(body(r, 2), {
     created: "<t:~0>",
-    current_period_end: "<t:+720h>",
+    current_period_end: "<t:+1mo>", // T0 is 21 Sep: 30 days on is one calendar month (v1.6)
     trial_start: "<t:-2h>",
     canceled_at: "<t:+2h>",
     period: { start: "<t:~0>", end: "<t:+1h>" },
@@ -246,7 +246,7 @@ test("v1.5: a D Mon YYYY date in text is <date> (steps, lists, events); the line
   assert.equal(body(a, 0).lines.data[0].description, "Unused time on Plan after <date>");
   assert.equal((a.events[0] as any).data.object.description, "Unused time on Plan after <date>");
   assert.notDeepEqual(body(a, 0), body(b, 0), "the period start still differs by a day");
-  assert.deepEqual(body(a, 0).lines.data[0].period, { start: "<t:+672h>", end: "<t:+720h>" });
+  assert.deepEqual(body(a, 0).lines.data[0].period, { start: "<t:+672h>", end: "<t:+1mo>" });
   // Other text with digits and months stays: only the `D Mon YYYY` form.
   const keep = ["Plan 29 Sept 2026", "2026-09-29", "Sep 29, 2026", "129 Sep 20260"];
   assert.deepEqual(keep.map((d) => body(normalizeRecording(rec([step(0, { description: d })])), 0).description), keep);
@@ -259,6 +259,69 @@ test("v1.5: account_name is opaque, null included (unclaimed vs claimed sandbox)
   assert.deepEqual(body(a, 0), { object: "invoice", account_name: "<opaque>", account_country: "US" });
   assert.deepEqual(body(b, 0).latest_invoice, body(a, 0));
   assert.notDeepEqual(body(normalizeRecording(rec([step(0, inv("Acme", "GB"))])), 0), body(a, 0));
+});
+
+test("v1.6: a whole number of calendar months from t0 is <t:+kmo> in any month; 30 days, a month plus hours and day-counted keys stay hourly", () => {
+  const DAY = 86400;
+  const SEP28 = Date.UTC(2026, 8, 28, 12) / 1000; // a 30-day month
+  const OCT1 = Date.UTC(2026, 9, 1, 12) / 1000; // a 31-day month
+  // One sequence recorded in each month: the period end is a calendar month on, the clock's deletes_after 30 days.
+  const sub = (t: number, days: number) =>
+    normalizeRecording(
+      rec([
+        step(0, { object: "price", created: t }),
+        step(1, { object: "subscription", created: t + 5, cancel_at: t + 5 + days * DAY, items: { data: [{ current_period_end: t + 5 + days * DAY }] } }),
+        step(2, { object: "test_helpers.test_clock", deletes_after: t + 30 * DAY, frozen_time: t + days * DAY }),
+      ]),
+    );
+  const [sep, oct] = [sub(SEP28, 30), sub(OCT1, 31)];
+  assert.deepEqual(
+    sep.steps.map((s) => s.body),
+    oct.steps.map((s) => s.body),
+  );
+  assert.deepEqual([body(oct, 1).items.data[0].current_period_end, body(oct, 1).cancel_at, body(oct, 2).frozen_time, body(oct, 2).deletes_after], ["<t:+1mo>", "<t:+1mo>", "<t:+1mo>", "<t:+720h>"]);
+  // 30 days from 1 October is not a month: a twin adding 30 days where Stripe adds a month is caught.
+  assert.equal(body(sub(OCT1, 30), 1).items.data[0].current_period_end, "<t:+720h>");
+  const at = (t0: number, t: number, k = "period_end") => body(normalizeRecording(rec([step(0, { created: t0, [k]: t })])), 0)[k];
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3599), "<t:+1mo>"); // under an hour off
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3600), "<t:+745h>"); // a month plus an hour stays hourly
+  assert.equal(at(OCT1, OCT1 + 34 * DAY), "<t:+816h>"); // a month plus 3 days
+  assert.equal(at(OCT1, Date.UTC(2027, 9, 1, 12) / 1000), "<t:+12mo>"); // a year
+  assert.equal(at(OCT1, Date.UTC(2026, 8, 1, 12) / 1000, "trial_start"), "<t:-1mo>");
+  const JAN31 = Date.UTC(2027, 0, 31, 12) / 1000;
+  assert.equal(at(JAN31, Date.UTC(2027, 1, 28, 12) / 1000), "<t:+1mo>"); // the day clamped, as Stripe bills a 31st anchor
+  assert.equal(at(JAN31, Date.UTC(2027, 2, 31, 12) / 1000), "<t:+2mo>"); // counted from t0, not from 28 February
+  assert.equal(at(JAN31, Date.UTC(2027, 2, 3, 12) / 1000), "<t:+744h>"); // 31 days from 31 January is not a month
+  for (const k of ["deletes_after", "due_date", "trial_end"]) assert.equal(at(SEP28, SEP28 + 30 * DAY, k), "<t:+720h>", k);
+});
+
+test("v1.6: a payment method's and a charge's card expiry is opaque when it is a valid month and year; 0, null and strings are compared", () => {
+  const card = (m: unknown, y: unknown) => ({ brand: "visa", exp_month: m, exp_year: y, last4: "4242" });
+  const run = (m: unknown, y: unknown) =>
+    normalizeRecording(
+      rec([
+        step(0, { object: "payment_method", card: card(m, y) }),
+        step(1, { error: { type: "card_error", payment_method: { object: "payment_method", card: card(m, y) } } }, 402),
+        step(2, { object: "list", data: [{ object: "payment_intent", latest_charge: { object: "charge", payment_method_details: { card: card(m, y) } } }] }),
+        step(3, { object: "customer", card: card(m, y) }), // not a payment method: compared
+      ]),
+    );
+  const [sep, oct] = [run(9, 2027), run(10, 2027)];
+  for (const i of [0, 1, 2]) assert.deepEqual(body(sep, i), body(oct, i));
+  assert.deepEqual(body(sep, 0).card, { brand: "visa", exp_month: "<opaque>", exp_year: "<opaque>", last4: "4242" });
+  assert.equal(body(sep, 1).error.payment_method.card.exp_month, "<opaque>");
+  assert.equal(body(sep, 2).data[0].latest_charge.payment_method_details.card.exp_year, "<opaque>");
+  assert.notDeepEqual(body(sep, 3), body(oct, 3));
+  // The twin's template 0 (it never computes an expiry), null, strings and out-of-range numbers are compared.
+  assert.deepEqual(
+    [run(0, 0), run(null, null), run("10", "2027"), run(13, 1999)].map((r) => [body(r, 0).card.exp_month, body(r, 0).card.exp_year]),
+    [
+      [0, 0],
+      [null, null],
+      ["10", "2027"],
+      [13, 1999],
+    ],
+  );
 });
 
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {

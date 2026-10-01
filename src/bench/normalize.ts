@@ -1,10 +1,10 @@
-// Normalization v1.5: rewrites run-specific values (ids, timestamps, readable dates in text, a declined invoice's retry
-// day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, dashboard links, the unclaimed-sandbox banner) so two
-// faithful runs compare equal. List order is compared as returned. Published with every score.
+// Normalization v1.6: rewrites run-specific values (ids, timestamps, whole calendar months, readable dates in text, a declined
+// invoice's retry day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, test-card expiry, dashboard
+// links, the unclaimed-sandbox banner) so two faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.5";
+export const NORMALIZATION_VERSION = "v1.6";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -16,6 +16,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "timestamps",
     rationale:
       "Absolute times differ per run; times under timestamp keys (`created`, `updated`, `date`, `deletes_after`, `*_at`, `*_start`, `*_end`, `*_date`, `*_time`, …; v1.3 added `deletes_after` and the `*_time` suffix, for a test clock's `status_details.advancing.target_frozen_time`) become hour offsets from the recording's first `created` (`<t:+720h>`, `<t:~0>` within an hour). Hides: errors under one hour (off-by-minutes, second-level anchor drift) and wrong but in-range epochs of the same hour offset. Not applied to an event's own top-level `created`: events are compared by type set and causal order (compare method m2), never by value, and the order check needs the raw times.",
+  },
+  {
+    name: "calendar-months",
+    rationale:
+      "A one-month period is 30 days from a September start and 31 from an October one, so v1.5 rendered one sequence's period end `<t:+720h>` when recorded on 2026-09-28 and `<t:+744h>` when re-recorded on 2026-10-01: period ends, `cancel_at`, a renewal invoice's `created`, a test clock's `frozen_time` (drift/2026-10-01.md). v1.6: a timestamp within an hour of t0 + k calendar months (k ≠ 0; UTC, the day clamped to the target month's length as Stripe bills a month-end anchor: Jan 31 + 1 month = Feb 28; a year is 12 months) becomes `<t:+kmo>`; any other offset keeps its hour bucket, including a month plus hours (an invoice finalized 1 h or 3 days after a period end), which still differs between months of different lengths. Each recording renders against its own t0. Not applied to `deletes_after`, `due_date` and `trial_end`, which Stripe counts in days (a test clock is deleted 30 days after creation; `days_until_due`, `trial_period_days`): 30 days from a September t0 is also exactly one calendar month, so the rule would render them `<t:+1mo>` in September and `<t:+720h>` in October (it did, for `deletes_after`, when v1.6 was first replayed on drift/2026-10-01.md; `due_date` would on invoice-send-invoice seed 10, 30 days until due). Another key counted in days needs the same exclusion once a template makes it span a month. Hides: between two recordings whose t0 fall in months of different lengths (drift's re-recordings), the month's length, which is the point; a twin replayed at another month's clock than the oracle's (score-twin's Parity-Now pin lost), which before showed on period ends (test/cli.test.ts now checks the pin on the twin's raw recordings); and an error under an hour either side of t0 + k months (the hour buckets also hid under an hour, by rounding). A twin scored against the oracle runs at the oracle's Parity-Now, so both t0 fall in the same month and `<t:+kmo>` on both sides is the same instant within an hour. Not hidden: a twin that adds 30 days where Stripe adds a calendar month, or the reverse, renders `<t:+720h>` against `<t:+1mo>` whenever t0 + 1 month is not t0 + 30 days. When it is (t0 in April, June, September or November, or a month end such as March 31 → April 30) both render `<t:+1mo>`, as both rendered `<t:+720h>` under v1.5: that gap is unchanged, and only sequences recorded in other months expose it.",
   },
   {
     name: "readable-dates",
@@ -51,6 +56,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "card-network-opaques",
     rationale:
       "Simulated card-network values are random per charge: `authorization_code`, `network_transaction_id` and `transaction_link_id` (charge `payment_method_details.card`) and `risk_score` (`outcome`; a fraud/risk field, never published per decision 0001 R8) → `<opaque>` wherever they are non-null. Hides: a wrong value, format or type in those fields (a null-vs-value difference is still compared).",
+  },
+  {
+    name: "card-expiry",
+    rationale:
+      "Stripe's test cards (`pm_card_visa`, `pm_card_mastercard`, …) expire in the month of the request one year on (every train oracle recording, September's and October's), so `exp_month` differed on every payment method of drift/2026-10-01.md, the first night in a new month, against its September recording (39 of its 106 rows), and `exp_year` will on 1 January. v1.6: `card.exp_month` and `card.exp_year` of a payment method (also nested, e.g. in an error) and of a charge's `payment_method_details` become `<opaque>` when they hold a valid month (an integer 1–12) or year (an integer from 2000); any other value is compared, so null, a string, or the 0 of a twin that never computes an expiry (its templates hold 0) is still a divergence. Hides: a wrong but valid expiry, e.g. a twin that always answers 12/2030.",
   },
   {
     name: "card-eci",
@@ -102,6 +112,9 @@ const TS_SUFFIX = /(_at|_start|_end|_date|_time)$/;
 const STRIPE_HOST = /(^|\.)stripe\.(com|network)$/;
 const INVOICE_NUMBER = /^[A-Z0-9]+-(\d+)$/;
 const CARD_NETWORK = new Set(["authorization_code", "network_transaction_id", "transaction_link_id", "risk_score"]);
+const CARD_EXPIRY: Record<string, (x: number) => boolean> = { exp_month: (x) => x >= 1 && x <= 12, exp_year: (x) => x >= 2000 };
+// Timestamps Stripe counts in days, never in calendar months (rule calendar-months).
+const DAY_COUNT = new Set(["deletes_after", "due_date", "trial_end"]);
 const REFUND_REFERENCE = ["reference", "reference_status", "reference_type"];
 
 type Obj = Record<string, unknown>;
@@ -121,6 +134,24 @@ function firstCreated(v: unknown): number | undefined {
       if (c !== undefined) return c;
     }
   }
+  return undefined;
+}
+
+/**
+ * `t` plus k calendar months in UTC, the day clamped to the target month's length (Stripe's billing anchor rule). Kept
+ * here, not imported from the twin's billing.ts: the instrument does not share arithmetic with what it measures.
+ */
+function addMonths(t: number, k: number): number {
+  const d = new Date(t * 1000);
+  const m = d.getUTCMonth() + k;
+  const last = new Date(Date.UTC(d.getUTCFullYear(), m + 1, 0)).getUTCDate(); // Date.UTC carries month overflow into the year
+  return Date.UTC(d.getUTCFullYear(), m, Math.min(d.getUTCDate(), last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()) / 1000;
+}
+
+/** k ≠ 0 when `t` is within an hour of t0 + k calendar months. */
+function wholeMonths(t0: number, t: number): number | undefined {
+  const est = Math.round((t - t0) / 2_629_746); // the mean Gregorian month in seconds
+  for (const k of [est - 1, est, est + 1]) if (k !== 0 && Math.abs(addMonths(t0, k) - t) < 3600) return k;
   return undefined;
 }
 
@@ -158,6 +189,8 @@ export function normalizeRecording(r: Recording): Recording {
           return `<t:${d >= 0 ? "+" : ""}${d}d>`;
         }
         if (Math.abs(t - t0) < 3600) return "<t:~0>";
+        const mo = DAY_COUNT.has(k) ? undefined : wholeMonths(t0, t);
+        if (mo !== undefined) return `<t:${mo > 0 ? "+" : ""}${mo}mo>`;
         const n = Math.round((t - t0) / 3600);
         return `<t:${n >= 0 ? "+" : ""}${n}h>`;
       }
@@ -175,6 +208,7 @@ export function normalizeRecording(r: Recording): Recording {
     if (isObj(card)) for (const k of REFUND_REFERENCE) delete card[k];
     const pmCard = isObj(v.payment_method_details) ? v.payment_method_details.card : undefined;
     if (isObj(pmCard) && pmCard.electronic_commerce_indicator != null) pmCard.electronic_commerce_indicator = "<opaque>";
+    for (const c of [pmCard, v.object === "payment_method" ? v.card : undefined]) if (isObj(c)) for (const [k, valid] of Object.entries(CARD_EXPIRY)) if (Number.isInteger(c[k]) && valid(c[k] as number)) c[k] = "<opaque>";
     const out: Obj = {};
     for (const [k, x] of Object.entries(v)) out[k] = field(v, k, x);
     return out;
