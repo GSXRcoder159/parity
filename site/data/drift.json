@@ -803,5 +803,110 @@
     "template": "clock-declined-renewal",
     "path": "$.status_details.advancing.target_frozen_time",
     "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-declined-renewal",
+    "path": "$.data[0].automatically_finalizes_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-declined-renewal",
+    "path": "$.data[0].effective_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-declined-renewal",
+    "path": "$.data[0].next_payment_attempt",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-declined-renewal",
+    "path": "$.data[0].status_transitions.finalized_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-period-rollover",
+    "path": "$.data[0].automatically_finalizes_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-period-rollover",
+    "path": "$.data[0].effective_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-period-rollover",
+    "path": "$.data[0].next_payment_attempt",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-period-rollover",
+    "path": "$.data[0].status_transitions.finalized_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/invoices",
+    "template": "clock-period-rollover",
+    "path": "$.data[0].status_transitions.paid_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/test_helpers/test_clocks/$ck.id",
+    "template": "clock-declined-renewal",
+    "path": "$.frozen_time",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "GET /v1/test_helpers/test_clocks/$ck.id",
+    "template": "clock-period-rollover",
+    "path": "$.frozen_time",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "invoice-preview-proration",
+    "path": "$.next_payment_attempt",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "POST /v1/invoices/create_preview",
+    "template": "subscription-update-quantity",
+    "path": "$.next_payment_attempt",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "POST /v1/test_helpers/test_clocks/$ck.id/advance",
+    "template": "clock-declined-renewal",
+    "path": "$.status_details.advancing.target_frozen_time",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-02",
+    "endpoint": "POST /v1/test_helpers/test_clocks/$ck.id/advance",
+    "template": "clock-period-rollover",
+    "path": "$.status_details.advancing.target_frozen_time",
+    "cls": "VALUE_MISMATCH"
   }
 ]

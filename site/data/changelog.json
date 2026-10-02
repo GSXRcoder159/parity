@@ -335,5 +335,21 @@
     "pr": 3,
     "file": "src/twin/resources/subscriptions.ts",
     "divergencesRemoved": 553
+  },
+  {
+    "date": "2026-10-02",
+    "class": "assisted",
+    "pr": 6,
+    "file": "src/twin/resources/subscriptions.ts",
+    "divergencesRemoved": -114
+  },
+  {
+    "date": "2026-10-02",
+    "class": "automatic",
+    "file": "src/twin/shapes/plan.json",
+    "pointers": [
+      "/tiers"
+    ],
+    "divergencesRemoved": 1106
   }
 ]
