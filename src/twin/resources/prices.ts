@@ -9,7 +9,7 @@ import { newProduct } from "./products.ts";
 type Obj = Record<string, unknown>;
 
 /** The legacy plan view of a recurring price: the plan template plus the price's computed fields. */
-const plan = (ctx: Ctx, p: Obj): Obj => {
+export const plan = (ctx: Ctx, p: Obj): Obj => {
   const r = p.recurring as Obj;
   return ctx.build("plan", {
     id: p.id,

@@ -23,6 +23,7 @@ import { list } from "../list.ts";
 import type { Ctx, Route } from "../server.ts";
 import type { Emit } from "../store.ts";
 import { assign, checkAttached, diff, isHash, live } from "../util.ts";
+import { plan } from "./prices.ts";
 
 type Obj = Record<string, unknown>;
 
@@ -96,6 +97,7 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
     created: now,
     current_period_end: period?.end ?? addInterval(now, r.interval as string, r.interval_count as number),
     current_period_start: period?.start ?? now,
+    plan: plan(ctx, price),
     price,
     quantity: it.quantity ?? 1,
     subscription: sub,
@@ -105,6 +107,9 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
 
 /** The legacy `subscription.quantity`: the single item's quantity, null with several items. */
 const legacyQuantity = (items: Obj[]) => (items.length === 1 ? items[0]!.quantity : null);
+
+/** The legacy `subscription.plan`: the single item's plan, null with several items. */
+const legacyPlan = (items: Obj[]) => (items.length === 1 ? items[0]!.plan : null);
 
 const recurrence = (price: Obj) => [(price.recurring as Obj).interval, (price.recurring as Obj).interval_count].join();
 
@@ -167,7 +172,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     if (price.currency !== like.currency || dup || (other && !reset)) ctx.fail("not_implemented");
     moved ||= other;
     const next = old
-      ? assign({ ...old, price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
+      ? assign({ ...old, plan: plan(ctx, price), price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
       : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
     if (!old || (old.price as Obj).id !== price.id || old.quantity !== next.quantity) changed.push([old, next]);
     if (old) items[at] = next;
@@ -220,6 +225,7 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
   const after: Obj = {
     ...structuredClone(sub),
     items: itemsList(sourceItems, items, sourceItems.url as string),
+    plan: legacyPlan(items),
     quantity: legacyQuantity(items),
   };
   if (reset) after.billing_cycle_anchor = now;
@@ -267,6 +273,7 @@ export const routes: Route[] = [
           days_until_due: collection === "send_invoice" ? params.days_until_due : null,
           default_payment_method: params.default_payment_method || null,
           items: itemsList(undefined, items, `/v1/subscription_items?subscription=${id}`),
+          plan: legacyPlan(items),
           quantity: legacyQuantity(items),
           start_date: now,
           status: trialEnd ? "trialing" : "active",
