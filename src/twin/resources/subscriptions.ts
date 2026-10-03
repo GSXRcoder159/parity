@@ -98,7 +98,7 @@ export function newItem(ctx: Ctx, it: Obj, price: Obj, sub: unknown, period?: { 
     current_period_end: period?.end ?? addInterval(now, r.interval as string, r.interval_count as number),
     current_period_start: period?.start ?? now,
     plan: plan(ctx, price),
-    price,
+    price: { ...price, tiers: undefined },
     quantity: it.quantity ?? 1,
     subscription: sub,
   });
