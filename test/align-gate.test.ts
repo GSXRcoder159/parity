@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
 import { sh } from "../src/align/assist.ts";
-import { applyEdits, gate, gatePaired, nodeImage, scoreTwinIn, type Eval, type Run } from "../src/align/gate.ts";
+import { applyEdits, evalOf, gate, gatePaired, nodeImage, scoreTwinIn, type Eval, type Run } from "../src/align/gate.ts";
 import { align, mechanical, planText } from "../src/align/index.ts";
 import { logPath, verifyLog, type LogEntry } from "../src/align/log.ts";
 import type { Candidate, Edit } from "../src/align/patch.ts";
@@ -386,4 +386,45 @@ test("mechanical: the echo check reads the request as sent: a message quoting an
   const message = (l: { kind: string; errorKey?: string; field?: string }) => l.kind === "error" && l.errorKey === "resource_missing" && l.field === "message";
   assert.deepEqual(m.candidates.filter((c) => message(c.locus)), []);
   assert.deepEqual(m.notMechanical.filter((n) => message(n.locus)).map((n) => n.reason), ["request-derived: the message quotes a request parameter value"]);
+});
+
+test("mechanical + gate, real twin: a nested default (an enclosing template's copy of a typed object) is deleted in that template, gated on held-out", { timeout: 60_000 }, async () => {
+  // Oracle: the twin's own recording of subscription-create (train) and subscription-cancel-at-period-end (held out).
+  // The twin under test is a copy whose subscription_item.json#/price carries `probe: []`, which price.json lacks: every
+  // item's price shows it (build() deep-merges the item template's price over the stored one), and only deleting it
+  // from the item template removes it.
+  const CLOCK = "2026-03-01T00:00:00.000Z";
+  const seqs = buildCorpus(TEMPLATES.filter((t) => ["subscription-create", "subscription-cancel-at-period-end"].includes(t.name)), [1, 2]);
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const target = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const { recordings } = await runCorpus(seqs, target, { concurrency: 2, runId: "oracle", headersFor: () => ({ "Parity-Now": String(Date.parse(CLOCK) / 1000) }) }).finally(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const oracle = recordings.map((r) => ({ ...r, startedAt: CLOCK, events: touching(idsIn(r.steps), twin.store.events) }));
+  assert.ok(oracle.some((r) => r.heldOut) && oracle.some((r) => !r.heldOut));
+  const data = mkdtempSync(join(tmpdir(), "pb-nested-data-"));
+  const oraclePath = join(data, "oracle.jsonl");
+  writeJsonl(oraclePath, oracle);
+  const repo = mkdtempSync(join(tmpdir(), "pb-nested-repo-"));
+  for (const p of ["src", "templates", "package.json"]) cpSync(join(REPO, p), join(repo, p), { recursive: true });
+  const itemJson = join(repo, "src/twin/shapes/subscription_item.json");
+  const item = JSON.parse(readFileSync(itemJson, "utf8"));
+  writeFileSync(itemJson, JSON.stringify({ ...item, price: { ...item.price, probe: [] } }, null, 2) + "\n");
+  assert.equal("probe" in JSON.parse(readFileSync(join(repo, "src/twin/shapes/price.json"), "utf8")), false);
+
+  const m = mechanical(repo, oraclePath, new Set());
+  const train = new Set(oracle.filter((r) => !r.heldOut).map((r) => r.seq));
+  assert.ok(m.divergences.some((d) => d.heldOut && d.path.endsWith(".price.probe")), "held-out items show the probe too");
+  assert.deepEqual(
+    m.candidates.map((c) => [c.file, c.pointer, c.op, c.locus, c.evidence.template, c.evidence.nearest]),
+    [["src/twin/shapes/subscription_item.json", "/price/probe", "delete", { kind: "field", objectType: "price", fieldPath: "probe" }, "src/twin/shapes/subscription_item.json#/price/probe", "src/twin/shapes/price.json#/probe"]],
+  );
+  const [c] = m.candidates;
+  assert.ok(c!.ids.length && c!.ids.every((id) => train.has(id.split("|")[0]!)) && c!.evidence.seqs.every((s) => train.has(s)), "train evidence only");
+  const g = gate(m.candidates, (edits) => evalOf(scoreTwinIn(repo, oraclePath, edits).json), { before: m.baseline });
+  assert.deepEqual([g.accepted.map((j) => j.candidate), g.blocked, g.rejected], [[c], [], []]);
+  assert.equal(g.after.trainDivergences, 0);
+  assert.ok(g.after.heldOut.L3.k > g.before.heldOut.L3.k, "the held-out items match too");
 });

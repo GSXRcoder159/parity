@@ -7,7 +7,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
 import type { Recording, StepRecord } from "../types.ts";
-import { divergenceId, segments, typeOf, type Locus, type Triaged } from "./triage.ts";
+import { divergenceId, joinPath, segments, typeOf, type Locus, type Triaged } from "./triage.ts";
 
 export const SHAPES_DIR = "src/twin/shapes";
 export const CATALOG_FILE = "src/twin/errors.json";
@@ -18,7 +18,8 @@ export interface Edit {
   pointer: string;
   op: "set" | "delete";
   value?: unknown;
-  evidence: { occurrences: number; seqs: string[] };
+  /** `template`/`nearest`: set when the edit targets an enclosing template, `nearest` being the one it had no effect on. */
+  evidence: { occurrences: number; seqs: string[]; template?: string; nearest?: string };
 }
 /** `ids`: the train divergences (seq|step|path) the edit should remove; the gate judges its effect by them. */
 export interface Candidate extends Edit {
@@ -33,11 +34,12 @@ export interface NotMechanical {
 export type Catalog = Record<string, Record<string, unknown>>;
 
 type Obj = Record<string, unknown>;
+type Segs = (string | number)[];
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
 /** Normalization placeholders (normalize.ts): computed per run, never seeded as a value. */
 const PLACEHOLDER = /<(?:id:[^>]*|t:[^>]*|number:[^>]*|url:[^>]*|run|opaque|secret|date)>/;
 const computed = (v: unknown): boolean => PLACEHOLDER.test(JSON.stringify(v) ?? "");
-const pointer = (keys: (string | number)[]): string => keys.map((k) => `/${String(k).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
+const pointer = (keys: Segs): string => keys.map((k) => `/${String(k).replaceAll("~", "~0").replaceAll("/", "~1")}`).join("");
 const ERROR_FIELDS = new Set(["status", "type", "code", "param", "message"]);
 /** What renderError always writes; any other key in the twin's `error` is an extra passed by the raising call site. */
 const RENDERED = new Set([...ERROR_FIELDS, "doc_url", "request_log_url"]);
@@ -69,7 +71,7 @@ const requestValues = (v: unknown): string[] =>
 const echoes = (message: string, params: unknown): boolean => requestValues(params).some((s) => message.toLowerCase().includes(s));
 
 /** Value at `segs` under `v` (absent when any step is missing). */
-function at(v: unknown, segs: (string | number)[]): { present: boolean; value?: unknown } {
+function at(v: unknown, segs: Segs): { present: boolean; value?: unknown } {
   for (const s of segs) {
     if (!(isObj(v) || Array.isArray(v)) || !Object.hasOwn(v, s)) return { present: false };
     v = (v as Obj)[s];
@@ -88,20 +90,21 @@ function noiseIndex(noise: Set<string>): (template: string, step: number, path: 
   return (t, s, path) => (by.get(`${t}|${s}`) ?? []).some((n) => inside(path, n) || inside(n, path));
 }
 
-/** Every typed object (`object` field) in the step bodies, by template type, with its JSON path. */
+type Ancestor = { type: string; path: string };
+/** Every typed object (`object` field) in the step bodies, by template type, with its JSON path and the typed objects enclosing it (nearest first). */
 function typedObjects(recs: Recording[]) {
-  const out = new Map<string, { seq: string; template: string; step: number; path: string; obj: Obj }[]>();
+  const out = new Map<string, { seq: string; template: string; step: number; path: string; obj: Obj; up: Ancestor[] }[]>();
   for (const r of recs) {
     for (const s of r.steps) {
-      const walk = (v: unknown, path: string): void => {
-        if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      const walk = (v: unknown, path: string, up: Ancestor[]): void => {
+        if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`, up));
         else if (isObj(v)) {
           const t = typeOf(v);
-          if (t) out.set(t, [...(out.get(t) ?? []), { seq: r.seq, template: r.template, step: s.i, path, obj: v }]);
-          for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+          if (t) out.set(t, [...(out.get(t) ?? []), { seq: r.seq, template: r.template, step: s.i, path, obj: v, up }]);
+          for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`, t ? [{ type: t, path }, ...up] : up);
         }
       };
-      walk(s.body, "$");
+      walk(s.body, "$", []);
     }
   }
   return out;
@@ -146,13 +149,14 @@ export const locusKey = (l: Locus): string => JSON.stringify(l.kind === "events"
 /**
  * Candidates from the train divergences of `divergences`, checked against the train sequences of `oracle` (normalized
  * bodies, raw params: the echo check reads the request as sent) and `twin` (raw, for its error keys and rendered vars). Held-out sequences are dropped here, before anything is read.
+ * `data.shape(type)`: the parsed shapes/<type>.json, undefined when there is none.
  */
 export function propose(
   divergences: Triaged[],
   oracle: Recording[],
   twin: Recording[],
   noise: Set<string>,
-  data: { shape: (type: string) => boolean; catalog: Catalog },
+  data: { shape: (type: string) => unknown; catalog: Catalog },
 ): { candidates: Candidate[]; notMechanical: NotMechanical[] } {
   const train = divergences.filter((d) => !d.heldOut);
   const trainOracle = oracle.filter((r) => !r.heldOut);
@@ -173,22 +177,51 @@ export function propose(
     else if (locus.kind === "events") no("event set: emitted by handler code");
     else if (locus.kind === "route") no("status: decided by handler code");
     else if (locus.kind === "field") {
+      /** The edit at `segs` in `type`'s template, judged on every train occurrence of `type`: a candidate, or why not. */
+      const judge = (type: string, segs: Segs): Candidate | string => {
+        const occ = (objects.get(type) ?? []).map((o) => ({ ...o, at: at(o.obj, segs) }));
+        const present = occ.filter((o) => o.at.present);
+        const value = present[0]?.at.value;
+        const edit = { file: `${SHAPES_DIR}/${type}.json`, pointer: pointer(segs), evidence: { occurrences: occ.length, seqs: seqsOf(occ) }, locus, ids };
+        if (segs.some((s) => typeof s === "number")) return "inside an array element";
+        if (!data.shape(type)) return `no template ${edit.file}`;
+        if (occ.some((o) => noisy(o.template, o.step, `${o.path}.${joinPath(segs)}`))) return "noise: an occurrence is in the noise set";
+        if (!present.length && g.every((d) => d.cls === "EXTRA_FIELD")) return { ...edit, op: "delete" };
+        if ([...segs.map(String), ...present.flatMap((o) => keysIn(o.at.value))].some((k) => FRAUD_OR_RISK.has(k))) return "fraud or risk data: never seeded into a public template";
+        if (present.length < occ.length) return "absent from some occurrences";
+        if (!present.every((o) => isDeepStrictEqual(o.at.value, value))) return "varies across sequences";
+        if (computed(value)) return "computed: the value holds a normalization placeholder";
+        if ([...segs.map(String), ...keysIn(value)].some((k) => ACCOUNT_OR_TIME.has(k))) return "account- or time-derived: constant only within one account or month";
+        if (strings(value).some((x) => !TOKEN.test(x))) return "context text: only enum-like tokens are type defaults";
+        return { ...edit, op: "set", value };
+      };
+      /** The edit leaves `type`'s template as it is: a delete of a pointer it lacks, a set of the value it holds. */
+      const noop = (type: string, segs: Segs, c: Candidate): boolean => {
+        const cur = at(data.shape(type), segs);
+        return c.op === "delete" ? !cur.present : cur.present && isDeepStrictEqual(cur.value, c.value);
+      };
       const segs = segments(`.${locus.fieldPath}`);
-      const occ = (objects.get(locus.objectType) ?? []).map((o) => ({ ...o, at: at(o.obj, segs) }));
-      const present = occ.filter((o) => o.at.present);
-      const value = present[0]?.at.value;
-      const edit = { file: `${SHAPES_DIR}/${locus.objectType}.json`, pointer: pointer(segs), evidence: { occurrences: occ.length, seqs: seqsOf(occ) } };
-      if (segs.some((s) => typeof s === "number")) no("inside an array element");
-      else if (!data.shape(locus.objectType)) no(`no template ${edit.file}`);
-      else if (occ.some((o) => noisy(o.template, o.step, `${o.path}.${locus.fieldPath}`))) no("noise: an occurrence is in the noise set");
-      else if (!present.length && g.every((d) => d.cls === "EXTRA_FIELD")) candidates.push({ ...edit, op: "delete", locus, ids });
-      else if ([...segs.map(String), ...present.flatMap((o) => keysIn(o.at.value))].some((k) => FRAUD_OR_RISK.has(k))) no("fraud or risk data: never seeded into a public template");
-      else if (present.length < occ.length) no("absent from some occurrences");
-      else if (!present.every((o) => isDeepStrictEqual(o.at.value, value))) no("varies across sequences");
-      else if (computed(value)) no("computed: the value holds a normalization placeholder");
-      else if ([...segs.map(String), ...keysIn(value)].some((k) => ACCOUNT_OR_TIME.has(k))) no("account- or time-derived: constant only within one account or month");
-      else if (strings(value).some((x) => !TOKEN.test(x))) no("context text: only enum-like tokens are type defaults");
-      else candidates.push({ ...edit, op: "set", value, locus, ids });
+      const near = judge(locus.objectType, segs);
+      let v = near;
+      if (typeof near !== "string" && noop(locus.objectType, segs, near)) {
+        // A nested default: build() deep-merges an enclosing template's copy (subscription_item.json#/price) over the
+        // stored object. Try the pointer in each typed object enclosing every divergent occurrence, nearest first; the
+        // first template that has it and that the edit changes takes it. None: the nearest edit stays (blocked-by-code).
+        const divergent = new Set(ids);
+        const hits = (objects.get(locus.objectType) ?? []).filter((o) => divergent.has(divergenceId(o.seq, o.step, `${o.path}.${locus.fieldPath}`)));
+        const up = (o: (typeof hits)[number]) => o.up.map((a) => ({ type: a.type, segs: [...segments(o.path.slice(a.path.length)), ...segs] }));
+        const key = (e: { type: string; segs: Segs }) => `${e.type}${pointer(e.segs)}`;
+        const shared = hits.map((o) => new Set(up(o).map(key)));
+        for (const e of hits.length === ids.length ? up(hits[0]!) : []) {
+          if (!shared.every((s) => s.has(key(e))) || !at(data.shape(e.type), e.segs).present) continue;
+          const w = judge(e.type, e.segs);
+          if (typeof w === "string" || noop(e.type, e.segs, w)) continue;
+          v = { ...w, evidence: { ...w.evidence, template: `${w.file}#${w.pointer}`, nearest: `${near.file}#${near.pointer}` } };
+          break;
+        }
+      }
+      if (typeof v === "string") no(v);
+      else candidates.push(v);
     } else {
       const entry = data.catalog[locus.errorKey];
       // Every train step where the twin raised this key, with the oracle's step at the same position.

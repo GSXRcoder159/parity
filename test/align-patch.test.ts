@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { propose, type Catalog } from "../src/align/patch.ts";
+import { gate } from "../src/align/gate.ts";
+import { propose, type Catalog, type Edit } from "../src/align/patch.ts";
+import { wilson } from "../src/bench/score.ts";
 import type { Locus, Triaged } from "../src/align/triage.ts";
 import type { DivergenceClass, Recording, StepRecord } from "../src/types.ts";
 
@@ -44,7 +46,7 @@ const catalog: Catalog = {
   resource_missing: { status: 404, type: "invalid_request_error", code: "resource_missing", param: "{param}", message: "parity: resource_missing" },
   idempotency_mismatch: { status: 400, type: "idempotency_error", message: "parity: idempotency_mismatch" },
 };
-const data = { shape: (t: string) => t === "customer", catalog };
+const data = { shape: (t: string) => (t === "customer" ? {} : undefined), catalog };
 
 /** One divergence per (sequence, path) for the given sequences, all at step 0 under `$`. */
 const at = (seqs: string[], path: string, cls: DivergenceClass, locus: Locus, heldOut = false) => seqs.map((s) => div(s, 0, path, cls, locus, heldOut));
@@ -325,4 +327,60 @@ test("never seeded: a fraud or risk field (the key, a path under it, a key insid
     [error("resource_missing", "param"), "call-site var: the entry's {var} renders per call site (assisted)"],
     [error("gone_var", "param"), "call-site var: the entry's {var} renders per call site (assisted)"],
   ]);
+});
+
+test("nested defaults: a pointer the nearest template lacks is proposed in the enclosing template that has it, when every divergence sits under it", () => {
+  // build() deep-merges subscription_item.json#/price over the stored price: its `tiers` and `currency_options` show on
+  // every item's price, while price.json has neither (nor `foo`, which only handler code could add).
+  const shapes: Record<string, unknown> = { price: { object: "price" }, subscription_item: { object: "subscription_item", price: { tiers: [], currency_options: {}, bar: 1 } } };
+  const nested = { shape: (t: string) => shapes[t], catalog };
+  const price = (fields: Record<string, unknown> = {}) => ({ id: "<id:price>", object: "price", ...fields });
+  const sub = (p: Record<string, unknown>) => ({ object: "subscription", items: { object: "list", data: [{ object: "subscription_item", price: p }] } });
+  const oracle = [
+    rec("t#1", false, [st(0, 200, sub(price())), st(1, 200, price())]),
+    rec("t#2", false, [st(0, 200, sub(price()))]),
+    // Held out: an item price that has tiers (the delete would be wrong if it were read), and a divergence of its own.
+    rec("h#1", true, [st(0, 200, sub(price({ tiers: [{ up_to: 1 }] })))]),
+  ];
+  const item = (f: string) => "$.items.data[0].price." + f;
+  const loc = (f: string): Locus => ({ kind: "field", objectType: "price", fieldPath: f });
+  const divergences = [
+    ...at(["t#1", "t#2"], item("tiers"), "EXTRA_FIELD", loc("tiers")),
+    ...at(["t#1", "t#2"], item("foo"), "EXTRA_FIELD", loc("foo")),
+    // One divergence on a price no subscription_item encloses: the item template's copy is not what all of them share.
+    div("t#1", 0, item("currency_options"), "EXTRA_FIELD", loc("currency_options")),
+    div("t#1", 1, "$.currency_options", "EXTRA_FIELD", loc("currency_options")),
+    div("h#1", 0, item("bar"), "EXTRA_FIELD", loc("bar"), true), // held-out only: never a candidate
+  ];
+  const { candidates, notMechanical } = propose(divergences, oracle, [], new Set(), nested);
+  assert.deepEqual(
+    candidates.map((c) => [c.file, c.pointer, c.op, c.evidence, c.ids]),
+    [
+      [
+        "src/twin/shapes/subscription_item.json",
+        "/price/tiers",
+        "delete",
+        { occurrences: 2, seqs: ["t#1", "t#2"], template: "src/twin/shapes/subscription_item.json#/price/tiers", nearest: "src/twin/shapes/price.json#/tiers" },
+        ["t#1|0|$.items.data[0].price.tiers", "t#2|0|$.items.data[0].price.tiers"],
+      ],
+      // Neither template has it: the nearest edit stays, and the gate finds it changes nothing (blocked-by-code).
+      ["src/twin/shapes/price.json", "/foo", "delete", { occurrences: 3, seqs: ["t#1", "t#2"] }, ["t#1|0|$.items.data[0].price.foo", "t#2|0|$.items.data[0].price.foo"]],
+      ["src/twin/shapes/price.json", "/currency_options", "delete", { occurrences: 3, seqs: ["t#1", "t#2"] }, ["t#1|0|$.items.data[0].price.currency_options", "t#1|1|$.currency_options"]],
+    ],
+  );
+  assert.deepEqual(notMechanical, []);
+
+  // The gate on a twin where only the item template's copy matters: the enclosing edit is accepted, the others blocked.
+  const pool = divergences.filter((d) => !d.heldOut).map((d) => `${d.seq}|${d.step}|${d.path}`);
+  const L = (k: number) => ({ L1: wilson(k, 10), L2: wilson(k, 10), L3: wilson(k, 10), L4: wilson(k, 10) });
+  const evaluate = (edits: Edit[]) => {
+    const gone = edits.some((e) => e.file.endsWith("subscription_item.json") && e.pointer === "/price/tiers") ? candidates[0]!.ids : [];
+    const ids = new Set(pool.filter((id) => !gone.includes(id)));
+    return { train: L(10 - ids.size), heldOut: L(5), trainDivergences: ids.size, ids };
+  };
+  const g = gate(candidates, evaluate);
+  assert.deepEqual(
+    [g.accepted, g.blocked, g.rejected].map((js) => js.map((j) => `${j.candidate.file}#${j.candidate.pointer}`)),
+    [["src/twin/shapes/subscription_item.json#/price/tiers"], ["src/twin/shapes/price.json#/foo", "src/twin/shapes/price.json#/currency_options"], []],
+  );
 });

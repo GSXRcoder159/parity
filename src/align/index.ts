@@ -83,7 +83,10 @@ export function mechanical(root: string, oraclePath: string, noise: Set<string>,
   const base = scoreTwinIn(root, oraclePath, [], true, docker);
   const { divergences, earliest } = triage(base.json.results, noise, recs, base.twin!);
   const catalog = JSON.parse(readFileSync(join(root, CATALOG_FILE), "utf8"));
-  const shape = (t: string) => /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(join(root, SHAPES_DIR, `${t}.json`));
+  const shape = (t: string): unknown => {
+    const f = join(root, SHAPES_DIR, `${t}.json`);
+    return /^[a-z][a-z0-9_.]*$/.test(t) && existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : undefined;
+  };
   // Normalized bodies, raw params: the echo check reads the request as sent (a normalized timestamp hides its digits).
   const oracle = recs.map((r) => {
     const n = normalizeRecording(r);
@@ -160,7 +163,8 @@ export const split = (s: Scores): string => `train ${levels(s.train)} (${s.train
 export const where = (l: Locus): string =>
   l.kind === "field" ? `${l.objectType} ${l.fieldPath}` : l.kind === "error" ? `error ${l.errorKey} ${l.field}` : l.kind === "route" ? l.route : `events ${l.template}`;
 export const candidateLine = (c: Candidate): string =>
-  `  ${c.file} ${c.pointer} ${c.op}${c.op === "set" ? ` ${JSON.stringify(c.value)}` : ""} · ${c.ids.length} divergences, value seen at ${c.evidence.occurrences} occurrences in ${c.evidence.seqs.length} sequences`;
+  `  ${c.file} ${c.pointer} ${c.op}${c.op === "set" ? ` ${JSON.stringify(c.value)}` : ""} · ${c.ids.length} divergences, value seen at ${c.evidence.occurrences} occurrences in ${c.evidence.seqs.length} sequences` +
+  (c.evidence.nearest ? ` · enclosing template (no effect at ${c.evidence.nearest})` : "");
 
 /** The human-readable plan (and what --apply did). */
 export function planText(r: AlignResult): string {
