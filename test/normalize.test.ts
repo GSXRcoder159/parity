@@ -362,6 +362,56 @@ test("v1.7: a month plus a fixed time is <t:+kmo+Nh> (a declined retry <t:+kmo+N
   assert.equal(retry(OCT1, OCT1 + 61 * DAY - 13 * H), "<t:+1mo+29d>");
 });
 
+test("v1.7: a period end k months after a trial_end is <t:+Nh+kmo>, so a trial then a month compares equal from months of different lengths", () => {
+  const DAY = 86400;
+  const H = 3600;
+  const utc = (m: number, d: number, y = 2026) => Date.UTC(y, m, d, 12) / 1000;
+  const addMonth = (t: number, k = 1) => {
+    const d = new Date(t * 1000);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + k, d.getUTCDate(), 12) / 1000; // no clamp needed for these days
+  };
+  // clock-trial-end (#28), synthetic: a trial of n days, the clock advanced to its end, the subscription and the invoice read.
+  const trial = (t0: number, n: number, end = (a: number) => addMonth(a), trialEnd: number | null = t0 + n * DAY) =>
+    normalizeRecording(
+      rec([
+        step(0, { object: "price", created: t0 }),
+        step(1, { object: "subscription", trial_start: t0, trial_end: trialEnd, current_period_end: t0 + n * DAY }),
+        step(2, { object: "subscription", trial_end: trialEnd, billing_cycle_anchor: t0 + n * DAY, current_period_end: end(t0 + n * DAY), items: { data: [{ current_period_end: end(t0 + n * DAY) }] } }),
+        step(3, { object: "list", data: [{ object: "invoice", lines: { data: [{ period: { start: t0 + n * DAY, end: end(t0 + n * DAY) } }] } }] }),
+      ]),
+    );
+  const bodies = (r: Recording) => r.steps.map((s) => s.body);
+  // The review's two pairs: v1.6 matched both in hours (+912h, +816h); months plus hours from t0 split them.
+  for (const [a, b, n, label] of [
+    [utc(8, 28), utc(9, 1), 7, "<t:+168h+1mo>"],
+    [utc(9, 28), utc(10, 4), 4, "<t:+96h+1mo>"],
+  ] as const) {
+    assert.deepEqual(bodies(trial(a, n)), bodies(trial(b, n)));
+    assert.equal(body(trial(b, n), 2).current_period_end, label);
+    assert.equal(body(trial(b, n), 2).items.data[0].current_period_end, label);
+    assert.equal(body(trial(b, n), 3).data[0].lines.data[0].period.end, label);
+  }
+  const oct = trial(utc(9, 1), 7);
+  assert.equal(body(oct, 1).trial_end, "<t:+168h>"); // the anchor itself, and the period end during the trial, stay hours
+  assert.equal(body(oct, 1).current_period_end, "<t:+168h>");
+  assert.equal(body(oct, 2).billing_cycle_anchor, "<t:+168h>");
+  assert.equal(body(trial(utc(9, 1), 7, (a) => addMonth(a, 12)), 2).current_period_end, "<t:+168h+12mo>"); // a yearly seed
+  assert.equal(body(trial(utc(9, 1), 7, (a) => addMonth(a) + 3599), 2).current_period_end, "<t:+168h+1mo>"); // the ±1 h window
+  assert.equal(body(trial(utc(9, 1), 7, (a) => addMonth(a) + 3600), 2).current_period_end, "<t:+1mo+169h>");
+  // Without a trial_end in the recording the same instants are months plus hours from t0, and split.
+  const bare = (t0: number) => body(trial(t0, 7, undefined, null), 2).current_period_end;
+  assert.deepEqual([bare(utc(8, 28)), bare(utc(9, 1))], ["<t:+1mo+192h>", "<t:+1mo+168h>"]);
+  // A trial_end within an hour of t0 is no anchor: 90 min past a month is <t:+1mo+2h>, not 30 min past <t:+1h+1mo>.
+  assert.equal(body(trial(utc(9, 1), 0, (a) => addMonth(a) + 5400, utc(9, 1) + H - 1), 2).current_period_end, "<t:+1mo+2h>");
+  assert.equal(body(trial(utc(9, 1), 0, (a) => addMonth(a) + 5400, utc(9, 1) + H), 2).current_period_end, "<t:+1h+1mo>");
+  // Not hidden: a twin that adds 30 days after the trial, caught when the trial ends in a month that is not 30 days long.
+  const twin30 = (t0: number) => body(trial(t0, 7, (a) => a + 30 * DAY), 2).current_period_end;
+  assert.equal(twin30(utc(9, 1)), "<t:+1mo+144h>"); // trial ends 8 October; Stripe: <t:+168h+1mo>
+  assert.equal(twin30(utc(10, 1)), body(trial(utc(10, 1), 7), 2).current_period_end); // ends 8 November: the 30-day blind spot
+  // Day-counted keys stay hours even a month after a trial end.
+  assert.equal(body(normalizeRecording(rec([step(0, { created: utc(9, 1), trial_end: utc(9, 8), due_date: addMonth(utc(9, 8)) })])), 0).due_date, "<t:+912h>");
+});
+
 test("v1.6: a payment method's and a charge's card expiry is opaque when it is a valid month and year; 0, null and strings are compared", () => {
   const card = (m: unknown, y: unknown) => ({ brand: "visa", exp_month: m, exp_year: y, last4: "4242" });
   const run = (m: unknown, y: unknown) =>
