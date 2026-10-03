@@ -167,6 +167,10 @@ const userPrompt = (files: { path: string; source: string }[], ce: Counterexampl
 export function parseReply(text: string, shown: { path: string; source: string }[]): { file: string; content: string } | { error: string } {
   const files = [...text.matchAll(/^FILE:[ \t]*(\S+)[ \t]*$/gm)].map((m) => m[1]!);
   const blocks = [...text.matchAll(/^<<<<<<< SEARCH\n([\s\S]*?)^=======\n([\s\S]*?)^>>>>>>> REPLACE[ \t]*$/gm)].map((m) => [m[1]!, m[2]!] as const);
+  // Every marker line belongs to a complete block: else a block missing its REPLACE line is swallowed into the next
+  // one's replacement, or an unterminated last block is dropped.
+  const markers = text.match(/^(?:<<<<<<< SEARCH|=======|>>>>>>> REPLACE)[ \t]*$/gm)?.length ?? 0;
+  if (markers !== 3 * blocks.length) return { error: `malformed SEARCH/REPLACE markers: ${markers} marker lines for ${blocks.length} complete blocks` };
   if (files.length !== 1 || !blocks.length) return { error: `expected one FILE line and at least one SEARCH/REPLACE block, got ${files.length} and ${blocks.length}` };
   const f = shown.find((x) => x.path === files[0]);
   if (!f) return { error: `${files[0]} is not one of the files shown (${shown.map((x) => x.path).join(", ")})` };

@@ -199,6 +199,12 @@ test("parseReply: one FILE line naming a file shown plus SEARCH/REPLACE blocks a
   assert.match(err(edits(C, ["const a = 1;\n", "y\n"]) + edits("src/twin/billing.ts", ["x\n", "y\n"])), /got 2 and 2/, "one file per reply");
   assert.match(err(`FILE: ${C}\n\`\`\`ts\nconst a = 1;\n\`\`\`\n`), /got 1 and 0/, "a whole file (the old contract) is no edit");
   assert.match(err(`FILE:\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n`), /got 0 and 1/, "a bare FILE: line names nothing");
+  // Stray markers: a block missing its REPLACE line would be swallowed into the next one's replacement (markers written
+  // into the file), and an unterminated last block would be dropped (part of the change gated alone).
+  const swallowed = `FILE: ${C}\n<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 9;\n` + edits(C, ["const b = 2;\n", "const b = 3;\n"]).split("\n").slice(1).join("\n");
+  assert.equal(err(swallowed), "malformed SEARCH/REPLACE markers: 5 marker lines for 1 complete blocks");
+  assert.equal(err(edits(C, ["const b = 2;\n", "const b = 3;\n"]) + "<<<<<<< SEARCH\nconst a = 1;\n=======\n"), "malformed SEARCH/REPLACE markers: 5 marker lines for 1 complete blocks");
+  assert.equal(err(edits(C, ["const b = 2;\n", "const b = 3;\n"]) + "<<<<<<< SEARCH\nconst a = 1;\n"), "malformed SEARCH/REPLACE markers: 4 marker lines for 1 complete blocks");
 });
 
 test("normalizeWithParams: request paths and params normalized like bodies (0001 C3; params by normalizeRecording itself), test tokens kept, bodies' anchor", () => {
