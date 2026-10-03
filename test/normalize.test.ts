@@ -30,7 +30,7 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.6");
+  assert.equal(NORMALIZATION_VERSION, "v1.7");
   assert.equal(RULES.length, 16);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
@@ -219,12 +219,13 @@ test("v1.4: a declined invoice's next_payment_attempt is a day offset; before an
     );
   const [a, b] = [run(42), run(46)];
   assert.deepEqual(body(a, 1), body(b, 1));
-  assert.equal(body(a, 1).data[0].next_payment_attempt, "<t:+35d>");
-  assert.equal(body(a, 1).data[1].next_payment_attempt, "<t:+793h>"); // no attempt yet: hour-granular
-  assert.equal(body(a, 2).next_payment_attempt, "<t:+834h>"); // not an invoice: hour-granular
+  // T0 is 21 Sep: 34.75 days on is a month (30 days) plus 4.75 days (v1.7: days counted from the last whole month).
+  assert.equal(body(a, 1).data[0].next_payment_attempt, "<t:+1mo+5d>");
+  assert.equal(body(a, 1).data[1].next_payment_attempt, "<t:+1mo+73h>"); // no attempt yet: hour-granular
+  assert.equal(body(a, 2).next_payment_attempt, "<t:+1mo+114h>"); // not an invoice: hour-granular
   assert.notDeepEqual(body(a, 2), body(b, 2));
   // A retry a day later is still a divergence.
-  assert.equal(body(run(70), 1).data[0].next_payment_attempt, "<t:+36d>");
+  assert.equal(body(run(70), 1).data[0].next_payment_attempt, "<t:+1mo+6d>");
 });
 
 test("v1.4: payment_method_details.card.electronic_commerce_indicator is opaque unless null; 3DS's is compared", () => {
@@ -261,7 +262,7 @@ test("v1.5: account_name is opaque, null included (unclaimed vs claimed sandbox)
   assert.notDeepEqual(body(normalizeRecording(rec([step(0, inv("Acme", "GB"))])), 0), body(a, 0));
 });
 
-test("v1.6: a whole number of calendar months from t0 is <t:+kmo> in any month; 30 days, a month plus hours and day-counted keys stay hourly", () => {
+test("v1.6: a whole number of calendar months from t0 is <t:+kmo> in any month; 30 days and day-counted keys stay hourly", () => {
   const DAY = 86400;
   const SEP28 = Date.UTC(2026, 8, 28, 12) / 1000; // a 30-day month
   const OCT1 = Date.UTC(2026, 9, 1, 12) / 1000; // a 31-day month
@@ -284,15 +285,81 @@ test("v1.6: a whole number of calendar months from t0 is <t:+kmo> in any month; 
   assert.equal(body(sub(OCT1, 30), 1).items.data[0].current_period_end, "<t:+720h>");
   const at = (t0: number, t: number, k = "period_end") => body(normalizeRecording(rec([step(0, { created: t0, [k]: t })])), 0)[k];
   assert.equal(at(OCT1, OCT1 + 31 * DAY + 3599), "<t:+1mo>"); // under an hour off
-  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3600), "<t:+745h>"); // a month plus an hour stays hourly
-  assert.equal(at(OCT1, OCT1 + 34 * DAY), "<t:+816h>"); // a month plus 3 days
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3600), "<t:+1mo+1h>"); // a month plus an hour (v1.7)
+  assert.equal(at(OCT1, OCT1 + 34 * DAY), "<t:+1mo+72h>"); // a month plus 3 days (v1.7)
   assert.equal(at(OCT1, Date.UTC(2027, 9, 1, 12) / 1000), "<t:+12mo>"); // a year
   assert.equal(at(OCT1, Date.UTC(2026, 8, 1, 12) / 1000, "trial_start"), "<t:-1mo>");
   const JAN31 = Date.UTC(2027, 0, 31, 12) / 1000;
   assert.equal(at(JAN31, Date.UTC(2027, 1, 28, 12) / 1000), "<t:+1mo>"); // the day clamped, as Stripe bills a 31st anchor
   assert.equal(at(JAN31, Date.UTC(2027, 2, 31, 12) / 1000), "<t:+2mo>"); // counted from t0, not from 28 February
-  assert.equal(at(JAN31, Date.UTC(2027, 2, 3, 12) / 1000), "<t:+744h>"); // 31 days from 31 January is not a month
+  assert.equal(at(JAN31, Date.UTC(2027, 2, 3, 12) / 1000), "<t:+1mo+72h>"); // 31 days from 31 January is 28 February plus 3 days
   for (const k of ["deletes_after", "due_date", "trial_end"]) assert.equal(at(SEP28, SEP28 + 30 * DAY, k), "<t:+720h>", k);
+});
+
+test("v1.7: a month plus a fixed time is <t:+kmo+Nh> (a declined retry <t:+kmo+Nd>), so it compares equal from months of different lengths", () => {
+  const DAY = 86400;
+  const H = 3600;
+  const SEP28 = Date.UTC(2026, 8, 28, 12) / 1000; // a 30-day month
+  const OCT1 = Date.UTC(2026, 9, 1, 12) / 1000; // a 31-day month
+  // drift/2026-10-02.md: one renewal recorded from each month. The period ends a calendar month on (k = 1), or three
+  // (Dec 28 is 91 days from Sep 28, Jan 1 is 92 from Oct 1); the invoice finalizes 72 h later, first attempts 1 h after
+  // the period end, and a declined attempt retries 42–46 h after finalization.
+  const renewal = (t: number, days: number, retryH: number) =>
+    normalizeRecording(
+      rec([
+        step(0, { object: "price", created: t }),
+        step(1, { object: "list", data: [{ object: "invoice", attempt_count: 0, period_end: t + days * DAY, automatically_finalizes_at: t + days * DAY + 72 * H, next_payment_attempt: t + days * DAY + H }] }),
+        step(2, { object: "test_helpers.test_clock", frozen_time: t + days * DAY + 72 * H, status_details: { advancing: { target_frozen_time: t + days * DAY + 72 * H } } }),
+        step(3, { object: "list", data: [{ object: "invoice", attempt_count: 1, status_transitions: { finalized_at: t + days * DAY + 72 * H }, next_payment_attempt: t + days * DAY + (72 + retryH) * H }] }),
+      ]),
+    );
+  const [sep, oct] = [renewal(SEP28, 30, 42), renewal(OCT1, 31, 46)];
+  assert.deepEqual(
+    sep.steps.map((s) => s.body),
+    oct.steps.map((s) => s.body),
+  );
+  assert.deepEqual(body(oct, 1).data[0], { object: "invoice", attempt_count: 0, period_end: "<t:+1mo>", automatically_finalizes_at: "<t:+1mo+72h>", next_payment_attempt: "<t:+1mo+1h>" });
+  assert.equal(body(oct, 2).frozen_time, "<t:+1mo+72h>");
+  assert.equal(body(oct, 3).data[0].next_payment_attempt, "<t:+1mo+5d>");
+  const [sep3, oct3] = [renewal(SEP28, 91, 44), renewal(OCT1, 92, 44)];
+  assert.deepEqual(body(sep3, 1), body(oct3, 1));
+  assert.equal(body(oct3, 1).data[0].automatically_finalizes_at, "<t:+3mo+72h>");
+  // Same blind spot as v1.6: a twin that adds 30 days, then 72 h, is caught from October, not from September.
+  const twin = (t: number) => body(renewal(t, 30, 44), 1).data[0].automatically_finalizes_at;
+  assert.equal(twin(OCT1), "<t:+1mo+48h>");
+  assert.equal(twin(SEP28), "<t:+1mo+72h>");
+
+  const at = (t0: number, t: number, k = "period_end") => body(normalizeRecording(rec([step(0, { created: t0, [k]: t })])), 0)[k];
+  // Offsets just under and over a month (31 days from 1 October): hours below, the ±1 h exact window, then month + hours.
+  assert.equal(at(OCT1, OCT1 + 31 * DAY - 2 * H), "<t:+742h>");
+  assert.equal(at(OCT1, OCT1 + 31 * DAY - 3601), "<t:+743h>");
+  assert.equal(at(OCT1, OCT1 + 31 * DAY - 3599), "<t:+1mo>");
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3599), "<t:+1mo>");
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 3600), "<t:+1mo+1h>");
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 5399), "<t:+1mo+1h>"); // rounded like the hour buckets
+  assert.equal(at(OCT1, OCT1 + 31 * DAY + 5400), "<t:+1mo+2h>");
+  assert.equal(at(OCT1, OCT1 + 61 * DAY - 3601), "<t:+1mo+719h>"); // just short of 1 December: still the first month (30 days)
+  assert.equal(at(OCT1, OCT1 + 61 * DAY - 3599), "<t:+2mo>");
+  // Month ends: Jan 31 + 1 month is Feb 28 (Feb 29 in a leap year), + 2 months is Mar 31, counted from t0.
+  const JAN31 = Date.UTC(2027, 0, 31, 12) / 1000;
+  assert.equal(at(JAN31, Date.UTC(2027, 1, 28, 12 + 72) / 1000), "<t:+1mo+72h>");
+  assert.equal(at(JAN31, Date.UTC(2027, 2, 31, 13) / 1000), "<t:+2mo+1h>");
+  assert.equal(at(Date.UTC(2028, 0, 31, 12) / 1000, Date.UTC(2028, 2, 3, 12) / 1000), "<t:+1mo+72h>"); // from 29 Feb 2028
+  assert.equal(at(Date.UTC(2026, 10, 30, 12) / 1000, Date.UTC(2027, 1, 28, 17) / 1000), "<t:+3mo+5h>"); // Nov 30 + 3 months = Feb 28
+  // Year boundaries.
+  const DEC31 = Date.UTC(2026, 11, 31, 12) / 1000;
+  assert.equal(at(DEC31, Date.UTC(2027, 0, 31, 13) / 1000), "<t:+1mo+1h>");
+  assert.equal(at(Date.UTC(2026, 11, 15, 12) / 1000, Date.UTC(2027, 0, 18, 12) / 1000), "<t:+1mo+72h>");
+  assert.equal(at(OCT1, Date.UTC(2027, 9, 4, 12) / 1000), "<t:+12mo+72h>"); // a year plus 3 days
+  assert.equal(at(OCT1, Date.UTC(2027, 10, 1, 14) / 1000), "<t:+13mo+2h>");
+  // Unchanged: before t0, other than whole months, and day-counted keys are hours.
+  assert.equal(at(OCT1, OCT1 - 34 * DAY, "trial_start"), "<t:-816h>");
+  for (const k of ["deletes_after", "due_date", "trial_end"]) assert.equal(at(SEP28, SEP28 + 45 * DAY, k), "<t:+1080h>", k);
+  // A retry within a month stays a day count; one a few hours short of a month counts from that month (0 days).
+  const retry = (t0: number, t: number) => body(normalizeRecording(rec([step(0, { created: t0 }), step(1, { object: "invoice", attempt_count: 1, next_payment_attempt: t })])), 1).next_payment_attempt;
+  assert.equal(retry(OCT1, OCT1 + 20 * DAY), "<t:+20d>");
+  assert.equal(retry(OCT1, OCT1 + 31 * DAY - 6 * H), "<t:+1mo+0d>");
+  assert.equal(retry(OCT1, OCT1 + 61 * DAY - 13 * H), "<t:+1mo+29d>");
 });
 
 test("v1.6: a payment method's and a charge's card expiry is opaque when it is a valid month and year; 0, null and strings are compared", () => {

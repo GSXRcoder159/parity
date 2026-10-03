@@ -1,10 +1,10 @@
-// Normalization v1.6: rewrites run-specific values (ids, timestamps, whole calendar months, readable dates in text, a declined
+// Normalization v1.7: rewrites run-specific values (ids, timestamps, calendar months plus hours, readable dates in text, a declined
 // invoice's retry day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, test-card expiry, dashboard
 // links, the unclaimed-sandbox banner) so two faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.6";
+export const NORMALIZATION_VERSION = "v1.7";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -20,7 +20,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "calendar-months",
     rationale:
-      "A one-month period is 30 days from a September start and 31 from an October one, so v1.5 rendered one sequence's period end `<t:+720h>` when recorded on 2026-09-28 and `<t:+744h>` when re-recorded on 2026-10-01: period ends, `cancel_at`, a renewal invoice's `created`, a test clock's `frozen_time` (drift/2026-10-01.md). v1.6: a timestamp within an hour of t0 + k calendar months (k ≠ 0; UTC, the day clamped to the target month's length as Stripe bills a month-end anchor: Jan 31 + 1 month = Feb 28; a year is 12 months) becomes `<t:+kmo>`; any other offset keeps its hour bucket, including a month plus hours (an invoice finalized 1 h or 3 days after a period end), which still differs between months of different lengths. Each recording renders against its own t0. Not applied to `deletes_after`, `due_date` and `trial_end`, which Stripe counts in days (a test clock is deleted 30 days after creation; `days_until_due`, `trial_period_days`): 30 days from a September t0 is also exactly one calendar month, so the rule would render them `<t:+1mo>` in September and `<t:+720h>` in October (it did, for `deletes_after`, when v1.6 was first replayed on drift/2026-10-01.md; `due_date` would on invoice-send-invoice seed 10, 30 days until due). Another key counted in days needs the same exclusion once a template makes it span a month. Hides: between two recordings whose t0 fall in months of different lengths (drift's re-recordings), the month's length, which is the point; a twin replayed at another month's clock than the oracle's (score-twin's Parity-Now pin lost), which before showed on period ends (test/cli.test.ts now checks the pin on the twin's raw recordings); and an error under an hour either side of t0 + k months (the hour buckets also hid under an hour, by rounding). A twin scored against the oracle runs at the oracle's Parity-Now, so both t0 fall in the same month and `<t:+kmo>` on both sides is the same instant within an hour. Not hidden: a twin that adds 30 days where Stripe adds a calendar month, or the reverse, renders `<t:+720h>` against `<t:+1mo>` whenever t0 + 1 month is not t0 + 30 days. When it is (t0 in April, June, September or November, or a month end such as March 31 → April 30) both render `<t:+1mo>`, as both rendered `<t:+720h>` under v1.5: that gap is unchanged, and only sequences recorded in other months expose it.",
+      "A one-month period is 30 days from a September start and 31 from an October one, so v1.5 rendered one sequence's period end `<t:+720h>` when recorded on 2026-09-28 and `<t:+744h>` when re-recorded on 2026-10-01: period ends, `cancel_at`, a renewal invoice's `created`, a test clock's `frozen_time` (drift/2026-10-01.md). v1.6: a timestamp within an hour of t0 + k calendar months (k ≠ 0; UTC, the day clamped to the target month's length as Stripe bills a month-end anchor: Jan 31 + 1 month = Feb 28; a year is 12 months) becomes `<t:+kmo>`. A month plus a fixed time moved the same way under v1.6: a renewal invoice finalized 72 h after the period end (its `automatically_finalizes_at`, `effective_at`, `finalized_at`, `paid_at`, and a clock advanced to it) and its `next_payment_attempt` 1 h after it read `+792h` and `+721h` from a September t0 and `+816h` and `+745h` from an October one (drift/2026-10-02.md, drift/2026-10-03.md). v1.7: any other timestamp at least one calendar month after t0 becomes `<t:+kmo+Nh>`, k the most whole calendar months (same arithmetic) with t0 + k months not after it and N the hours left, rounded as the hour buckets round (`<t:+1mo+72h>`, `<t:+1mo+1h>`); the exact-month window stays ±1 h, so N is never 0. Offsets under one month, and offsets before t0 other than a whole number of months, keep their hour bucket. Each recording renders against its own t0. Not applied to `deletes_after`, `due_date` and `trial_end`, which Stripe counts in days (a test clock is deleted 30 days after creation; `days_until_due`, `trial_period_days`): 30 days from a September t0 is also exactly one calendar month, so the rule would render them `<t:+1mo>` in September and `<t:+720h>` in October (it did, for `deletes_after`, when v1.6 was first replayed on drift/2026-10-01.md; `due_date` would on invoice-send-invoice seed 10, 30 days until due). Another key counted in days needs the same exclusion once a template makes it span a month. Hides: between two recordings whose t0 fall in months of different lengths (drift's re-recordings), the month's length, which is the point, on whole months (v1.6) and on months plus hours (v1.7); a twin replayed at another month's clock than the oracle's (score-twin's Parity-Now pin lost), which before v1.6 showed on period ends and before v1.7 still showed on a renewal's finalization times (test/cli.test.ts checks the pin on the twin's raw recordings instead); and an error under an hour either side of t0 + k months (the hour buckets also hid under an hour, by rounding). Against one t0, v1.7 hides nothing v1.6 showed: t0 + k months is a whole number of hours after t0 (the UTC time of day is kept), so `<t:+kmo+Nh>` is the v1.6 hour bucket relabeled one to one (`<t:+816h>` from 1 October is `<t:+1mo+72h>`). A twin scored against the oracle runs at the oracle's Parity-Now, so its t0 is the oracle's to within the pin: `<t:+kmo>` on both sides is the same instant within an hour, and `<t:+kmo+Nh>` the same hour. Not hidden: a twin that adds 30 days where Stripe adds a calendar month, or the reverse, with or without a fixed delay after it, renders `<t:+720h>` against `<t:+1mo>` and `<t:+1mo+48h>` against `<t:+1mo+72h>` (from 1 October) whenever t0 + 1 month is not t0 + 30 days. When it is (t0 in April, June, September or November, or a month end such as March 31 → April 30) both sides render the same, as both did in hours under v1.5: that gap is unchanged by v1.6 and v1.7, and only sequences recorded in other months expose it. New in v1.7, false drift rather than a hidden bug: a timestamp Stripe counts as a fixed number of days from t0, more than a month out and on a key outside that exclusion, now differs between months of different lengths (35 days is `<t:+1mo+120h>` from September, `<t:+1mo+96h>` from October), where its v1.6 hour bucket did not; and a time more than an hour short of a month boundary is still counted in hours (from t0 or from the month before), so it still differs between such months. Neither is in the corpus (`deletes_after` is 30 days, `due_date` at most 30, trials 4–14 days, every clock advance targets a period end, `cancel_at`, `trial_end` or `automatically_finalizes_at`).",
   },
   {
     name: "readable-dates",
@@ -30,7 +30,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "retry-day",
     rationale:
-      "After a declined payment attempt the sandbox schedules the retry a random 42–46 h later (#30: the 2026-09-28 noise pair, and the same spread over its 20 oracle seeds). v1.4: `next_payment_attempt` on an invoice with `attempt_count` > 0 becomes a whole-day offset from the timestamps rule's anchor, rounded (`<t:+35d>`); before any attempt it stays hour-granular. Hides: a retry time that rounds to the same day as the oracle's (up to ±12 h off, e.g. a fixed 48 h, or 38 h instead of 46 h).",
+      "After a declined payment attempt the sandbox schedules the retry a random 42–46 h later (#30: the 2026-09-28 noise pair, and the same spread over its 20 oracle seeds). v1.4: `next_payment_attempt` on an invoice with `attempt_count` > 0 becomes a whole-day offset from the timestamps rule's anchor, rounded (`<t:+35d>`); before any attempt it stays hour-granular. v1.7: the retry after a monthly renewal is a month plus about 5 days, so it read `<t:+35d>` from a September t0 and `<t:+36d>` from an October one (drift/2026-10-02.md); a retry whose rounded day is at least a calendar month out now counts its days from the last whole month before that day (rule calendar-months' arithmetic; `<t:+1mo+5d>`), so the day count is 0 to the month's length − 1. Hides: a retry time that rounds to the same day as the oracle's (up to ±12 h off, e.g. a fixed 48 h, or 38 h instead of 46 h); and, as rule calendar-months, the month's length between recordings whose t0 fall in months of different lengths.",
   },
   {
     name: "run-nonce",
@@ -155,6 +155,13 @@ function wholeMonths(t0: number, t: number): number | undefined {
   return undefined;
 }
 
+/** The most calendar months k with t0 + k months ≤ t (0 under a month, negative before t0). */
+function monthsBefore(t0: number, t: number): number {
+  const [a, b] = [new Date(t0 * 1000), new Date(t * 1000)];
+  const k = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + b.getUTCMonth() - a.getUTCMonth(); // lands in t's month
+  return addMonths(t0, k) > t ? k - 1 : k;
+}
+
 export function normalizeRecording(r: Recording): Recording {
   const nonce = runNonce(r.runId, r.seq);
   let t0: number | undefined;
@@ -184,13 +191,18 @@ export function normalizeRecording(r: Recording): Recording {
     if (t0 !== undefined && Number.isInteger(v) && (TS_KEYS.has(k) || TS_SUFFIX.test(k))) {
       const t = v as number;
       if (t >= 946684800 && t <= 4102444800) {
+        const days = DAY_COUNT.has(k);
         if (k === "next_payment_attempt" && parent.object === "invoice" && (parent.attempt_count as number) > 0) {
-          const d = Math.round((t - t0) / 86400);
-          return `<t:${d >= 0 ? "+" : ""}${d}d>`;
+          // Counted from the last whole month before the rounded day (+12 h), so the day count stays in 0 … month − 1.
+          const m = monthsBefore(t0, t + 43200);
+          const d = Math.round((t - (m > 0 ? addMonths(t0, m) : t0)) / 86400);
+          return m > 0 ? `<t:+${m}mo+${d}d>` : `<t:${d >= 0 ? "+" : ""}${d}d>`;
         }
         if (Math.abs(t - t0) < 3600) return "<t:~0>";
-        const mo = DAY_COUNT.has(k) ? undefined : wholeMonths(t0, t);
+        const mo = days ? undefined : wholeMonths(t0, t);
         if (mo !== undefined) return `<t:${mo > 0 ? "+" : ""}${mo}mo>`;
+        const m = days ? 0 : monthsBefore(t0, t);
+        if (m > 0) return `<t:+${m}mo+${Math.round((t - addMonths(t0, m)) / 3600)}h>`;
         const n = Math.round((t - t0) / 3600);
         return `<t:${n >= 0 ? "+" : ""}${n}h>`;
       }
