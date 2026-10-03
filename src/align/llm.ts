@@ -13,14 +13,16 @@ export const HARD_CAP_USD = 15;
  * USD per million tokens. Source: the claude-api skill's model table (Anthropic first-party API rates, cached
  * 2026-06-24), checked 2026-09-26; cache writes (5-minute TTL) cost 1.25x input and cache reads 0.1x input.
  * `temperature0`: the model accepts temperature 0. Claude Sonnet 5 and Opus 4.7+ reject non-default sampling
- * parameters with a 400, so temperature is sent only where it is accepted.
+ * parameters with a 400, so temperature is sent only where it is accepted. `effort`: the model accepts
+ * `output_config.effort` (Haiku 4.5 rejects it), so a call's effort is sent only there.
  */
-export const PRICES: Record<string, { input: number; output: number; temperature0?: boolean }> = {
-  "claude-sonnet-5": { input: 2, output: 10 },
-  "claude-opus-5": { input: 5, output: 25 },
-  "claude-sonnet-4-6": { input: 3, output: 15, temperature0: true },
+export const PRICES: Record<string, { input: number; output: number; temperature0?: boolean; effort?: boolean }> = {
+  "claude-sonnet-5": { input: 2, output: 10, effort: true },
+  "claude-opus-5": { input: 5, output: 25, effort: true },
+  "claude-sonnet-4-6": { input: 3, output: 15, temperature0: true, effort: true },
   "claude-haiku-4-5": { input: 1, output: 5, temperature0: true },
 };
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Usage {
   input_tokens: number;
@@ -83,13 +85,13 @@ export interface Reply {
 }
 
 /**
- * One Messages API call (`maxTokens`, default MAX_TOKENS; temperature 0 where the model accepts it): one `user` prompt,
- * or a whole `messages` list (a tool-use loop), with optional `tools`. Refused with CapRefused when today's spend, or any
+ * One Messages API call (`maxTokens`, default MAX_TOKENS, thinking included; temperature 0 and `effort` where the model
+ * accepts them): one `user` prompt, or a whole `messages` list (a tool-use loop), with optional `tools`. Refused with CapRefused when today's spend, or any
  * of `extraCaps` (a caller's own budgets), plus a worst-case estimate (prompt chars / 2 input tokens, max_tokens output)
  * would pass its cap. A 429 or 529 is retried twice. The reply is ledgered whatever its stop_reason.
  */
 export async function complete(
-  req: { system: string; tools?: unknown[]; runId: string; purpose: string; maxTokens?: number } & ({ user: string } | { messages: unknown[] }),
+  req: { system: string; tools?: unknown[]; runId: string; purpose: string; maxTokens?: number; effort?: Effort } & ({ user: string } | { messages: unknown[] }),
   o: { ledger: string; env?: Env; now?: () => Date; extraCaps?: { spent: number; cap: number; name: string }[] },
 ): Promise<Reply> {
   const env = o.env ?? process.env;
@@ -112,7 +114,15 @@ export async function complete(
   }
   const redact = (s: string) => s.split(apiKey).join("[REDACTED]");
   const url = `${(env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "")}/v1/messages`;
-  const body = JSON.stringify({ model, max_tokens: maxTokens, ...(p.temperature0 ? { temperature: 0 } : {}), system: req.system, ...(req.tools ? { tools: req.tools } : {}), messages });
+  const body = JSON.stringify({
+    model,
+    max_tokens: maxTokens,
+    ...(p.temperature0 ? { temperature: 0 } : {}),
+    ...(req.effort && p.effort ? { output_config: { effort: req.effort } } : {}),
+    system: req.system,
+    ...(req.tools ? { tools: req.tools } : {}),
+    messages,
+  });
   let res: Response;
   let raw: string;
   for (let attempt = 1; ; attempt++) {

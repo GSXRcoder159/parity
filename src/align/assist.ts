@@ -1,7 +1,8 @@
 // Assisted patches (decision 0002 §3): for the top K non-mechanical train loci (the plan's not-mechanical loci and its
 // blocked-by-code candidates), the LLM sees the behavior module owning the route, a normalized counterexample from the
-// smallest train sequence showing the locus, and the divergences; it returns one replaced file under src/twin/. The
-// reply is gated in a temp copy inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no
+// smallest train sequence showing the locus, and the divergences; it returns SEARCH/REPLACE edits to one file under
+// src/twin/ (each SEARCH must match that file exactly once, else the reply is a bad-reply), applied here to the file's
+// text. The result is gated in a temp copy inside a container with no network (gate.ts scoreTwinIn with docker): no docker, no
 // pass. The mechanical pass runs on top of the code change there (train only, data files only, index.ts mechanical)
 // and the combination is gated (gate.ts gatePaired: held-out L3 must not drop, train divergences must fall, one of the
 // locus's own must go), so a change that exposes template fields is not judged without the data edits fixing them; the
@@ -10,7 +11,8 @@
 // as two commits), pushed, and a draft PR; the sealed log gets a `patch` entry {class: "assisted", status: "proposed"}
 // scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
 // merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM. A locus whose last
-// 2 attempts stopped at max_tokens sits out 7 days (`cooldown`, from the sealed log) and the next locus takes its slot.
+// 2 attempts under the current reply contract (CONTRACT) stopped at max_tokens sits out 7 days (`cooldown`, from the
+// sealed log) and the next locus takes its slot.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -24,7 +26,7 @@ import type { Route } from "../twin/server.ts";
 import { applyEdits, dockerCheck, editOf, evalOf, gatePaired, scores, scoreTwinIn, type Run, type Scores } from "./gate.ts";
 import { candidateLine, mechanical, split, where, type AlignResult } from "./index.ts";
 import { appendLog, logPath, verifyLog, type LogEntry } from "./log.ts";
-import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Env } from "./llm.ts";
+import { CapRefused, DEFAULT_MODEL, capUsd, complete, type Effort, type Env } from "./llm.ts";
 import { FRAUD_OR_RISK, locusKey, type Candidate } from "./patch.ts";
 import { divergenceId, segments, type Locus, type Triaged } from "./triage.ts";
 
@@ -137,11 +139,14 @@ function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recordin
 const SYSTEM = `You fix one behavior bug in Parity's twin: an open-source emulator of a payments API's Billing surface, in TypeScript for Node 22 (type stripping, explicit .ts imports, \`import type\` for types).
 Handlers are pure: (ctx, req) -> { status, body, events }. Objects are built as \`ctx.build(type, computed)\` (a data template plus computed fields) and errors are raised by catalog key with \`ctx.fail(key, vars)\`. Templates (shapes/*.json) and the error catalog (errors.json) are data you cannot edit here: fix only what handler code decides (computed fields, statuses, which events fire, state transitions).
 Rules:
-1. Reply with a full replacement of exactly one of the files shown, in this format and nothing else:
+1. Reply with edits to exactly one of the files shown: one FILE line, then one or more SEARCH/REPLACE blocks, in this format and nothing else:
 FILE: <path as shown>
-\`\`\`ts
-<the entire file>
-\`\`\`
+<<<<<<< SEARCH
+<lines copied exactly from the current file, whitespace included>
+=======
+<the lines that replace them>
+>>>>>>> REPLACE
+Each SEARCH must match exactly one place in the file as the blocks before it left it: include just enough surrounding lines to make it unique, and keep blocks small. Never return the whole file.
 2. Change behavior only as far as the counterexample shows; keep every other route, export and import working.
 3. Clean room: write original code from the evidence shown. Do not use, recall or reproduce code from any third-party emulator or mock of this API (such as stripe-mock or localstripe) or from any other twin.
 4. Build every API object you add or return, nested ones too, with \`ctx.build(type, computed)\` and set only what the handler computes; never write an object's fields as a literal. After your change, a mechanical pass fixes the templates' field values against the oracle, so a template field that differs from the counterexample is fixed there, not in code.`;
@@ -152,17 +157,29 @@ const userPrompt = (files: { path: string; source: string }[], ce: Counterexampl
     "## Behavior module source",
     ...files.map((f) => `### ${f.path}\n\`\`\`ts\n${f.source}\`\`\``),
     ce.text,
-    `## Task\nReturn the full replacement of exactly one of: ${files.map((f) => f.path).join(", ")}, so the twin answers as the oracle does at the * divergences.`,
+    `## Task\nReply with SEARCH/REPLACE edits to exactly one of: ${files.map((f) => f.path).join(", ")}, so the twin answers as the oracle does at the * divergences.`,
   ].join("\n\n");
 
-/** `FILE: <path>` plus one fenced block; the path must be one of `allowed` (the files shown). */
-export function parseReply(text: string, allowed: string[]): { file: string; content: string } | { error: string } {
+/**
+ * `FILE: <path>` (one of `shown`) plus SEARCH/REPLACE blocks, applied in order to that file's source: each SEARCH must
+ * occur exactly once in the text the blocks before it left. Returns the edited file, or why the reply is refused.
+ */
+export function parseReply(text: string, shown: { path: string; source: string }[]): { file: string; content: string } | { error: string } {
   const files = [...text.matchAll(/^FILE:[ \t]*(\S+)[ \t]*$/gm)].map((m) => m[1]!);
-  const blocks = [...text.matchAll(/^```[\w-]*\n([\s\S]*?)^```[ \t]*$/gm)].map((m) => m[1]!);
-  if (files.length !== 1 || blocks.length !== 1) return { error: `expected one FILE line and one fenced block, got ${files.length} and ${blocks.length}` };
-  if (!allowed.includes(files[0]!)) return { error: `${files[0]} is not one of the files shown (${allowed.join(", ")})` };
-  if (!blocks[0]!.trim()) return { error: "empty file" };
-  return { file: files[0]!, content: blocks[0]! };
+  const blocks = [...text.matchAll(/^<<<<<<< SEARCH\n([\s\S]*?)^=======\n([\s\S]*?)^>>>>>>> REPLACE[ \t]*$/gm)].map((m) => [m[1]!, m[2]!] as const);
+  if (files.length !== 1 || !blocks.length) return { error: `expected one FILE line and at least one SEARCH/REPLACE block, got ${files.length} and ${blocks.length}` };
+  const f = shown.find((x) => x.path === files[0]);
+  if (!f) return { error: `${files[0]} is not one of the files shown (${shown.map((x) => x.path).join(", ")})` };
+  let content = f.source;
+  for (const [i, [search, replace]] of blocks.entries()) {
+    if (!search.trim()) return { error: `block ${i + 1}: empty SEARCH` };
+    const at = content.indexOf(search);
+    if (at < 0 || content.indexOf(search, at + 1) >= 0) {
+      return { error: `block ${i + 1}: SEARCH matches ${at < 0 ? "nothing" : "more than one place"} in ${f.path}: ${JSON.stringify(search.slice(0, 80))}` };
+    }
+    content = content.slice(0, at) + replace + content.slice(at + search.length);
+  }
+  return { file: f.path, content };
 }
 
 /**
@@ -251,6 +268,8 @@ export interface Outcome {
 }
 export interface AssistResult {
   skipped?: string;
+  /** The reply contract the outcomes were asked under (CONTRACT); absent = 1. */
+  contract?: number;
   model?: string;
   cap?: number;
   clusters: number;
@@ -259,12 +278,24 @@ export interface AssistResult {
 }
 
 /**
- * max_tokens of an assist call: Sonnet 5's adaptive thinking plus the whole replaced file (subscriptions.ts, the largest,
- * is ~23K chars). 8,192 cut off events clock-period-rollover on 2026-09-28 (42,780 tokens in, $0.17). The cap estimate
- * (llm.ts) charges all 16,000 at $10/MTok ($0.16) plus chars/2 input: 3 loci with prompts twice that size still fit the
- * CI's $3 cap (test/align-assist.test.ts). 16,000 is the Claude API skill's non-streaming default; more would need streaming.
+ * max_tokens of an assist call: Sonnet 5's adaptive thinking plus the reply's edit blocks. Under the full-file contract
+ * (CONTRACT 1) every call on 2026-10-02 and 10-03 stopped at 16,000, even for prices.ts (~5K chars): the thinking took
+ * most of it. 16,000 is the Claude API skill's non-streaming ceiling (more needs streaming). The cap estimate (llm.ts)
+ * charges all of it at $10/MTok ($0.16) plus chars/2 input, thinking included (billed as output): 3 loci with prompts
+ * twice 2026-09-28's largest still fit the CI's $3 cap (test/align-assist.test.ts).
  */
 export const ASSIST_MAX_TOKENS = 16_000;
+/**
+ * Effort of an assist call: Sonnet 5 rejects a thinking budget (budget_tokens: 400) and runs adaptive thinking at effort
+ * `high` by default, so effort is the only thinking control. The skill's step-down when thinking eats max_tokens is
+ * `medium` (`low` risks under-thinking code changes). A soft bound: the max_tokens cooldown still catches a runaway.
+ */
+export const ASSIST_EFFORT: Effort = "medium";
+/**
+ * The reply contract, recorded on every assist note: 1 = a full replacement file (until 2026-10-03), 2 = SEARCH/REPLACE
+ * edits. Cooldowns count only attempts under the current one.
+ */
+export const CONTRACT = 2;
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const PR_BODY_MAX = 60_000;
 
@@ -274,13 +305,14 @@ const ATTEMPTS = new Set<Outcome["result"]>(["proposed", "gate-failed", "bad-rep
 
 /**
  * Loci on cooldown at `now`, each with the time it ends: the locus's last 2 attempts in the sealed log's assist notes
- * both stopped at max_tokens, the newer under 7 days ago. events clock-period-rollover did on 2026-09-28, 09-30 and
- * 10-01, ~$0.24 a night for nothing.
+ * under the current CONTRACT both stopped at max_tokens, the newer under 7 days ago. events clock-period-rollover did on
+ * 2026-09-28, 09-30 and 10-01, ~$0.24 a night for nothing.
  */
 export function cooldowns(log: string, now: Date): Map<string, string> {
   const tries = new Map<string, { ts: string; maxed: boolean }[]>();
   for (const e of existsSync(log) ? readJsonl<LogEntry>(log) : []) {
-    const outcomes = e.kind === "note" ? ((e.data.assist as AssistResult | undefined)?.outcomes ?? []) : [];
+    const a = e.kind === "note" ? (e.data.assist as AssistResult | undefined) : undefined;
+    const outcomes = a?.contract === CONTRACT ? a.outcomes : []; // an older contract's max_tokens says nothing of this one
     for (const x of outcomes.filter((x) => ATTEMPTS.has(x.result)))
       tries.set(x.locus, [...(tries.get(x.locus) ?? []), { ts: e.ts, maxed: x.result === "bad-reply" && x.detail === "stop_reason max_tokens" }]);
   }
@@ -331,7 +363,7 @@ export async function assist(
   const oracle = new Map(readJsonl<Recording>(oraclePath).filter((x) => !x.heldOut).map((x) => [x.seq, x]));
   const twin = new Map(r.twin.filter((x) => !x.heldOut).map((x) => [x.seq, x]));
   const model = env.PARITY_LLM_MODEL || DEFAULT_MODEL;
-  const res: AssistResult = { model, cap: capUsd(env), clusters: all.length, cost_usd: 0, outcomes: [] };
+  const res: AssistResult = { model, contract: CONTRACT, cap: capUsd(env), clusters: all.length, cost_usd: 0, outcomes: [] };
   // In the data repo, like the read ledger: the nightly pushes it, so the daily cap survives a failed night and a rerun.
   const ledger = join(o.dataDir, "budget/llm.jsonl");
   const cool = cooldowns(log, now());
@@ -358,7 +390,7 @@ export async function assist(
     const files = [own, ...(source(own).includes('"../billing.ts"') ? ["src/twin/billing.ts"] : [])].map((path) => ({ path, source: source(path) }));
     let reply;
     try {
-      reply = await complete({ system: SYSTEM, user: userPrompt(files, ce), runId: o.runId, purpose: `assist ${out.locus}`, maxTokens: ASSIST_MAX_TOKENS }, { ledger, env, now });
+      reply = await complete({ system: SYSTEM, user: userPrompt(files, ce), runId: o.runId, purpose: `assist ${out.locus}`, maxTokens: ASSIST_MAX_TOKENS, effort: ASSIST_EFFORT }, { ledger, env, now });
     } catch (e) {
       Object.assign(out, { result: e instanceof CapRefused ? "cap" : "llm-error", detail: (e as Error).message });
       if (e instanceof CapRefused) break; // the loop stops at the cap
@@ -367,7 +399,7 @@ export async function assist(
     out.cost_usd = reply.cost_usd;
     res.cost_usd += reply.cost_usd;
     // A max_tokens stop is a bad-reply like any other: its cost is logged and the locus waits for the next run.
-    const parsed = reply.stop_reason === "end_turn" ? parseReply(reply.text, files.map((f) => f.path)) : { error: `stop_reason ${reply.stop_reason}` };
+    const parsed = reply.stop_reason === "end_turn" ? parseReply(reply.text, files) : { error: `stop_reason ${reply.stop_reason}` };
     if ("error" in parsed || parsed.content === source(parsed.file)) {
       Object.assign(out, { result: "bad-reply", detail: "error" in parsed ? parsed.error : "the file is unchanged" });
       continue;

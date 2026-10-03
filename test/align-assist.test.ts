@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { ASSIST_MAX_TOKENS, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
+import { ASSIST_EFFORT, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -39,6 +39,8 @@ async function fakeApi(reply: (n: number) => { status?: number; json: unknown })
 const message = (text: string, usage: Record<string, number> = { input_tokens: 1000, output_tokens: 500 }) => ({
   json: { content: [{ type: "thinking", thinking: "" }, { type: "text", text }], stop_reason: "end_turn", usage },
 });
+/** A reply in the assist contract: one FILE line, then SEARCH/REPLACE blocks ([search, replace], each ending in a newline). */
+const edits = (file: string, ...blocks: [string, string][]) => `FILE: ${file}\n` + blocks.map(([search, replace]) => `<<<<<<< SEARCH\n${search}=======\n${replace}>>>>>>> REPLACE\n`).join("");
 
 /**
  * An oracle: the twin's own recording of customer-crud (train) and subscription-cancel-at-period-end (held out), seeds
@@ -75,7 +77,7 @@ function gitRepo() {
   return { repo, git, head: git("rev-parse", "HEAD") };
 }
 
-test("llm: cost from usage, one ledger line per call, text blocks only, temperature 0 only where the model accepts it", async () => {
+test("llm: cost from usage, one ledger line per call, text blocks only, temperature 0 and effort only where the model accepts them", async () => {
   const api = await fakeApi(() => message("hello", { input_tokens: 1000, output_tokens: 500, cache_creation_input_tokens: 2000, cache_read_input_tokens: 10000 }));
   try {
     const ledger = join(mkdtempSync(join(tmpdir(), "pb-llm-")), "budget/llm.jsonl");
@@ -103,12 +105,16 @@ test("llm: cost from usage, one ledger line per call, text blocks only, temperat
     assert.equal(first!.headers["x-api-key"], "sk-ant-test");
     assert.equal(first!.headers["anthropic-version"], "2023-06-01");
     assert.deepEqual(first!.body, { model: "claude-sonnet-5", max_tokens: 8192, system: "sys", messages: [{ role: "user", content: "usr" }] });
-    await complete({ system: "s", user: "u", runId: "run-1", purpose: "test" }, { ledger, env: { ...env, PARITY_LLM_MODEL: "claude-haiku-4-5" }, now: NOW });
+    await complete({ system: "s", user: "u", runId: "run-1", purpose: "test", effort: "medium" }, { ledger, env: { ...env, PARITY_LLM_MODEL: "claude-haiku-4-5" }, now: NOW });
     assert.equal(api.requests[1]!.body.temperature, 0);
-    assert.equal(readLlmLedger(ledger).length, 2);
+    assert.equal(api.requests[1]!.body.output_config, undefined, "Haiku 4.5 rejects effort: not sent");
+    await complete({ system: "s", user: "u", runId: "run-1", purpose: "test", effort: "medium" }, { ledger, env, now: NOW });
+    assert.deepEqual(api.requests[2]!.body.output_config, { effort: "medium" });
+    assert.equal(api.requests[2]!.body.thinking, undefined, "Sonnet 5 thinks adaptively by default; a thinking budget would be a 400");
+    assert.equal(readLlmLedger(ledger).length, 3);
     await assert.rejects(complete({ system: "s", user: "u", runId: "r", purpose: "p" }, { ledger, env: { ...env, PARITY_LLM_MODEL: "claude-unknown" } }), /no price for model "claude-unknown"/);
     assert.throws(() => costUsd("claude-unknown", { input_tokens: 1, output_tokens: 1 }), /no price/);
-    assert.equal(api.requests.length, 2, "an unpriced model is refused before sending");
+    assert.equal(api.requests.length, 3, "an unpriced model is refused before sending");
   } finally {
     api.close();
   }
@@ -149,21 +155,22 @@ test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday d
   }
 });
 
-test("llm: a call's maxTokens is sent and charged in full in the cap estimate; three assist calls on prompts twice 2026-09-28's largest fit the CI's $3 cap", async () => {
+test("llm: a call's maxTokens and effort are sent, maxTokens charged in full (thinking included) in the cap estimate; three assist calls on prompts twice 2026-09-28's largest fit the CI's $3 cap", async () => {
   // Every reply is cut off at max_tokens, the worst case: billed in full, ledgered, returned as is.
   const usage = { input_tokens: 85_560, output_tokens: ASSIST_MAX_TOKENS };
-  const api = await fakeApi(() => ({ json: { content: [{ type: "text", text: "FILE: src/twin/billing.ts\n```ts\nexport" }], stop_reason: "max_tokens", usage } }));
+  const api = await fakeApi(() => ({ json: { content: [{ type: "text", text: "FILE: src/twin/billing.ts\n<<<<<<< SEARCH\nexport" }], stop_reason: "max_tokens", usage } }));
   try {
     const ledger = join(mkdtempSync(join(tmpdir(), "pb-llm-max-")), "llm.jsonl");
     const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url, PARITY_LLM_CAP_USD: "3" };
     // events clock-period-rollover's prompt was 42,780 tokens (~128K chars at 3 a token); twice that is 256K chars.
     const call = (e: Record<string, string> = {}) =>
-      complete({ system: "s", user: "u".repeat(255_999), runId: "r", purpose: "assist", maxTokens: ASSIST_MAX_TOKENS }, { ledger, env: { ...env, ...e }, now: NOW });
-    // Estimate: 128,000 input tokens at $2/MTok ($0.256) + all 16,000 output tokens at $10/MTok ($0.16).
+      complete({ system: "s", user: "u".repeat(255_999), runId: "r", purpose: "assist", maxTokens: ASSIST_MAX_TOKENS, effort: ASSIST_EFFORT }, { ledger, env: { ...env, ...e }, now: NOW });
+    // Estimate: 128,000 input tokens at $2/MTok ($0.256) + all 16,000 output tokens at $10/MTok ($0.16): a lower effort
+    // thins the thinking but bounds nothing, so the cap still charges max_tokens.
     await assert.rejects(call({ PARITY_LLM_CAP_USD: "0.4" }), (e: unknown) => e instanceof CapRefused && /\$0\.0000 spent today \(UTC\) \+ \$0\.4160 estimated for this call > cap \$0\.4 /.test((e as Error).message));
     assert.equal(api.requests.length, 0);
     for (let i = 0; i < 3; i++) assert.equal((await call()).stop_reason, "max_tokens"); // the third: $0.6622 spent + $0.4160 < $3
-    assert.deepEqual(api.requests.map((r) => r.body.max_tokens), [16_000, 16_000, 16_000]);
+    assert.deepEqual(api.requests.map((r) => [r.body.max_tokens, r.body.output_config]), Array(3).fill([16_000, { effort: "medium" }]));
     // 3 x (85,560 x $2 + 16,000 x $10) / 1e6.
     assert.equal(readLlmLedger(ledger).reduce((s, e) => s + e.cost_usd, 0).toFixed(4), "0.9934");
   } finally {
@@ -171,15 +178,27 @@ test("llm: a call's maxTokens is sent and charged in full in the cap estimate; t
   }
 });
 
-test("parseReply: one FILE line naming a file shown plus one fenced block, else an error", () => {
-  const allowed = ["src/twin/resources/customers.ts", "src/twin/billing.ts"];
-  assert.deepEqual(parseReply("Here:\nFILE: src/twin/billing.ts\n```ts\nexport const x = 1;\n```\n", allowed), { file: "src/twin/billing.ts", content: "export const x = 1;\n" });
-  assert.deepEqual(parseReply("FILE: src/twin/server.ts\n```ts\nx\n```", allowed), { error: "src/twin/server.ts is not one of the files shown (src/twin/resources/customers.ts, src/twin/billing.ts)" });
-  assert.deepEqual(parseReply("FILE: ../../etc/passwd\n```\nx\n```", allowed), { error: "../../etc/passwd is not one of the files shown (src/twin/resources/customers.ts, src/twin/billing.ts)" });
-  assert.match((parseReply("FILE: src/twin/billing.ts\nFILE: src/twin/resources/customers.ts\n```ts\nx\n```\n```ts\ny\n```", allowed) as { error: string }).error, /got 2 and 2/);
-  assert.match((parseReply("FILE: src/twin/billing.ts\nno fence", allowed) as { error: string }).error, /got 1 and 0/);
-  assert.match((parseReply("FILE:\n```ts\nx\n```", allowed) as { error: string }).error, /got 0 and 1/, "a bare FILE: line names nothing");
-  assert.deepEqual(parseReply("FILE: src/twin/billing.ts\n```ts\n  \n```", allowed), { error: "empty file" });
+test("parseReply: one FILE line naming a file shown plus SEARCH/REPLACE blocks applied in order, each SEARCH matching exactly once there; else an error", () => {
+  const C = "src/twin/resources/customers.ts";
+  const shown = [
+    { path: C, source: "const a = 1;\nconst b = 2;\nconst a2 = 1;\n" },
+    { path: "src/twin/billing.ts", source: "x\nx\nx\n" },
+  ];
+  // Two blocks, the second matching what the first left; prose and a fence around them are ignored.
+  const ok = edits(C, ["const b = 2;\n", "const b = 3;\nconst c = 4;\n"], ["const c = 4;\n", ""]);
+  assert.deepEqual(parseReply(`Here:\n\`\`\`\n${ok}\`\`\`\n`, shown), { file: C, content: "const a = 1;\nconst b = 3;\nconst a2 = 1;\n" });
+  const err = (text: string) => (parseReply(text, shown) as { error: string }).error;
+  assert.equal(err(edits(C, ["const z = 9;\n", "y\n"])), 'block 1: SEARCH matches nothing in src/twin/resources/customers.ts: "const z = 9;\\n"');
+  assert.equal(err(edits(C, [" = 1;\n", " = 5;\n"])), 'block 1: SEARCH matches more than one place in src/twin/resources/customers.ts: " = 1;\\n"');
+  assert.match(err(edits("src/twin/billing.ts", ["x\nx\n", "y\n"])), /^block 1: SEARCH matches more than one place/, "overlapping matches count");
+  assert.match(err(edits(C, ["const b = 2;\n", "const b = 3;\n"], ["const b = 2;\n", "y\n"])), /^block 2: SEARCH matches nothing/, "the first block edited it away");
+  assert.equal(err(edits(C, ["", "y\n"])), "block 1: empty SEARCH");
+  assert.equal(err(edits(C, [" \n", "y\n"])), "block 1: empty SEARCH");
+  assert.equal(err(edits("src/twin/server.ts", ["x\n", "y\n"])), "src/twin/server.ts is not one of the files shown (src/twin/resources/customers.ts, src/twin/billing.ts)");
+  assert.equal(err(edits("../../etc/passwd", ["x\n", "y\n"])), "../../etc/passwd is not one of the files shown (src/twin/resources/customers.ts, src/twin/billing.ts)");
+  assert.match(err(edits(C, ["const a = 1;\n", "y\n"]) + edits("src/twin/billing.ts", ["x\n", "y\n"])), /got 2 and 2/, "one file per reply");
+  assert.match(err(`FILE: ${C}\n\`\`\`ts\nconst a = 1;\n\`\`\`\n`), /got 1 and 0/, "a whole file (the old contract) is no edit");
+  assert.match(err(`FILE:\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n`), /got 0 and 1/, "a bare FILE: line names nothing");
 });
 
 test("normalizeWithParams: request paths and params normalized like bodies (0001 C3; params by normalizeRecording itself), test tokens kept, bodies' anchor", () => {
@@ -232,8 +251,7 @@ test("assist: a locus whose route no behavior module serves is reported with the
   assert.doesNotMatch(assistText(res), /cus_TEST/);
 });
 
-test("assist: a locus whose last 2 attempts stopped at max_tokens sits out 7 days (sealed log), logged as cooldown; the next locus takes its slot", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "pb-assist-cooldown-"));
+test("assist: a locus whose last 2 attempts under the current reply contract stopped at max_tokens sits out 7 days (sealed log), logged as cooldown; the next locus takes its slot; an older contract's attempts do not count", async () => {
   const a: Locus = { kind: "route", route: "GET /v1/unserved/{id}" };
   const b: Locus = { kind: "route", route: "GET /v1/unknown/{id}" };
   const step = (i: number, path: string, status: string): StepRecord => ({ i, method: "GET", path, status: 200, body: { object: "unserved", status }, resHeaders: {}, ms: 0 });
@@ -241,7 +259,6 @@ test("assist: a locus whose last 2 attempts stopped at max_tokens sits out 7 day
     seq: "unserved#1", template: "unserved", stratum: "lifecycle", seed: 1, heldOut: false, target, runId: "oracle", startedAt: "2026-01-01T00:00:00.000Z", ms: 0, events: [],
     steps: [step(0, "/v1/unserved/cus_TESTa1b2c3d4e5", status), step(1, "/v1/unknown/cus_TESTa1b2c3d4e5", status)],
   });
-  writeJsonl(join(dataDir, "oracle.jsonl"), [rec("sandbox", "a")]);
   const d = (step: number, path: string, locus: Locus): Triaged => ({ seq: "unserved#1", step, path, cls: "VALUE_MISMATCH", expected: "a", actual: "b", template: "unserved", heldOut: false, locus });
   const oracle = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
   // a has the most divergences, so it holds the one slot (k = 1) unless it is cooling down.
@@ -257,10 +274,17 @@ test("assist: a locus whose last 2 attempts stopped at max_tokens sits out 7 day
   } as unknown as AlignResult;
   // a: max_tokens, a cap (no reply: not an attempt), max_tokens. b: max_tokens, then a reply that reached the gate.
   const tried = (locus: string, result: string, detail?: string) => ({ locus, reason: "r", divergences: 1, result, detail, cost_usd: result === "cap" ? 0 : 0.24 });
-  const note = (ts: string, ...outcomes: unknown[]) => appendLog(logPath(dataDir), "night", [{ kind: "note", data: { assist: { clusters: 2, cost_usd: 0.24, outcomes }, oracle } }], ts);
-  note("2026-09-19T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "bad-reply", "stop_reason max_tokens"));
-  note("2026-09-20T13:00:00.000Z", tried("GET /v1/unserved/{id}", "cap", "LLM cap: ..."));
-  note("2026-09-21T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "gate-failed", "train divergences 3 -> 3"));
+  // The same history in a data dir per contract: `contract` absent is the full-file contract (1), before 2026-10-04.
+  const history = (contract: number | undefined) => {
+    const dir = mkdtempSync(join(tmpdir(), "pb-assist-cooldown-"));
+    writeJsonl(join(dir, "oracle.jsonl"), [rec("sandbox", "a")]);
+    const note = (ts: string, ...outcomes: unknown[]) => appendLog(logPath(dir), "night", [{ kind: "note", data: { assist: { contract, clusters: 2, cost_usd: 0.24, outcomes }, oracle } }], ts);
+    note("2026-09-19T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "bad-reply", "stop_reason max_tokens"));
+    note("2026-09-20T13:00:00.000Z", tried("GET /v1/unserved/{id}", "cap", "LLM cap: ..."));
+    note("2026-09-21T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "gate-failed", "train divergences 3 -> 3"));
+    return dir;
+  };
+  const dataDir = history(CONTRACT);
   const calls: string[] = [];
   const run: Run = (cmd, args) => (calls.push(`${cmd} ${args[0]}`), ""); // a clean tree, docker available
   const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9" };
@@ -277,11 +301,16 @@ test("assist: a locus whose last 2 attempts stopped at max_tokens sits out 7 day
   assert.deepEqual(calls, ["git status", "docker run"], "no LLM call");
   assert.match(assistText(res), /^assist: 1 of 2 non-mechanical loci tried/);
   assert.match(assistText(res), /^ {2}cooldown · 2 · GET \/v1\/unserved\/\{id\} · \$0\.0000 · its last 2 attempts stopped at max_tokens/m);
-  assert.deepEqual((readJsonl<LogEntry>(logPath(dataDir)).at(-1)!.data.assist as AssistResult).outcomes.map((o) => o.result), ["cooldown", "no-owner"]);
+  const logged = readJsonl<LogEntry>(logPath(dataDir)).at(-1)!.data.assist as AssistResult;
+  assert.deepEqual([logged.contract, logged.outcomes.map((o) => o.result)], [CONTRACT, ["cooldown", "no-owner"]]);
 
   // Seven days after the second: tried again.
   const later = await assist(r, { repo: REPO, dataDir, runId: "run-later", k: 1, env, run, now: () => new Date("2026-09-28T13:00:00.000Z") });
   assert.deepEqual(later.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
+
+  // The same max_tokens history under the full-file contract: the edit contract tries the locus at once.
+  const old = await assist(r, { repo: REPO, dataDir: history(undefined), runId: "run-old", k: 1, env, run, now: NOW });
+  assert.deepEqual(old.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {
@@ -320,9 +349,15 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     .replace("      return { body: c, emits: [{ type: \"customer.created\", object: c }] };", "      c.description = c.name;\n      return { body: c, emits: [{ type: \"customer.created\", object: c }] };")
     .replace("const after = assign(structuredClone(before), params, FIELDS);", "const after = assign(structuredClone(before), params, FIELDS);\n      after.description = after.name;");
   assert.notEqual(fixed, original);
-  const replies = [`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${original}// a comment changes nothing\n\`\`\`\n`, `FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`];
-  // The fourth request is cut off at the assist max_tokens (2026-09-28's clock-period-rollover prompt size).
-  const truncated = { json: { content: [{ type: "thinking", thinking: "" }, { type: "text", text: `FILE: ${FILE}\n\`\`\`ts\nimport` }], stop_reason: "max_tokens", usage: { input_tokens: 42_780, output_tokens: 16_000 } } };
+  // The same change as edit blocks (each line occurs once in the file), a comment-only change, and the fix again.
+  const RET = '      return { body: c, emits: [{ type: "customer.created", object: c }] };\n';
+  const AFTER = "const after = assign(structuredClone(before), params, FIELDS);\n";
+  const fix = edits(FILE, [RET, "      c.description = c.name;\n" + RET], [AFTER, AFTER + "      after.description = after.name;\n"]);
+  const replies = [fix, edits(FILE, [RET, "      // a comment changes nothing\n" + RET]), fix];
+  // The fourth request is cut off at the assist max_tokens (2026-09-28's clock-period-rollover prompt size); the fifth's
+  // SEARCH is not in the file.
+  const truncated = { json: { content: [{ type: "thinking", thinking: "" }, { type: "text", text: `FILE: ${FILE}\n<<<<<<< SEARCH\nimport` }], stop_reason: "max_tokens", usage: { input_tokens: 42_780, output_tokens: 16_000 } } };
+  replies[4] = edits(FILE, ["      c.description = null;\n", "      c.description = c.name;\n"]);
   const api = await fakeApi((n) => (n === 3 ? truncated : message(replies[n]!)));
   const gh: string[][] = [];
   // docker: the fake runs the container's command on the host and records its argv (a real run: test/align-gate.test.ts).
@@ -348,10 +383,13 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
 
     // The prompt: the owning module, a train counterexample truncated after its first divergent step, the clean-room
     // rule; nothing from held-out sequences.
-    const sent = api.requests[0]!.body as { system: string; messages: { content: string }[]; max_tokens: number };
+    const sent = api.requests[0]!.body as { system: string; messages: { content: string }[]; max_tokens: number; output_config: unknown };
     const user = sent.messages[0]!.content;
     assert.equal(sent.max_tokens, 16_000);
+    assert.deepEqual(sent.output_config, { effort: "medium" }, "the thinking is held to effort medium");
     assert.match(sent.system, /Clean room: write original code/);
+    assert.match(sent.system, /^<<<<<<< SEARCH\n<lines copied exactly from the current file, whitespace included>\n=======\n<the lines that replace them>\n>>>>>>> REPLACE\nEach SEARCH must match exactly one place in the file/m);
+    assert.match(user, /^## Task\nReply with SEARCH\/REPLACE edits to exactly one of: src\/twin\/resources\/customers\.ts, /m);
     assert.ok(user.includes(`### ${FILE}\n\`\`\`ts\n${original}\`\`\``));
     assert.match(user, /^## Counterexample \(normalized\): customer-crud#1, steps 0\.\.0 of 6$/m);
     assert.match(user, /^\* step 0 \$\.description VALUE_MISMATCH expected "Parity \d+" actual null$/m);
@@ -443,8 +481,15 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.match(assistText(cut), /^ {2}bad-reply · \d+ · customer description · \$0\.2456 · stop_reason max_tokens$/m);
     assert.equal(gh.length, 1, "no PR");
 
+    // A SEARCH that is not in the file: a bad-reply naming it, ledgered, never scored, no PR.
+    const missed = await assist(plan, { repo, dataDir: data, runId: "assist-8", env, run, now: NOW });
+    assert.deepEqual(missed.outcomes.map((x) => [x.result, x.detail, x.cost_usd]), [["bad-reply", 'block 1: SEARCH matches nothing in src/twin/resources/customers.ts: "      c.description = null;\\n"', 0.007]]);
+    assert.equal(api.requests.length, 5);
+    assert.equal(dockerCalls.filter((a) => a.includes("score-twin")).length, scored);
+    assert.equal(gh.length, 1, "no PR");
+
     const log = readJsonl<LogEntry>(logPath(data));
-    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 8 });
+    assert.deepEqual(verifyLog(logPath(data)), { ok: true, entries: 9 });
     assert.deepEqual(log.map((e) => [e.kind, e.runId, e.data.class, e.data.status]), [
       ["patch", "assist-1", "assisted", "proposed"],
       ["note", "assist-1", undefined, undefined],
@@ -454,6 +499,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
       ["note", "assist-6", undefined, undefined],
       ["note", "assist-5", undefined, undefined],
       ["note", "assist-7", undefined, undefined],
+      ["note", "assist-8", undefined, undefined],
     ]);
     assert.deepEqual((log[7]!.data.assist as AssistResult).outcomes.map((x) => [x.result, x.cost_usd]), [["bad-reply", 0.24556]]);
     assert.equal((log[5]!.data.assist as { skipped: string }).skipped, refused.skipped);
@@ -498,12 +544,10 @@ test("assist pairing: a code change the gate rejects alone passes with the data 
 
   const FILE = "src/twin/resources/customers.ts";
   const original = readFileSync(join(repo, FILE), "utf8");
-  const fixed = original.replace(
-    '      return { body: c, emits: [{ type: "customer.created", object: c }] };',
-    '      c.cash_balance = ctx.build("cash_balance", { customer: c.id });\n      return { body: c, emits: [{ type: "customer.created", object: c }] };',
-  );
+  const RET = '      return { body: c, emits: [{ type: "customer.created", object: c }] };';
+  const fixed = original.replace(RET, '      c.cash_balance = ctx.build("cash_balance", { customer: c.id });\n' + RET);
   assert.notEqual(fixed, original);
-  const api = await fakeApi(() => message(`FILE: ${FILE}\n\`\`\`ts\n${fixed}\`\`\`\n`));
+  const api = await fakeApi(() => message(edits(FILE, [RET + "\n", '      c.cash_balance = ctx.build("cash_balance", { customer: c.id });\n' + RET + "\n"])));
   const gh: string[][] = [];
   const dockerCalls: string[][] = [];
   const docker = fakeDocker(dockerCalls);
