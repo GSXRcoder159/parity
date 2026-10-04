@@ -351,5 +351,16 @@
       "/tiers"
     ],
     "divergencesRemoved": 1106
+  },
+  {
+    "date": "2026-10-03",
+    "class": "automatic",
+    "file": "src/twin/shapes/subscription_item.json",
+    "pointers": [
+      "/price/currency_options",
+      "/price/tiers"
+    ],
+    "commit": "fc2443b0ea60e08bc0138b82980837a47a022fa0",
+    "divergencesRemoved": 1066
   }
 ]
