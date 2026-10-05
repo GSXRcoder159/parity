@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { ASSIST_EFFORT, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
+import { ASSIST_EFFORT, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, cooldowns, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -257,7 +257,7 @@ test("assist: a locus whose route no behavior module serves is reported with the
   assert.doesNotMatch(assistText(res), /cus_TEST/);
 });
 
-test("assist: a locus whose last 2 attempts under the current reply contract stopped at max_tokens sits out 7 days (sealed log), logged as cooldown; the next locus takes its slot; an older contract's attempts do not count", async () => {
+test("assist: a locus whose last 2 attempts under the current reply contract stopped at max_tokens sits out 7 days (sealed log), logged as cooldown with the reason; the next locus takes its slot; an older contract's attempts do not count", async () => {
   const a: Locus = { kind: "route", route: "GET /v1/unserved/{id}" };
   const b: Locus = { kind: "route", route: "GET /v1/unknown/{id}" };
   const step = (i: number, path: string, status: string): StepRecord => ({ i, method: "GET", path, status: 200, body: { object: "unserved", status }, resHeaders: {}, ms: 0 });
@@ -278,7 +278,7 @@ test("assist: a locus whose last 2 attempts under the current reply contract sto
     twin: [rec("twin", "b")],
     oracle,
   } as unknown as AlignResult;
-  // a: max_tokens, a cap (no reply: not an attempt), max_tokens. b: max_tokens, then a reply that reached the gate.
+  // a: max_tokens, a cap (no reply: not an attempt), max_tokens. b: max_tokens, then a proposed reply (the streak resets).
   const tried = (locus: string, result: string, detail?: string) => ({ locus, reason: "r", divergences: 1, result, detail, cost_usd: result === "cap" ? 0 : 0.24 });
   // The same history in a data dir per contract: `contract` absent is the full-file contract (1), before 2026-10-04.
   const history = (contract: number | undefined) => {
@@ -287,7 +287,7 @@ test("assist: a locus whose last 2 attempts under the current reply contract sto
     const note = (ts: string, ...outcomes: unknown[]) => appendLog(logPath(dir), "night", [{ kind: "note", data: { assist: { contract, clusters: 2, cost_usd: 0.24, outcomes }, oracle } }], ts);
     note("2026-09-19T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "bad-reply", "stop_reason max_tokens"));
     note("2026-09-20T13:00:00.000Z", tried("GET /v1/unserved/{id}", "cap", "LLM cap: ..."));
-    note("2026-09-21T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "gate-failed", "train divergences 3 -> 3"));
+    note("2026-09-21T13:00:00.000Z", tried("GET /v1/unserved/{id}", "bad-reply", "stop_reason max_tokens"), tried("GET /v1/unknown/{id}", "proposed"));
     return dir;
   };
   const dataDir = history(CONTRACT);
@@ -303,10 +303,10 @@ test("assist: a locus whose last 2 attempts under the current reply contract sto
       ["GET /v1/unknown/{id}", "no-owner", 0],
     ],
   );
-  assert.equal(res.outcomes[0]!.detail, "its last 2 attempts stopped at max_tokens; next try after 2026-09-28T13:00:00.000Z");
+  assert.equal(res.outcomes[0]!.detail, "its last 2 attempts were not productive (max_tokens, max_tokens); next try after 2026-09-28T13:00:00.000Z");
   assert.deepEqual(calls, ["git status", "docker run"], "no LLM call");
   assert.match(assistText(res), /^assist: 1 of 2 non-mechanical loci tried/);
-  assert.match(assistText(res), /^ {2}cooldown · 2 · GET \/v1\/unserved\/\{id\} · \$0\.0000 · its last 2 attempts stopped at max_tokens/m);
+  assert.match(assistText(res), /^ {2}cooldown · 2 · GET \/v1\/unserved\/\{id\} · \$0\.0000 · its last 2 attempts were not productive \(max_tokens, max_tokens\)/m);
   const logged = readJsonl<LogEntry>(logPath(dataDir)).at(-1)!.data.assist as AssistResult;
   assert.deepEqual([logged.contract, logged.outcomes.map((o) => o.result)], [CONTRACT, ["cooldown", "no-owner"]]);
 
@@ -317,6 +317,32 @@ test("assist: a locus whose last 2 attempts under the current reply contract sto
   // The same max_tokens history under the full-file contract: the edit contract tries the locus at once.
   const old = await assist(r, { repo: REPO, dataDir: history(undefined), runId: "run-old", k: 1, env, run, now: NOW });
   assert.deepEqual(old.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
+});
+
+test("cooldowns: any 2 consecutive non-productive attempts (bad-reply of any kind, gate-failed) under the current contract cool a locus 7 days, with the reason; a proposed one resets the streak; older contracts' entries are ignored", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pb-assist-cooldowns-"));
+  const oracle = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
+  const note = (contract: number | undefined, ts: string, ...outcomes: [string, string, string?][]) =>
+    appendLog(logPath(dir), "night", [{ kind: "note", data: { assist: { contract, clusters: 9, cost_usd: 0, outcomes: outcomes.map(([locus, result, detail]) => ({ locus, reason: "r", divergences: 1, result, detail, cost_usd: 0.2 })) }, oracle } }], ts);
+  const GATE = "train divergences 3 -> 3; held-out L3 10.0% -> 10.0%";
+  // `contract` absent is the full-file contract (1).
+  note(undefined, "2026-09-19T13:00:00.000Z", ["old", "gate-failed", GATE], ["mixed-contract", "gate-failed", GATE]);
+  note(1, "2026-09-20T13:00:00.000Z", ["old", "gate-failed", GATE]);
+  note(CONTRACT, "2026-09-21T13:00:00.000Z", ["gates", "gate-failed", GATE], ["reset", "gate-failed", GATE], ["mixed", "bad-reply", "stop_reason max_tokens"], ["replies", "bad-reply", "block 1: empty SEARCH"],
+    ["capped", "gate-failed", GATE], ["mixed-contract", "gate-failed", GATE], ["once", "proposed"], ["pr", "gate-failed", GATE]);
+  // A cap got no reply (not an attempt); a pr-failed reply passed the gate (productive).
+  note(CONTRACT, "2026-09-22T13:00:00.000Z", ["capped", "cap", "LLM cap: ..."], ["pr", "pr-failed", "gh: ..."]);
+  note(CONTRACT, "2026-09-23T13:00:00.000Z", ["gates", "gate-failed", GATE], ["reset", "proposed"], ["mixed", "gate-failed", GATE], ["replies", "bad-reply", "stop_reason max_tokens"],
+    ["capped", "gate-failed", GATE], ["once", "gate-failed", GATE]);
+  const why = (reasons: string) => `its last 2 attempts were not productive (${reasons}); next try after 2026-09-30T13:00:00.000Z`;
+  assert.deepEqual(Object.fromEntries(cooldowns(logPath(dir), NOW())), {
+    gates: why("gate-failed, gate-failed"),
+    mixed: why("max_tokens, gate-failed"),
+    replies: why("bad-reply, max_tokens"),
+    capped: why("gate-failed, gate-failed"),
+  });
+  // 7 days after the newer attempt, every locus is tried again.
+  assert.equal(cooldowns(logPath(dir), new Date("2026-09-30T13:00:00.000Z")).size, 0);
 });
 
 test("assist end to end: a code-only divergence goes to the LLM (train only), a reply passing the gate becomes a pushed branch and a draft PR; a failing one opens nothing", { timeout: 120_000 }, async () => {

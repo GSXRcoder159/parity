@@ -11,8 +11,8 @@
 // as two commits), pushed, and a draft PR; the sealed log gets a `patch` entry {class: "assisted", status: "proposed"}
 // scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
 // merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM. A locus whose last
-// 2 attempts under the current reply contract (CONTRACT) stopped at max_tokens sits out 7 days (`cooldown`, from the
-// sealed log) and the next locus takes its slot.
+// 2 attempts under the current reply contract (CONTRACT) were both non-productive (a bad-reply of any kind, max_tokens
+// included, or gate-failed) sits out 7 days (`cooldown`, from the sealed log) and the next locus takes its slot.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -308,22 +308,27 @@ const COOLDOWN_MS = 7 * 86_400_000;
 const ATTEMPTS = new Set<Outcome["result"]>(["proposed", "gate-failed", "bad-reply", "pr-failed"]);
 
 /**
- * Loci on cooldown at `now`, each with the time it ends: the locus's last 2 attempts in the sealed log's assist notes
- * under the current CONTRACT both stopped at max_tokens, the newer under 7 days ago. events clock-period-rollover did on
- * 2026-09-28, 09-30 and 10-01, ~$0.24 a night for nothing.
+ * Loci on cooldown at `now`, each with its `cooldown` detail: the locus's last 2 attempts in the sealed log's assist notes
+ * under the current CONTRACT were both non-productive (bad-reply of any kind, gate-failed), the newer under 7 days ago;
+ * a proposed (or pr-failed: the gate passed) attempt breaks the streak. events clock-period-rollover stopped at max_tokens
+ * on 2026-09-28, 09-30 and 10-01, ~$0.24 a night for nothing.
  */
 export function cooldowns(log: string, now: Date): Map<string, string> {
-  const tries = new Map<string, { ts: string; maxed: boolean }[]>();
+  const tries = new Map<string, { ts: string; why?: string }[]>();
   for (const e of existsSync(log) ? readJsonl<LogEntry>(log) : []) {
     const a = e.kind === "note" ? (e.data.assist as AssistResult | undefined) : undefined;
-    const outcomes = a?.contract === CONTRACT ? a.outcomes : []; // an older contract's max_tokens says nothing of this one
-    for (const x of outcomes.filter((x) => ATTEMPTS.has(x.result)))
-      tries.set(x.locus, [...(tries.get(x.locus) ?? []), { ts: e.ts, maxed: x.result === "bad-reply" && x.detail === "stop_reason max_tokens" }]);
+    const outcomes = a?.contract === CONTRACT ? a.outcomes : []; // an older contract's outcomes say nothing of this one
+    for (const x of outcomes.filter((x) => ATTEMPTS.has(x.result))) {
+      const why = x.detail === "stop_reason max_tokens" ? "max_tokens" : x.result === "bad-reply" || x.result === "gate-failed" ? x.result : undefined;
+      tries.set(x.locus, [...(tries.get(x.locus) ?? []), { ts: e.ts, why }]);
+    }
   }
   const out = new Map<string, string>();
   for (const [locus, t] of tries) {
-    const until = Date.parse(t.at(-1)!.ts) + COOLDOWN_MS;
-    if (t.length >= 2 && t.slice(-2).every((x) => x.maxed) && now.getTime() < until) out.set(locus, new Date(until).toISOString());
+    const last = t.slice(-2);
+    const until = Date.parse(last.at(-1)!.ts) + COOLDOWN_MS;
+    if (last.length === 2 && last.every((x) => x.why) && now.getTime() < until)
+      out.set(locus, `its last 2 attempts were not productive (${last.map((x) => x.why).join(", ")}); next try after ${new Date(until).toISOString()}`);
   }
   return out;
 }
@@ -374,9 +379,9 @@ export async function assist(
   let tried = 0;
   for (const c of all) {
     if (tried === (o.k ?? 3)) break;
-    const until = cool.get(where(c.locus));
-    if (until) {
-      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "cooldown", detail: `its last 2 attempts stopped at max_tokens; next try after ${until}`, cost_usd: 0 });
+    const detail = cool.get(where(c.locus));
+    if (detail) {
+      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "cooldown", detail, cost_usd: 0 });
       continue; // the next locus takes the slot
     }
     tried++;
