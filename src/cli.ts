@@ -61,7 +61,7 @@ const USAGE = `usage:
     (held-out L3 must not drop, train divergences must fall). Prints the plan. --apply writes the accepted edits, commits
     them, then appends them to the sealed log <dataDir>/align/log.jsonl. --max-batches: gate only the first N per-file batches.
     --assist (after the plan, on HEAD; run align --apply first): the LLM proposes SEARCH/REPLACE edits to one twin code
-    file per non-mechanical locus (top 3, effort medium; each SEARCH must match exactly once; a locus whose last 2
+    file per non-mechanical locus (top 6, effort medium; each SEARCH must match exactly once; a locus whose last 2
     attempts under the current reply contract were not productive (bad-reply incl. max_tokens, gate-failed) sits out
     7 days, logged as cooldown with the reason, and the next one takes its slot); a reply that passes the same gate
     becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never merged. Needs ANTHROPIC_API_KEY (else skipped

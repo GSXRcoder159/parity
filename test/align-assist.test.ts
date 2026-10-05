@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { ASSIST_EFFORT, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, cooldowns, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
+import { ASSIST_EFFORT, ASSIST_LOCI, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, cooldowns, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -155,7 +155,7 @@ test("llm: the daily cap ($15, lowered only) refuses before sending; yesterday d
   }
 });
 
-test("llm: a call's maxTokens and effort are sent, maxTokens charged in full (thinking included) in the cap estimate; three assist calls on prompts twice 2026-09-28's largest fit the CI's $3 cap", async () => {
+test("llm: a call's maxTokens and effort are sent, maxTokens charged in full (thinking included) in the cap estimate; a night's ASSIST_LOCI assist calls on prompts twice 2026-09-28's largest fit the CI's $3 cap, the ninth is refused unsent", async () => {
   // Every reply is cut off at max_tokens, the worst case: billed in full, ledgered, returned as is.
   const usage = { input_tokens: 85_560, output_tokens: ASSIST_MAX_TOKENS };
   const api = await fakeApi(() => ({ json: { content: [{ type: "text", text: "FILE: src/twin/billing.ts\n<<<<<<< SEARCH\nexport" }], stop_reason: "max_tokens", usage } }));
@@ -169,10 +169,16 @@ test("llm: a call's maxTokens and effort are sent, maxTokens charged in full (th
     // thins the thinking but bounds nothing, so the cap still charges max_tokens.
     await assert.rejects(call({ PARITY_LLM_CAP_USD: "0.4" }), (e: unknown) => e instanceof CapRefused && /\$0\.0000 spent today \(UTC\) \+ \$0\.4160 estimated for this call > cap \$0\.4 /.test((e as Error).message));
     assert.equal(api.requests.length, 0);
-    for (let i = 0; i < 3; i++) assert.equal((await call()).stop_reason, "max_tokens"); // the third: $0.6622 spent + $0.4160 < $3
-    assert.deepEqual(api.requests.map((r) => [r.body.max_tokens, r.body.output_config]), Array(3).fill([16_000, { effort: "medium" }]));
-    // 3 x (85,560 x $2 + 16,000 x $10) / 1e6.
-    assert.equal(readLlmLedger(ledger).reduce((s, e) => s + e.cost_usd, 0).toFixed(4), "0.9934");
+    // Even billed at the estimate, 6 calls are $2.4960 < $3; the sixth: 5 x $0.33112 = $1.6556 spent + $0.4160 < $3.
+    assert.equal(ASSIST_LOCI, 6);
+    for (let i = 0; i < ASSIST_LOCI; i++) assert.equal((await call()).stop_reason, "max_tokens");
+    assert.deepEqual(api.requests.map((r) => [r.body.max_tokens, r.body.output_config]), Array(ASSIST_LOCI).fill([16_000, { effort: "medium" }]));
+    // 6 x (85,560 x $2 + 16,000 x $10) / 1e6.
+    assert.equal(readLlmLedger(ledger).reduce((s, e) => s + e.cost_usd, 0).toFixed(4), "1.9867");
+    // The headroom: 2 more fit, the ninth would pass the cap (8 x $0.33112 + $0.4160 = $3.0650) and is refused unsent.
+    for (let i = 0; i < 2; i++) await call();
+    await assert.rejects(call(), (e: unknown) => e instanceof CapRefused && /\$2\.6490 spent today \(UTC\) \+ \$0\.4160 estimated for this call > cap \$3 /.test((e as Error).message));
+    assert.equal(api.requests.length, 8);
   } finally {
     api.close();
   }

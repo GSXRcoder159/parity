@@ -285,10 +285,16 @@ export interface AssistResult {
  * max_tokens of an assist call: Sonnet 5's adaptive thinking plus the reply's edit blocks. Under the full-file contract
  * (CONTRACT 1) every call on 2026-10-02 and 10-03 stopped at 16,000, even for prices.ts (~5K chars): the thinking took
  * most of it. 16,000 is the Claude API skill's non-streaming ceiling (more needs streaming). The cap estimate (llm.ts)
- * charges all of it at $10/MTok ($0.16) plus chars/2 input, thinking included (billed as output): 3 loci with prompts
- * twice 2026-09-28's largest still fit the CI's $3 cap (test/align-assist.test.ts).
+ * charges all of it at $10/MTok ($0.16) plus chars/2 input, thinking included (billed as output): ASSIST_LOCI calls with
+ * prompts twice 2026-09-28's largest still fit the CI's $3 cap (test/align-assist.test.ts).
  */
 export const ASSIST_MAX_TOKENS = 16_000;
+/**
+ * Loci tried per run (cooldowns skipped). Worst case per call at twice 2026-09-28's largest prompt: $0.256 input + $0.16
+ * output = $0.416 estimated, so 6 fit the CI's $3 cap even billed at the estimate ($2.50); the cap admits 7 such calls
+ * at the estimate (8 at their billed cost), and past it the loop stops with `cap`. 3 until 2026-10-05.
+ */
+export const ASSIST_LOCI = 6;
 /**
  * Effort of an assist call: Sonnet 5 rejects a thinking budget (budget_tokens: 400) and runs adaptive thinking at effort
  * `high` by default, so effort is the only thinking control. The skill's step-down when thinking eats max_tokens is
@@ -378,7 +384,7 @@ export async function assist(
   const cool = cooldowns(log, now());
   let tried = 0;
   for (const c of all) {
-    if (tried === (o.k ?? 3)) break;
+    if (tried === (o.k ?? ASSIST_LOCI)) break;
     const detail = cool.get(where(c.locus));
     if (detail) {
       res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "cooldown", detail, cost_usd: 0 });
