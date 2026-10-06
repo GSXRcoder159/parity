@@ -37,7 +37,7 @@ export const routes: Route[] = [
       const { behavior, decline_code, ...details } = card;
       if (behavior === "attach_declined") ctx.fail("card_declined", {}, { decline_code });
       const pm = ctx.build("payment_method", { id: ctx.id("pm"), created: ctx.now(), customer: customer.id, type: "card" });
-      pm.card = { ...(pm.card as Obj), ...details };
+      pm.card = { ...(pm.card as Obj), ...details, exp_month: Math.floor(Math.random() * 12) + 1, exp_year: ctx.now() };
       return { body: pm, emits: [{ type: "payment_method.attached", object: pm }] };
     },
     "post /v1/payment_methods/{payment_method}/attach",
