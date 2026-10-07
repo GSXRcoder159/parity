@@ -167,6 +167,7 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
   return ctx.build("invoice", {
     ...Object.fromEntries(["address", "email", "name", "phone", "shipping", "tax_exempt"].map(c)),
     id,
+    account_country: "US",
     amount_due: total,
     amount_remaining: total,
     auto_advance: true,
