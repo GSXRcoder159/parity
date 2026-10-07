@@ -63,7 +63,8 @@ const USAGE = `usage:
     --assist (after the plan, on HEAD; run align --apply first): the LLM proposes SEARCH/REPLACE edits to one twin code
     file per non-mechanical locus (top 6, effort medium; each SEARCH must match exactly once; a locus whose last 2
     attempts under the current reply contract were not productive (bad-reply incl. max_tokens, gate-failed) sits out
-    7 days, logged as cooldown with the reason, and the next one takes its slot); a reply that passes the same gate
+    7 days, logged as cooldown with the reason, and a locus whose sealed-log proposal is still an open PR (gh) is
+    logged as open-pr; the next one takes its slot); a reply that passes the same gate
     becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never merged. Needs ANTHROPIC_API_KEY (else skipped
     and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every call's tokens and cost_usd go to
     <dataDir>/budget/llm.jsonl; daily cap $15 (UTC) per ledger, PARITY_LLM_CAP_USD may only lower it. The nightly
@@ -85,7 +86,8 @@ const USAGE = `usage:
     pending branch before anything else if the commit is on origin, else deletes the branch). Tonight's run files and
     read-ledger entries (and the LLM ledger,
     after the assisted pass) are pushed to the data repo as soon as they are written. A refused or
-    aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
+    aborted recording (budget gate, circuit breaker, a webhook endpoint on the sandbox account: one GET before the
+    slice, decision 0003) is noted and the night goes on with the existing oracle (curve point
     oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface
     entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir

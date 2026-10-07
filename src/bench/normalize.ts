@@ -1,10 +1,10 @@
-// Normalization v1.7: rewrites run-specific values (ids, timestamps, calendar months plus hours or after a trial, dates in text, a declined
+// Normalization v1.8: rewrites run-specific values (ids, timestamps, calendar months plus hours or after a trial, dates in text, a declined
 // invoice's retry day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, test-card expiry, dashboard
 // links, the unclaimed-sandbox banner) so two faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.7";
+export const NORMALIZATION_VERSION = "v1.8";
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -60,7 +60,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "card-expiry",
     rationale:
-      "Stripe's test cards (`pm_card_visa`, `pm_card_mastercard`, …) expire in the month of the request one year on (every train oracle recording, September's and October's), so `exp_month` differed on every payment method of drift/2026-10-01.md, the first night in a new month, against its September recording (39 of its 106 rows), and `exp_year` will on 1 January. v1.6: `card.exp_month` and `card.exp_year` of a payment method (also nested, e.g. in an error) and of a charge's `payment_method_details` become `<opaque>` when they hold a valid month (an integer 1–12) or year (an integer from 2000); any other value is compared, so null, a string, or the 0 of a twin that never computes an expiry (its templates hold 0) is still a divergence. Hides: a wrong but valid expiry, e.g. a twin that always answers 12/2030.",
+      "Stripe's test cards (`pm_card_visa`, `pm_card_mastercard`, …) expire in the month of the request one year on (every train oracle recording, September's and October's), so `exp_month` differed on every payment method of drift/2026-10-01.md, the first night in a new month, against its September recording (39 of its 106 rows), and `exp_year` will on 1 January. v1.6: `card.exp_month` and `card.exp_year` of a payment method (also nested, e.g. in an error) and of a charge's `payment_method_details` become `<opaque>` when they hold a valid month (an integer 1–12) or year (an integer from 2000); any other value is compared, so null, a string, or the 0 of a twin that never computes an expiry (its templates hold 0) is still a divergence. v1.8 (review of assisted PRs #9–#12): a year was any integer from 2000, so a unix-seconds `exp_year` passed, and each field was judged alone, so a valid month next to a bad year was hidden. Now the pair becomes `<opaque>` only when `exp_month` is an integer 1–12 and `exp_year` an integer from Y − 1 to Y + 20, Y the UTC year of the timestamps rule's anchor (t0); otherwise both are compared raw, as they are in a recording with no anchor. Every train oracle expiry is Y + 1 (1,235 card objects in step bodies and events, months 9 and 10; held-out recordings not opened), so v1.8 changes no train oracle label. Hides: a wrong but plausible expiry: any month 1–12 (a random month, or a twin that always answers 12) and any year in that 22-year window (a twin that always answers 12/2030).",
   },
   {
     name: "card-eci",
@@ -112,7 +112,6 @@ const TS_SUFFIX = /(_at|_start|_end|_date|_time)$/;
 const STRIPE_HOST = /(^|\.)stripe\.(com|network)$/;
 const INVOICE_NUMBER = /^[A-Z0-9]+-(\d+)$/;
 const CARD_NETWORK = new Set(["authorization_code", "network_transaction_id", "transaction_link_id", "risk_score"]);
-const CARD_EXPIRY: Record<string, (x: number) => boolean> = { exp_month: (x) => x >= 1 && x <= 12, exp_year: (x) => x >= 2000 };
 // Timestamps Stripe counts in days, never in calendar months (rule calendar-months).
 const DAY_COUNT = new Set(["deletes_after", "due_date", "trial_end"]);
 const REFUND_REFERENCE = ["reference", "reference_status", "reference_type"];
@@ -176,6 +175,7 @@ export function normalizeRecording(r: Recording): Recording {
   const trials = new Set<number>();
   for (const s of r.steps) trialEnds(s.body, trials);
   const anchors = t0 === undefined ? [] : [...trials].filter((a) => a - t0! >= 3600).sort((a, b) => a - b);
+  const year = t0 === undefined ? undefined : new Date(t0 * 1000).getUTCFullYear(); // rule card-expiry's window
 
   const str = (raw: string): string => {
     const s = raw.startsWith(BANNER) ? raw.slice(BANNER.length) : raw;
@@ -234,7 +234,12 @@ export function normalizeRecording(r: Recording): Recording {
     if (isObj(card)) for (const k of REFUND_REFERENCE) delete card[k];
     const pmCard = isObj(v.payment_method_details) ? v.payment_method_details.card : undefined;
     if (isObj(pmCard) && pmCard.electronic_commerce_indicator != null) pmCard.electronic_commerce_indicator = "<opaque>";
-    for (const c of [pmCard, v.object === "payment_method" ? v.card : undefined]) if (isObj(c)) for (const [k, valid] of Object.entries(CARD_EXPIRY)) if (Number.isInteger(c[k]) && valid(c[k] as number)) c[k] = "<opaque>";
+    for (const c of [pmCard, v.object === "payment_method" ? v.card : undefined]) {
+      if (isObj(c) && year !== undefined && Number.isInteger(c.exp_month) && Number.isInteger(c.exp_year)) {
+        const [m, y] = [c.exp_month as number, c.exp_year as number];
+        if (m >= 1 && m <= 12 && y >= year - 1 && y <= year + 20) c.exp_month = c.exp_year = "<opaque>";
+      }
+    }
     const out: Obj = {};
     for (const [k, x] of Object.entries(v)) out[k] = field(v, k, x);
     return out;

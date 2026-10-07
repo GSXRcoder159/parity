@@ -12,7 +12,8 @@
 // scored after the code change alone, and one {class: "automatic", status: "proposed"} per data edit. Nothing here
 // merges: merging is a review step (docs/plan/STATUS.md). Held-out sequences are never shown to the LLM. A locus whose last
 // 2 attempts under the current reply contract (CONTRACT) were both non-productive (a bad-reply of any kind, max_tokens
-// included, or gate-failed) sits out 7 days (`cooldown`, from the sealed log) and the next locus takes its slot.
+// included, or gate-failed) sits out 7 days (`cooldown`, from the sealed log), and so does a locus whose proposal is still an
+// open PR (`open-pr`); the next locus takes its slot.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -119,7 +120,7 @@ function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recordin
   const ev = mine.find((d) => d.locus.kind === "events")?.locus;
   const step = steps.length ? last : ev?.kind === "events" ? (ev.steps.find((s) => s.step >= 0)?.step ?? last) : last;
   const json = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
-  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), dates in text <date>, run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches. Fraud and risk fields are removed from both sides: leave the code that sets them as it is."];
+  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), dates in text <date>, run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches. On card fields <opaque> means a value of the right kind, not any value: fingerprint must be stable per card number (the same card number gives the same fingerprint within an account), and exp_month/exp_year must be a plausible card expiry derived from the twin's clock, never random numbers or ids. Fraud and risk fields are removed from both sides: leave the code that sets them as it is."];
   for (const s of o.steps.slice(0, last + 1)) {
     const ts = t.steps[s.i];
     const [ob, tb] = [scrub(s.body), scrub(ts?.body)];
@@ -258,7 +259,7 @@ export interface Outcome {
   locus: string;
   reason: string;
   divergences: number;
-  result: "proposed" | "gate-failed" | "bad-reply" | "llm-error" | "no-owner" | "cap" | "pr-failed" | "cooldown";
+  result: "proposed" | "gate-failed" | "bad-reply" | "llm-error" | "no-owner" | "cap" | "pr-failed" | "cooldown" | "open-pr";
   detail?: string;
   seq?: string;
   file?: string;
@@ -340,6 +341,24 @@ export function cooldowns(log: string, now: Date): Map<string, string> {
 }
 
 /**
+ * An assisted PR's key, the same from its merge entry (pr: number) and its proposal's and paired data edits' entries (pr:
+ * the URL gh printed): a branch name can come back after a closed PR's branch is deleted, a PR number cannot.
+ */
+export const prKey = (d: Record<string, unknown>): string => `${String(d.branch)}#${String(d.pr).split("/").pop()}`;
+
+/**
+ * Loci whose sealed-log assisted proposal is still an open align/assisted-* PR (`gh pr list`), each with its `open-pr`
+ * detail: a second proposal for the locus would compete with the one waiting for review. No proposal logged: gh is not asked.
+ */
+export function openPrs(log: string, run: Run, repo: string): Map<string, string> {
+  const proposed = (existsSync(log) ? readJsonl<LogEntry>(log) : []).filter((e) => e.kind === "patch" && e.data.class === "assisted" && e.data.status === "proposed").map((e) => e.data);
+  if (!proposed.length) return new Map();
+  const prs = JSON.parse(run("gh", ["pr", "list", "--state", "open", "--json", "number,headRefName", "--limit", "200"], repo)) as { number: number; headRefName: string }[];
+  const open = new Set(prs.filter((p) => p.headRefName.startsWith("align/assisted-")).map((p) => prKey({ branch: p.headRefName, pr: p.number })));
+  return new Map(proposed.filter((d) => open.has(prKey(d))).map((d) => [where(d.locus as Locus), `its proposal ${String(d.pr)} is still open: review it first`]));
+}
+
+/**
  * The assisted pass on the plan `r` (whose baseline is the repo's HEAD). Without ANTHROPIC_API_KEY it only logs that it
  * was skipped; without docker running the pinned image it refuses, logged the same way, before any LLM call (LLM-written
  * code never runs outside the container). Stops at the LLM cost cap. Appends a `patch` entry per draft PR and one `note`
@@ -382,12 +401,13 @@ export async function assist(
   // In the data repo, like the read ledger: the nightly pushes it, so the daily cap survives a failed night and a rerun.
   const ledger = join(o.dataDir, "budget/llm.jsonl");
   const cool = cooldowns(log, now());
+  const open = openPrs(log, run, o.repo);
   let tried = 0;
   for (const c of all) {
     if (tried === (o.k ?? ASSIST_LOCI)) break;
-    const detail = cool.get(where(c.locus));
+    const [result, detail] = open.has(where(c.locus)) ? (["open-pr", open.get(where(c.locus))] as const) : (["cooldown", cool.get(where(c.locus))] as const);
     if (detail) {
-      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "cooldown", detail, cost_usd: 0 });
+      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result, detail, cost_usd: 0 });
       continue; // the next locus takes the slot
     }
     tried++;
@@ -513,7 +533,7 @@ export async function assist(
 export function assistText(a: AssistResult): string {
   if (a.skipped) return `assist: ${a.skipped} (${a.clusters} non-mechanical loci waiting)`;
   return [
-    `assist: ${a.outcomes.filter((x) => x.result !== "cooldown").length} of ${a.clusters} non-mechanical loci tried with ${a.model} · cost_usd ${a.cost_usd.toFixed(4)} this run (daily cap $${a.cap})`,
+    `assist: ${a.outcomes.filter((x) => x.result !== "cooldown" && x.result !== "open-pr").length} of ${a.clusters} non-mechanical loci tried with ${a.model} · cost_usd ${a.cost_usd.toFixed(4)} this run (daily cap $${a.cap})`,
     ...a.outcomes.map((x) => `  ${x.result} · ${x.divergences} · ${x.locus}${x.file ? ` · ${x.file}` : ""}${x.paired ? ` + ${x.paired.edits} paired data edits` : ""} · $${x.cost_usd.toFixed(4)}${x.pr ? ` · ${x.pr}` : ""}${x.detail ? ` · ${x.detail}` : ""}`),
   ].join("\n");
 }

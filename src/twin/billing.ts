@@ -50,10 +50,17 @@ export function itemLine(ctx: Ctx, invoice: string, sub: Obj, item: Obj, period:
   const price = item.price as Obj;
   const quantity = item.quantity as number;
   const amount = Math.round(unitAmount(price) * quantity);
+  const product = ctx.get(price.product as string) as Obj | undefined;
+  const recurring = price.recurring as Obj | undefined;
+  const money = new Intl.NumberFormat("en-US", { style: "currency", currency: (price.currency as string).toUpperCase() }).format(unitAmount(price) / 100);
+  const intervalCount = (recurring?.interval_count as number) ?? 1;
+  const interval = intervalCount > 1 ? `${intervalCount} ${recurring?.interval}s` : (recurring?.interval as string);
+  const description = product ? `${quantity} × ${product.name as string} (at ${money} / ${interval})` : null;
   return ctx.build("line_item", {
     id: ctx.id(prefix),
     amount,
     currency: price.currency,
+    description,
     discountable: true,
     invoice,
     parent: {

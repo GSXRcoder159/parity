@@ -2,6 +2,7 @@
 // in-process, checked against the sandbox observations in docs/plan/impl/templates-validation.md.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildCorpus } from "../src/bench/corpus.ts";
 import { encodeForm, resolveRefs } from "../src/bench/run.ts";
 import { createTwin } from "../src/twin/server.ts";
@@ -168,6 +169,19 @@ test("attaching a token that declines on verification is a 402 card error and st
   const noCustomer = await call(t, "POST", "/v1/payment_methods/pm_card_visa/attach", { customer: "cus_Missing12345678" });
   assert.equal(cell(noCustomer), "400 resource_missing");
   assert.equal(noCustomer.body.error.param, "customer");
+});
+
+test("every attachable test card's display_brand is in the spec's display_brand enum", async () => {
+  const json = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf8"));
+  const desc: string = json("../src/twin/spec/openapi.pruned.json").components.schemas.payment_method_card.properties.display_brand.description;
+  const allowed = [...desc.matchAll(/`(\w+)`/g)].map((m) => m[1]);
+  const t = createTwin();
+  const c = (await call(t, "POST", "/v1/customers")).body;
+  for (const [token, card] of Object.entries(json("../src/twin/cards.json") as Obj)) {
+    if (card.behavior === "attach_declined") continue;
+    const pm = (await call(t, "POST", `/v1/payment_methods/${token}/attach`, { customer: c.id })).body;
+    assert.ok(allowed.includes(pm.card.display_brand), `${token}: ${card.brand} -> ${pm.card.display_brand}`);
+  }
 });
 
 test("default_payment_method must be attached to the customer", async () => {
