@@ -362,5 +362,26 @@
     ],
     "commit": "fc2443b0ea60e08bc0138b82980837a47a022fa0",
     "divergencesRemoved": 1066
+  },
+  {
+    "date": "2026-10-07",
+    "class": "assisted",
+    "pr": 9,
+    "file": "src/twin/resources/payment_methods.ts",
+    "divergencesRemoved": 427
+  },
+  {
+    "date": "2026-10-07",
+    "class": "assisted",
+    "pr": 12,
+    "file": "src/twin/resources/payment_methods.ts",
+    "divergencesRemoved": 427
+  },
+  {
+    "date": "2026-10-07",
+    "class": "assisted",
+    "pr": 13,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 367
   }
 ]
