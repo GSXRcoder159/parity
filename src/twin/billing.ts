@@ -176,6 +176,7 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
     customer: customer.id,
     due_date: sub.collection_method === "send_invoice" ? at + (sub.days_until_due as number) * DAY : null,
     effective_at: at,
+    hosted_invoice_url: `https://invoice.stripe.com/i/${id}`,
     lines: { data: lines, has_more: false, object: "list", total_count: lines.length, url: `/v1/invoices/${id}/lines` },
     parent: { quote_details: null, subscription_details: { metadata: sub.metadata, subscription: sub.id }, type: "subscription_details" },
     period_end: at,
