@@ -30,7 +30,7 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.7");
+  assert.equal(NORMALIZATION_VERSION, "v1.8");
   assert.equal(RULES.length, 16);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
@@ -417,7 +417,7 @@ test("v1.6: a payment method's and a charge's card expiry is opaque when it is a
   const run = (m: unknown, y: unknown) =>
     normalizeRecording(
       rec([
-        step(0, { object: "payment_method", card: card(m, y) }),
+        step(0, { object: "payment_method", created: T0, card: card(m, y) }), // T0: 21 Sep 2026
         step(1, { error: { type: "card_error", payment_method: { object: "payment_method", card: card(m, y) } } }, 402),
         step(2, { object: "list", data: [{ object: "payment_intent", latest_charge: { object: "charge", payment_method_details: { card: card(m, y) } } }] }),
         step(3, { object: "customer", card: card(m, y) }), // not a payment method: compared
@@ -439,6 +439,23 @@ test("v1.6: a payment method's and a charge's card expiry is opaque when it is a
       [13, 1999],
     ],
   );
+});
+
+test("v1.8: card expiry is opaque only as a pair, month 1–12 and year within [year(t0) − 1, year(t0) + 20]; else both are compared raw", () => {
+  const exp = (m: unknown, y: unknown, created: number | null = T0) => {
+    const b = body(normalizeRecording(rec([step(0, { object: "payment_method", ...(created === null ? {} : { created }), card: { exp_month: m, exp_year: y } })])), 0).card;
+    return [b.exp_month, b.exp_year];
+  };
+  // T0 is 21 Sep 2026: the window is 2025–2046.
+  assert.deepEqual(exp(9, 2025), ["<opaque>", "<opaque>"]);
+  assert.deepEqual(exp(12, 2046), ["<opaque>", "<opaque>"]);
+  assert.deepEqual(exp(1, 2027), ["<opaque>", "<opaque>"]);
+  // Out of the window, a unix-seconds year, or a bad month: the pair is compared raw (the valid half too).
+  for (const [m, y] of [[9, 2024], [9, 2047], [9, T0], [0, 2027], [13, 2027], [9, 2027.5], [9, "2027"]] as const) assert.deepEqual(exp(m, y), [m, y], `${m}/${y}`);
+  // The window moves with the anchor's year; no anchor (no `created` in any step body) compares raw.
+  const T2040 = Date.UTC(2040, 5, 1) / 1000;
+  assert.deepEqual([exp(9, 2027, T2040), exp(9, 2041, T2040)], [[9, 2027], ["<opaque>", "<opaque>"]]);
+  assert.deepEqual(exp(9, 2027, null), [9, 2027]);
 });
 
 test("v1.2: refund destination_details.card reference keys dropped (steps, lists, events); other objects keep them", () => {
