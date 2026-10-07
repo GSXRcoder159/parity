@@ -18,6 +18,9 @@ interface Card {
 }
 
 const CARDS: Record<string, Card> = JSON.parse(readFileSync(new URL("../cards.json", import.meta.url), "utf8"));
+// card.brand -> card.display_brand where the spec's two enums (payment_method_card in spec/openapi.pruned.json)
+// spell a brand differently; any other brand displays as itself.
+const DISPLAY_BRAND: Record<string, string> = { amex: "american_express", diners: "diners_club", eftpos_au: "eftpos_australia", unionpay: "union_pay" };
 
 const find = (ctx: Ctx, id: string | undefined) => live(ctx, id, "payment_method") ?? ctx.fail("resource_missing", { param: "payment_method" });
 const ofCustomer = (ctx: Ctx, customer: unknown, params: Obj, url: string) =>
@@ -37,7 +40,7 @@ export const routes: Route[] = [
       const { behavior, decline_code, ...details } = card;
       if (behavior === "attach_declined") ctx.fail("card_declined", {}, { decline_code });
       const pm = ctx.build("payment_method", { id: ctx.id("pm"), created: ctx.now(), customer: customer.id, type: "card" });
-      pm.card = { ...(pm.card as Obj), ...details };
+      pm.card = { ...(pm.card as Obj), ...details, display_brand: DISPLAY_BRAND[details.brand] ?? details.brand };
       return { body: pm, emits: [{ type: "payment_method.attached", object: pm }] };
     },
     "post /v1/payment_methods/{payment_method}/attach",
