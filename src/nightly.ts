@@ -14,7 +14,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { assist, assistText, sh, type Run } from "./align/assist.ts";
+import { assist, assistText, prKey, sh, type Run } from "./align/assist.ts";
 import { scoreTwinIn } from "./align/gate.ts";
 import { align, noiseFromRuns, planText } from "./align/index.ts";
 import type { Env } from "./align/llm.ts";
@@ -219,12 +219,6 @@ function surfaceAdded(log: string): string[] {
     .filter((e) => e.kind === "patch" && e.data.class === "surface-added")
     .map((e) => `surface-added: ${String(e.data.note)}`);
 }
-
-/**
- * An assisted PR's key, the same from its merge entry (pr: number) and its paired data edits' entries (pr: the URL gh
- * printed): a branch name can come back after a closed PR's branch is deleted, a PR number cannot.
- */
-const prKey = (d: Record<string, unknown>): string => `${String(d.branch)}#${String(d.pr).split("/").pop()}`;
 
 /**
  * Cumulative align-loop patches in the sealed log (decision 0002 §3): `automatic` entries applied (by align --apply,

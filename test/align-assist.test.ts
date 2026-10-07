@@ -325,6 +325,64 @@ test("assist: a locus whose last 2 attempts under the current reply contract sto
   assert.deepEqual(old.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
 });
 
+test("assist: a locus whose sealed-log proposal is still an open align/assisted-* PR (gh pr list, matched by branch and number) is skipped as open-pr; the next locus takes its slot; once the PR is no longer open the locus is tried", async () => {
+  const a: Locus = { kind: "route", route: "GET /v1/unserved/{id}" };
+  const b: Locus = { kind: "route", route: "GET /v1/unknown/{id}" };
+  const step = (i: number, path: string, status: string): StepRecord => ({ i, method: "GET", path, status: 200, body: { object: "unserved", status }, resHeaders: {}, ms: 0 });
+  const rec = (target: string, status: string): Recording => ({
+    seq: "unserved#1", template: "unserved", stratum: "lifecycle", seed: 1, heldOut: false, target, runId: "oracle", startedAt: "2026-01-01T00:00:00.000Z", ms: 0, events: [],
+    steps: [step(0, "/v1/unserved/cus_TESTa1b2c3d4e5", status), step(1, "/v1/unknown/cus_TESTa1b2c3d4e5", status)],
+  });
+  const d = (step: number, path: string, locus: Locus): Triaged => ({ seq: "unserved#1", step, path, cls: "VALUE_MISMATCH", expected: "a", actual: "b", template: "unserved", heldOut: false, locus });
+  const oracle = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
+  // a has the most divergences, so it holds the one slot (k = 1) unless its PR is open.
+  const r = {
+    divergences: [d(0, "$.status", a), d(0, "$.object", a), d(1, "$.status", b)],
+    notMechanical: [
+      { locus: a, reason: "status: decided by handler code", divergences: 2 },
+      { locus: b, reason: "status: decided by handler code", divergences: 1 },
+    ],
+    gate: { blocked: [] },
+    twin: [rec("twin", "b")],
+    oracle,
+  } as unknown as AlignResult;
+  const dataDir = mkdtempSync(join(tmpdir(), "pb-assist-open-pr-"));
+  writeJsonl(join(dataDir, "oracle.jsonl"), [rec("sandbox", "a")]);
+  const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: "http://127.0.0.1:9" };
+  const ghArgs: string[][] = [];
+  const withOpen = (open: object[]): Run => (cmd, args) => (cmd === "gh" ? (ghArgs.push(args), JSON.stringify(open)) : ""); // a clean tree, docker available
+
+  // No proposal in the sealed log: gh is not asked.
+  await assist(r, { repo: REPO, dataDir, runId: "run-0", k: 1, env, run: withOpen([]), now: NOW });
+  assert.equal(ghArgs.length, 0);
+
+  // a was proposed as PR #7; b as PR #5, since closed, whose branch name came back on the open PR #9.
+  const proposal = (locus: Locus, branch: string, n: number) => ({ kind: "patch" as const, data: { class: "assisted", status: "proposed", branch, pr: `https://github.com/example/parity/pull/${n}`, locus, oracle } });
+  appendLog(logPath(dataDir), "night", [proposal(a, "align/assisted-2026-09-25-1", 7), proposal(b, "align/assisted-2026-09-24-1", 5)]);
+  const open = [
+    { number: 7, headRefName: "align/assisted-2026-09-25-1" },
+    { number: 9, headRefName: "align/assisted-2026-09-24-1" },
+    { number: 8, headRefName: "feature/unserved" },
+  ];
+  const res = await assist(r, { repo: REPO, dataDir, runId: "run-open", k: 1, env, run: withOpen(open), now: NOW });
+  assert.deepEqual(ghArgs, [["pr", "list", "--state", "open", "--json", "number,headRefName", "--limit", "200"]]);
+  assert.deepEqual(
+    res.outcomes.map((o) => [o.locus, o.result, o.detail, o.cost_usd]),
+    [
+      ["GET /v1/unserved/{id}", "open-pr", "its proposal https://github.com/example/parity/pull/7 is still open: review it first", 0],
+      ["GET /v1/unknown/{id}", "no-owner", "no behavior module serves GET /v1/unknown/<id:cus>", 0],
+    ],
+  );
+  assert.match(assistText(res), /^assist: 1 of 2 non-mechanical loci tried/);
+  assert.match(assistText(res), /^ {2}open-pr · 2 · GET \/v1\/unserved\/\{id\} · \$0\.0000 · its proposal https:\/\/github\.com\/example\/parity\/pull\/7 is still open: review it first$/m);
+  const logged = readJsonl<LogEntry>(logPath(dataDir)).at(-1)!.data.assist as AssistResult;
+  assert.deepEqual(logged.outcomes.map((o) => o.result), ["open-pr", "no-owner"]);
+
+  // PR #7 merged or closed: no longer open, so a is tried again.
+  const later = await assist(r, { repo: REPO, dataDir, runId: "run-closed", k: 1, env, run: withOpen(open.slice(1)), now: NOW });
+  assert.deepEqual(later.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
+});
+
 test("cooldowns: any 2 consecutive non-productive attempts (bad-reply of any kind, gate-failed) under the current contract cool a locus 7 days, with the reason; a proposed one resets the streak; older contracts' entries are ignored", () => {
   const dir = mkdtempSync(join(tmpdir(), "pb-assist-cooldowns-"));
   const oracle = { oracleSeqs: 1, oracleSha: "0".repeat(64) };
@@ -401,7 +459,8 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
   // docker: the fake runs the container's command on the host and records its argv (a real run: test/align-gate.test.ts).
   const dockerCalls: string[][] = [];
   const docker = fakeDocker(dockerCalls);
-  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/7") : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
+  // gh: no open PR (the open-pr skip has its own test); `gh` records the PRs created.
+  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (args[1] === "list" ? "[]" : (gh.push(args), "https://github.com/example/parity/pull/7")) : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
   const env = { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url };
   try {
     const ok = await assist(plan, { repo, dataDir: data, runId: "assist-1", env, run, now: NOW });
@@ -503,7 +562,8 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     // gh refuses the PR (the repo does not let GitHub Actions create pull requests): pr-failed, and the branch it
     // pushed is deleted again, on origin and here.
     const refuse: Run = (cmd, args, cwd) => {
-      if (cmd === "gh") throw new Error("gh: GitHub Actions is not permitted to create or approve pull requests");
+      if (cmd === "gh" && args[1] === "create") throw new Error("gh: GitHub Actions is not permitted to create or approve pull requests");
+      if (cmd === "gh") return "[]";
       return cmd === "docker" ? docker(args) : sh(cmd, args, cwd);
     };
     const denied = await assist(plan, { repo, dataDir: data, runId: "assist-5", env, run: refuse, now: NOW });
@@ -595,7 +655,7 @@ test("assist pairing: a code change the gate rejects alone passes with the data 
   const gh: string[][] = [];
   const dockerCalls: string[][] = [];
   const docker = fakeDocker(dockerCalls);
-  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (gh.push(args), "https://github.com/example/parity/pull/8") : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
+  const run: Run = (cmd, args, cwd) => (cmd === "gh" ? (args[1] === "list" ? "[]" : (gh.push(args), "https://github.com/example/parity/pull/8")) : cmd === "docker" ? docker(args) : sh(cmd, args, cwd));
   try {
     const res = await assist(plan, { repo, dataDir: data, runId: "assist-pair", env: { ANTHROPIC_API_KEY: "sk-ant-test", ANTHROPIC_BASE_URL: api.url }, run, now: NOW });
     const [o] = res.outcomes;

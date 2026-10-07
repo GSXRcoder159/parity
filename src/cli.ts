@@ -63,7 +63,8 @@ const USAGE = `usage:
     --assist (after the plan, on HEAD; run align --apply first): the LLM proposes SEARCH/REPLACE edits to one twin code
     file per non-mechanical locus (top 6, effort medium; each SEARCH must match exactly once; a locus whose last 2
     attempts under the current reply contract were not productive (bad-reply incl. max_tokens, gate-failed) sits out
-    7 days, logged as cooldown with the reason, and the next one takes its slot); a reply that passes the same gate
+    7 days, logged as cooldown with the reason, and a locus whose sealed-log proposal is still an open PR (gh) is
+    logged as open-pr; the next one takes its slot); a reply that passes the same gate
     becomes a branch align/assisted-<date>-<n> and a draft PR (gh), never merged. Needs ANTHROPIC_API_KEY (else skipped
     and logged); model PARITY_LLM_MODEL (default claude-sonnet-5); every call's tokens and cost_usd go to
     <dataDir>/budget/llm.jsonl; daily cap $15 (UTC) per ledger, PARITY_LLM_CAP_USD may only lower it. The nightly
