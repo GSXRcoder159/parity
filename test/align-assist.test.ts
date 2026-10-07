@@ -431,6 +431,12 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.ok(user.includes(`### ${FILE}\n\`\`\`ts\n${original}\`\`\``));
     assert.match(user, /^## Counterexample \(normalized\): customer-crud#1, steps 0\.\.0 of 6$/m);
     assert.match(user, /^\* step 0 \$\.description VALUE_MISMATCH expected "Parity \d+" actual null$/m);
+    // The legend: <opaque> on card fields is a value of the right kind (PR #9-#12 reviews), not any value.
+    assert.ok(
+      user.includes(
+        "On card fields <opaque> means a value of the right kind, not any value: fingerprint must be stable per card number (the same card number gives the same fingerprint within an account), and exp_month/exp_year must be a plausible card expiry derived from the twin's clock, never random numbers or ids.",
+      ),
+    );
     assert.ok(!user.includes("subscription-cancel-at-period-end") && !user.includes("templates-validation"));
 
     // One draft PR carrying the counterexample, scores and cost; the branch holds only the replaced file and is pushed.

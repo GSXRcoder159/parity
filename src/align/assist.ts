@@ -119,7 +119,7 @@ function counterexample(c: Cluster, all: Triaged[], oracle: Map<string, Recordin
   const ev = mine.find((d) => d.locus.kind === "events")?.locus;
   const step = steps.length ? last : ev?.kind === "events" ? (ev.steps.find((s) => s.step >= 0)?.step ?? last) : last;
   const json = (v: unknown) => "```json\n" + JSON.stringify(v, null, 2) + "\n```";
-  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), dates in text <date>, run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches. Fraud and risk fields are removed from both sides: leave the code that sets them as it is."];
+  const out = [`## Counterexample (normalized): ${seq}, steps 0..${last} of ${o.steps.length}`, "oracle = the reference sandbox; twin = the code above. Normalized: ids <id:prefix>, timestamps <t:...> (relative), dates in text <date>, run nonces <run>, generated opaque strings <opaque>, secrets <secret>, invoice numbers <number:...>, URLs <url:host>; any generated value of that kind matches. On card fields <opaque> means a value of the right kind, not any value: fingerprint must be stable per card number (the same card number gives the same fingerprint within an account), and exp_month/exp_year must be a plausible card expiry derived from the twin's clock, never random numbers or ids. Fraud and risk fields are removed from both sides: leave the code that sets them as it is."];
   for (const s of o.steps.slice(0, last + 1)) {
     const ts = t.steps[s.i];
     const [ob, tb] = [scrub(s.body), scrub(ts?.body)];
