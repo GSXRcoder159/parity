@@ -5,7 +5,9 @@
 // its sealed-log entries at once, land(), once the suite and tsc pass on it). A refused or aborted recording (budget gate,
 // circuit breaker), an allowance of 0, a deferred noise pair (decision 0001 C2) and a red suite on the align commit are
 // sealed-log notes, not failures: the night goes on, and when no slice was recorded it scores the existing oracle and
-// the curve point says oracleRefreshed: false. A red suite includes one that ran 0 tests or hung past GUARD_TIMEOUT_MS.
+// the curve point says oracleRefreshed: false. So is a webhook endpoint on the sandbox account (decision 0003): checked
+// with one GET before the slice, it records nothing that night. A red suite includes one that ran 0 tests or hung past
+// GUARD_TIMEOUT_MS.
 // Any other error (a missing key, a tool the suite spawns missing from the runner, a bug) fails the night.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,14 +21,14 @@ import type { Env } from "./align/llm.ts";
 import { appendLog, logPath, provenance, type LogEntry, type Provenance } from "./align/log.ts";
 import { FRAUD_OR_RISK } from "./align/patch.ts";
 import { parseTap } from "./agree.ts";
-import { allowance, fittingPrefix, nightShare, projectedGets, readLedger, RESERVE, rollingGets } from "./bench/budget.ts";
+import { allowance, appendLedger, fittingPrefix, nightShare, projectedGets, readLedger, RESERVE, rollingGets } from "./bench/budget.ts";
 import { METHOD, type SeqResult } from "./bench/compare.ts";
 import { buildCorpus, parseSeeds } from "./bench/corpus.ts";
 import { NORMALIZATION_VERSION } from "./bench/normalize.ts";
 import { contaminated } from "./bench/oracle.ts";
-import type { Target } from "./bench/run.ts";
+import { STRIPE_VERSION, type Target } from "./bench/run.ts";
 import { score, type LevelScores, type Score } from "./bench/score.ts";
-import { compareSets, newRunId, oracleBuild, readsLedger, recordCorpus, Refused, resolveTarget, slice } from "./cli.ts";
+import { budgetRefusal, compareSets, newRunId, oracleBuild, readsLedger, recordCorpus, Refused, resolveTarget, slice } from "./cli.ts";
 import { drift, type DriftResult } from "./drift.ts";
 import { readJsonl } from "./jsonl.ts";
 import type { Recording, Sequence } from "./types.ts";
@@ -63,6 +65,12 @@ export type Patches = { automatic: number; assisted: number };
  * 2026-09-28 pair). The next weekly pair replaces them as the ceiling (noiseFloor takes the newest) and is out of sample.
  */
 const IN_SAMPLE_RUNS = new Set(["20260925T233315-zdmc", "20260926T000140-m0x6", "20260928T011354-l3w0", "20260928T012601-q5kb"]);
+/**
+ * Decision 0003: the curve point published on or after `date` carries `event`, once. The curve is the record of "once"
+ * (no earlier point carries it; a same-date rerun keeps the replaced point's events), so a night that published before
+ * this shipped moves it to the next point instead of skipping it.
+ */
+const ACCOUNT_CHANGE = { date: "2026-10-07", event: "account change: webhook endpoint removed 2026-10-05; oracle mixed until refreshed" };
 /** Account keys and ids that must never reach a public file (decision 0001 R8): checked before anything is committed. */
 const SECRET = /\b(sk|rk|rkcs)_(test|live)_|\bacct_[A-Za-z0-9]/;
 
@@ -73,6 +81,28 @@ const maxAgeDays = (now: Date, recs: Recording[]): number => Math.max(0, Math.ce
 async function recordSandbox(target: Target, dataDir: string, date: string, name: string, seqs: Sequence[]): Promise<Recording[]> {
   const runId = newRunId(); // a fresh run id per recording: idempotency nonces derive from it and must never repeat
   return recordCorpus(target, seqs, { concurrency: 8, runId, out: join(dataDir, "runs", date, `${name}-${runId}.jsonl`), ledger: readsLedger(dataDir) });
+}
+
+/**
+ * Decision 0003: the oracle account has no webhook endpoints (#24 creates and deletes its own during the slice). One GET
+ * /v1/webhook_endpoints?limit=1 before the slice, budget-gated with the slice's projection (no GET is spent on a check
+ * for a slice that would be refused) and ledgered before it is sent, like a recording's. An endpoint is Refused: nothing
+ * is recorded tonight (the degraded path). A non-2xx answer fails the night: the account state is unknown.
+ */
+async function noWebhookEndpoint(target: Target, ledger: string, runId: string, sliceGets: number): Promise<void> {
+  const refusal = budgetRefusal(readLedger(ledger), 1 + sliceGets, new Date().toISOString(), Number(process.env.PARITY_READ_BUDGET ?? 10_000), ledger);
+  if (refusal) throw new Refused(refusal);
+  appendLedger(ledger, { date: new Date().toISOString(), account: process.env.STRIPE_SANDBOX_ACCOUNT ?? "unknown", target: target.name, runId, gets: 1, posts: 0, deletes: 0, charges: 0 });
+  const res = await fetch(`${target.baseUrl}/v1/webhook_endpoints?limit=1`, { headers: { Authorization: `Bearer ${target.apiKey}`, "Stripe-Version": STRIPE_VERSION } });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`nightly: the webhook endpoint check (GET /v1/webhook_endpoints?limit=1) answered ${res.status}: ${text.slice(0, 300)}`);
+  const w = (JSON.parse(text) as { data: { id: string; url: string; status: string; enabled_events: string[] }[] }).data[0];
+  if (w) {
+    throw new Refused(
+      `the sandbox account has a webhook endpoint (${w.id}, ${w.url}, ${w.status}, enabled_events ${w.enabled_events.join(",")}), and decision 0003 says it has none: ` +
+        "its events would carry pending_webhooks and its invoices wait for delivery. Nothing recorded tonight; delete it (Dashboard, Developers, Webhooks) and the next night records",
+    );
+  }
 }
 
 /**
@@ -593,6 +623,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
   try {
     if (target && seqs.length) {
       try {
+        await noWebhookEndpoint(target, ledger, runId, projectedGets(seqs));
         today = await recordSandbox(target, data, date, "slice", seqs);
         sliceRes.recorded = today.filter((r) => !contaminated(r)).length;
         writeJson(cursorFile, { cursor: (from + seqs.length) % rotation.length });
@@ -703,6 +734,7 @@ export async function nightly(o: { repo: string; dataDir: string; dryRun?: boole
     ...(last !== undefined && oracle.oracleSeqs > last ? [`oracle expanded: ${last}→${oracle.oracleSeqs}`] : []),
     ...(methodChanged ? [`method change: ${METHOD.change}`] : []),
     ...(normalizationChanged ? [`method change: normalization ${NORMALIZATION_VERSION}`] : []),
+    ...(prior !== undefined && date >= ACCOUNT_CHANGE.date && !points.some((p) => p.events?.includes(ACCOUNT_CHANGE.event)) ? [ACCOUNT_CHANGE.event] : []),
   ];
   const events = [...new Set([...(points.find((p) => p.date === date)?.events ?? []), ...fresh])];
   const { point, scores } = publicFiles({ date, score: json.score, results: json.results, noise, events, patches, divergencesRemoved, oracleRefreshed, oracleSeqs: oracle.oracleSeqs, oracleMaxAgeDays });

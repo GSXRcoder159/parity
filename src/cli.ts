@@ -85,7 +85,8 @@ const USAGE = `usage:
     pending branch before anything else if the commit is on origin, else deletes the branch). Tonight's run files and
     read-ledger entries (and the LLM ledger,
     after the assisted pass) are pushed to the data repo as soon as they are written. A refused or
-    aborted recording (budget gate, circuit breaker) is noted and the night goes on with the existing oracle (curve point
+    aborted recording (budget gate, circuit breaker, a webhook endpoint on the sandbox account: one GET before the
+    slice, decision 0003) is noted and the night goes on with the existing oracle (curve point
     oracleRefreshed: false); any other error (a missing key) fails the run. The point's events annotate every align surface
     entry since the previous point and "oracle expanded: <old>→<new>". Run from the repo root (.env).
     --dry-run: no sandbox traffic, no --apply, no --assist, no commits or pushes: runs on a temp copy of the data dir

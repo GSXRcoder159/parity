@@ -593,6 +593,76 @@ test("nightly sizes tonight's slice to the read budget and keeps the rotation cu
   }
 });
 
+test("nightly checks the sandbox account for webhook endpoints before the slice (decision 0003): an endpoint records nothing that night, noted, its GET ledgered, and the night publishes; once it is deleted the next night records; the account-change annotation lands once, on the first point on or after 2026-10-07", { timeout: 240_000 }, async (t) => {
+  t.mock.method(console, "log", () => {}); // recordCorpus's progress lines
+  const twin = createTwin();
+  const server = await twin.listen(0);
+  const sandbox = { name: "sandbox", baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: "sk_test_parity", eventWaitMs: 0 };
+  const call = async (method: string, path: string, body?: string) => (await fetch(sandbox.baseUrl + path, { method, body, headers: { Authorization: `Bearer ${sandbox.apiKey}`, "Content-Type": "application/x-www-form-urlencoded" } })).json() as Promise<{ id: string }>;
+  try {
+    // The oracle is last Sunday's noise pair (as in the cursor test): customer-crud #1 and #2 recorded twice.
+    const pairSeqs = buildCorpus(TEMPLATES.filter((x) => x.name === "customer-crud"), [1, 2]);
+    const record = async (runId: string) => (await runCorpus(pairSeqs, sandbox, { concurrency: 2, runId })).recordings.map((r) => ({ ...r, events: touching(idsIn(r.steps), twin.store.events) }));
+    const { bare, data, dataOrigin, repo } = fixture("pb-webhooks-", {
+      "runs/2026-10-04/noise-a-20261004T070000-aaaa.jsonl": await record("20261004T070000-aaaa"),
+      "runs/2026-10-04/noise-b-20261004T071000-bbbb.jsonl": await record("20261004T071000-bbbb"),
+    });
+    const corpus = buildCorpus(TEMPLATES, SEEDS);
+    const rotation = [0, 1, 2, 3, 4, 5, 6].flatMap((k) => corpus.filter((_, i) => i % 7 === k));
+    // 30-day GETs that leave one sequence's projection as the night's share (no cursor yet: the window starts at <weekday>/7).
+    const oneSeq = (day: string) => {
+      const at = rotation.indexOf(corpus[new Date(day).getUTCDay()]!);
+      writeJsonl(join(data, "budget/reads.jsonl"), [{ date: `${day}T00:00:00.000Z`, account: "acct_test", target: "sandbox", runId: "earlier", gets: 8_500 - 7 * projectedGets(rotation.slice(at, at + 1)), posts: 0, deletes: 0, charges: 0 }]);
+    };
+    const reads = () => readJsonl<{ runId: string; gets: number }>(join(data, "budget/reads.jsonl")).map((e) => [e.runId, e.gets]);
+    const notes = (r: { runId: string }) => readJsonl<LogEntry>(logPath(data)).filter((e) => e.runId === r.runId && e.kind === "note" && "nightly" in e.data).map((e) => e.data.nightly);
+    const night = (at: string) => nightly({ repo, dataDir: data, env: {}, run: withGh([]), now: () => new Date(at), sandbox });
+    const CHANGE = "account change: webhook endpoint removed 2026-10-05; oracle mixed until refreshed";
+
+    // The incident's endpoint: every event counts it. The night lists it, records nothing, notes it, and goes on.
+    const we = await call("POST", "/v1/webhook_endpoints", "url=https%3A%2F%2Fexample.com%2Fwh&enabled_events[]=*");
+    oneSeq("2026-10-06");
+    const r1 = await night("2026-10-06T07:00:00Z");
+    assert.equal(r1.slice.refused, `the sandbox account has a webhook endpoint (${we.id}, https://example.com/wh, enabled, enabled_events *), and decision 0003 says it has none: its events would carry pending_webhooks and its invoices wait for delivery. Nothing recorded tonight; delete it (Dashboard, Developers, Webhooks) and the next night records`);
+    assert.deepEqual([r1.slice.seqs, r1.slice.recorded, r1.oracleRefreshed], [1, 0, false]);
+    assert.deepEqual(notes(r1), [{ date: "2026-10-06", step: `record slice ${r1.slice.spec}`, error: r1.slice.refused, oracleRefreshed: false }]);
+    assert.equal(existsSync(join(data, "runs/2026-10-06")), false, "nothing recorded");
+    assert.equal(existsSync(join(data, "budget/rotation.json")), false, "the cursor stays");
+    assert.deepEqual(reads(), [["earlier", reads()[0]![1]], [r1.runId, 1]], "the check's one GET is ledgered");
+    assert.match(bare(dataOrigin, "show", "main:budget/reads.jsonl"), new RegExp(`"runId":"${r1.runId}","gets":1,`), "and pushed with the night");
+    assert.ok(nightlyText(r1).includes(`\nslice ${r1.slice.spec}: 1 sequences · NOT RECORDED: the sandbox account has a webhook endpoint (${we.id}`));
+    assert.ok(r1.commits, "scored, published and pushed (the degraded path)");
+    assert.deepEqual(site(repo, "curve.json").map((p: { date: string; events: string[]; oracleRefreshed: boolean }) => [p.date, p.events, p.oracleRefreshed]), [["2026-10-06", [], false]]);
+
+    // Deleted: the next night records, and its point (the first on or after decision 0003's date) carries the annotation.
+    await call("DELETE", `/v1/webhook_endpoints/${we.id}`);
+    oneSeq("2026-10-07");
+    const r2 = await night("2026-10-07T07:00:00Z");
+    assert.deepEqual([r2.slice.refused, r2.slice.recorded, r2.oracleRefreshed, notes(r2)], [undefined, 1, true, []]);
+    assert.deepEqual(reads(), [["earlier", reads()[0]![1]], [r2.runId, 1]], "a twin target ledgers only the check (recordCorpus ledgers api.stripe.com by host)");
+    assert.deepEqual(r2.events.filter((e) => e.startsWith("account change")), [CHANGE]);
+
+    // A same-date rerun keeps it once; the next night does not repeat it. Neither has a slice to record: no check, no GET.
+    const exhausted = () => writeJsonl(join(data, "budget/reads.jsonl"), [{ date: "2026-10-07T00:00:00.000Z", account: "acct_test", target: "sandbox", runId: "earlier", gets: 8_500, posts: 0, deletes: 0, charges: 0 }]);
+    exhausted();
+    const r3 = await night("2026-10-07T10:47:00Z");
+    exhausted();
+    const r4 = await night("2026-10-08T07:00:00Z");
+    assert.deepEqual([r3.slice.seqs, r4.slice.seqs, reads()], [0, 0, [["earlier", 8_500]]]);
+    const curve = site(repo, "curve.json") as { date: string; events: string[] }[];
+    assert.deepEqual(curve.map((p) => [p.date, p.events.filter((e) => e === CHANGE).length]), [["2026-10-06", 0], ["2026-10-07", 1], ["2026-10-08", 0]]);
+    assert.deepEqual(r3.events.filter((e) => e === CHANGE), [CHANGE]);
+
+    // A night that published on or after the date before this shipped: the next point carries it instead (a dry run).
+    writeFileSync(join(repo, "site/data/curve.json"), JSON.stringify(curve.map((p) => ({ ...p, events: p.events.filter((e) => e !== CHANGE) })), null, 2) + "\n");
+    const dry = await nightly({ repo, dataDir: data, dryRun: true, env: {}, run: withGh([]), now: () => new Date("2026-10-09T07:00:00Z") });
+    assert.deepEqual(site(join(dry.tmp!, "parity"), "curve.json").map((p: { date: string; events: string[] }) => [p.date, p.events.includes(CHANGE)]), [["2026-10-06", false], ["2026-10-07", false], ["2026-10-08", false], ["2026-10-09", true]]);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test("the test guard: a red suite or tsc on the align commit drops the commit and its sealed-log entries before anything is pushed, notes the failures, and the night goes on; a green one lands it", { timeout: 240_000 }, async () => {
   // A test pinning a value align owns, as the tests that turned CI red on 2026-09-28 pinned the placeholder messages,
   // a type error, and a test that fails if the guard's suite could see the nightly's keys.

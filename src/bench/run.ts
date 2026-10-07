@@ -12,7 +12,7 @@ export interface Target {
   eventWaitMs?: number;
 }
 
-const STRIPE_VERSION = "2026-08-26.dahlia";
+export const STRIPE_VERSION = "2026-08-26.dahlia";
 const REF = /\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z0-9_]+)*)/g;
 const EXACT_REF = new RegExp(`^${REF.source}$`);
 // Stripe object id: lowercase prefix + mixed-case tail (the uppercase/digit lookahead excludes enums).
