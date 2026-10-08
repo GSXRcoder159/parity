@@ -164,6 +164,8 @@ export function invoiceItemLine(ctx: Ctx, invoice: string, ii: Obj, prefix = "il
 export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines: Obj[], fields: Obj = {}, at = ctx.now()): Obj {
   const total = lines.reduce((s, l) => s + (l.amount as number), 0);
   const c = (k: string) => [`customer_${k}`, customer[k] ?? null];
+  const status = (fields.status as string | undefined) ?? "open";
+  const number = status === "open" ? `${customer.invoice_prefix as string}-${String(customer.next_invoice_sequence as number).padStart(4, "0")}` : null;
   return ctx.build("invoice", {
     ...Object.fromEntries(["address", "email", "name", "phone", "shipping", "tax_exempt"].map(c)),
     id,
@@ -177,6 +179,7 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
     due_date: sub.collection_method === "send_invoice" ? at + (sub.days_until_due as number) * DAY : null,
     effective_at: at,
     lines: { data: lines, has_more: false, object: "list", total_count: lines.length, url: `/v1/invoices/${id}/lines` },
+    number,
     parent: { quote_details: null, subscription_details: { metadata: sub.metadata, subscription: sub.id }, type: "subscription_details" },
     period_end: at,
     period_start: at,
