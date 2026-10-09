@@ -6,19 +6,31 @@ import { live } from "../util.ts";
 
 type Obj = Record<string, unknown>;
 
+const clientSecret = (id: string) => `${id}_secret_${Math.random().toString(36).slice(2, 10)}`;
+
 export const routes: Route[] = [
   [
     "GET",
     /^\/v1\/payment_intents$/,
     (ctx, { params }) => ({
-      body: list(ctx.all("payment_intent").filter((p) => !params.customer || p.customer === params.customer), params, "/v1/payment_intents"),
+      body: list(
+        ctx
+          .all("payment_intent")
+          .filter((p) => !params.customer || p.customer === params.customer)
+          .map((p) => ctx.build("payment_intent", { ...p, client_secret: clientSecret(p.id as string) })),
+        params,
+        "/v1/payment_intents",
+      ),
     }),
     "get /v1/payment_intents",
   ],
   [
     "GET",
     /^\/v1\/payment_intents\/(?<intent>[^/]+)$/,
-    (ctx, { pathParams }) => ({ body: live(ctx, pathParams.intent, "payment_intent") ?? ctx.fail("resource_missing", { param: "intent" }) }),
+    (ctx, { pathParams }) => {
+      const pi = live(ctx, pathParams.intent, "payment_intent");
+      return { body: pi ? ctx.build("payment_intent", { ...pi, client_secret: clientSecret(pi.id as string) }) : ctx.fail("resource_missing", { param: "intent" }) };
+    },
     "get /v1/payment_intents/{intent}",
   ],
   [
