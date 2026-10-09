@@ -10,15 +10,22 @@ export const routes: Route[] = [
   [
     "GET",
     /^\/v1\/payment_intents$/,
-    (ctx, { params }) => ({
-      body: list(ctx.all("payment_intent").filter((p) => !params.customer || p.customer === params.customer), params, "/v1/payment_intents"),
-    }),
+    (ctx, { params }) => {
+      const items = ctx.all("payment_intent").filter((p) => !params.customer || p.customer === params.customer);
+      for (const p of items) if (p.customer && p.setup_future_usage == null) (p as Obj).setup_future_usage = "off_session";
+      return { body: list(items, params, "/v1/payment_intents") };
+    },
     "get /v1/payment_intents",
   ],
   [
     "GET",
     /^\/v1\/payment_intents\/(?<intent>[^/]+)$/,
-    (ctx, { pathParams }) => ({ body: live(ctx, pathParams.intent, "payment_intent") ?? ctx.fail("resource_missing", { param: "intent" }) }),
+    (ctx, { pathParams }) => {
+      const pi = live(ctx, pathParams.intent, "payment_intent");
+      if (!pi) return { body: ctx.fail("resource_missing", { param: "intent" }) };
+      if (pi.customer && pi.setup_future_usage == null) (pi as Obj).setup_future_usage = "off_session";
+      return { body: pi };
+    },
     "get /v1/payment_intents/{intent}",
   ],
   [
