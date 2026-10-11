@@ -273,7 +273,7 @@ export function attemptPayment(ctx: Ctx, invoice: Obj, pm: Obj | undefined, inte
     const pi = { ...created, amount_received: amount, last_payment_error: null, latest_charge: charge.id, payment_method: pm.id, status: "succeeded" };
     return { pi, ok, emits: [...emits, { type: "charge.succeeded", object: charge }, { type: "payment_intent.succeeded", object: pi }] };
   }
-  const declined = renderError(new TwinError("card_declined", {}, { charge: charge.id, decline_code: token?.decline_code, payment_method: pm }), ctx.requestId);
+  const declined = renderError(new TwinError("card_declined", { decline_code: token?.decline_code }, { charge: charge.id, payment_method: pm }), ctx.requestId);
   const { request_log_url: _, ...last_payment_error } = declined.body.error;
   const pi = { ...created, last_payment_error, latest_charge: charge.id };
   return { pi, ok, declined, emits: [...emits, { type: "charge.failed", object: charge }, { type: "payment_intent.payment_failed", object: pi }] };
