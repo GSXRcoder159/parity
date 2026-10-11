@@ -6,6 +6,7 @@
 // mechanical, with the reason (input to the assisted pass).
 import { isDeepStrictEqual } from "node:util";
 import { ID } from "../bench/run.ts";
+import { requestVars } from "../twin/errors.ts";
 import type { Recording, StepRecord } from "../types.ts";
 import { divergenceId, joinPath, segments, typeOf, type Locus, type Triaged } from "./triage.ts";
 
@@ -128,18 +129,22 @@ function subCodes(step: StepRecord | undefined): Record<string, string> {
 }
 
 /**
- * The message template for one occurrence: the oracle's normalized message when it has no placeholder; with `<id:P>`
- * tokens only, each token becomes the `{var}` whose twin value is an id with prefix P; otherwise undefined (assisted).
+ * The message template for one occurrence: the oracle's normalized message, where each `<id:P>` token becomes the `{var}`
+ * whose twin value is an id with prefix P, and each value of a `subst` var, as a whole token, becomes that `{var}`
+ * (longest value first); undefined (assisted) when another placeholder is left or an `<id:P>` has no single var.
  */
-function messageTemplate(message: string, vars: Record<string, string>): string | undefined {
-  if (!computed(message)) return message;
+function messageTemplate(message: string, vars: Record<string, string>, subst: Set<string>): string | undefined {
   if (PLACEHOLDER.test(message.replace(/<id:[^>]*>/g, ""))) return undefined;
   let ok = true;
-  const out = message.replace(/<id:([^>]*)>/g, (_, prefix: string) => {
+  let out = message.replace(/<id:([^>]*)>/g, (_, prefix: string) => {
     const names = Object.keys(vars).filter((n) => ID.test(vars[n]!) && vars[n]!.startsWith(`${prefix}_`));
     if (names.length !== 1) ok = false;
     return `{${names[0]}}`;
   });
+  for (const n of [...subst].filter((n) => (vars[n] ?? "").length >= 3).sort((a, b) => vars[b]!.length - vars[a]!.length)) {
+    const lit = vars[n]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(?<![\\w{])${lit}(?![\\w}])`, "g"), `{${n}}`);
+  }
   return ok ? out : undefined;
 }
 
@@ -244,9 +249,17 @@ export function propose(
         else candidates.push(values[0] === undefined ? { ...edit, op: "delete", locus, ids } : { ...edit, op: "set", value: values[0], locus, ids });
       } else if (values.some((m) => typeof m !== "string")) no("absent from some occurrences");
       else {
-        const vars = occ.map((x) => twinVars(entry, x.t));
-        const tpl = values.map((m, i) => messageTemplate(m as string, vars[i]!));
-        const bindings = occ.map((x, i) => ({ ...vars[i], ...subCodes(x.t) }));
+        // The call site's vars, over the request's (requestVars, read from the twin's own request as renderError reads it).
+        const call = occ.map((x) => twinVars(entry, x.t));
+        const vars = occ.map((x, i): Record<string, string> => {
+          const param = isObj(x.t.body) && isObj(x.t.body.error) && typeof x.t.body.error.param === "string" ? x.t.body.error.param : undefined;
+          return { ...requestVars(param, { params: isObj(x.t.params) ? x.t.params : {}, path: x.t.path }), ...call[i] };
+        });
+        // A var is shown to be one where its value changes across occurrences; `{value}` is the request's own value at
+        // the error's param, so its literal in the message is an echo by definition.
+        const subst = new Set(Object.keys(vars[0] ?? {}).filter((n) => n === "value" || new Set(vars.map((v) => v[n])).size > 1));
+        const tpl = values.map((m, i) => messageTemplate(m as string, vars[i]!, subst));
+        const bindings = occ.map((x, i) => ({ ...call[i], ...subCodes(x.t) }));
         if (tpl.some((m) => m === undefined)) no("computed: the message holds placeholders no twin var renders");
         else if (tpl.some((m, i) => echoes(m!, occ[i]!.o.params))) no("request-derived: the message quotes a request parameter value");
         else if (!tpl.every((m) => m === tpl[0])) no("varies across sequences");

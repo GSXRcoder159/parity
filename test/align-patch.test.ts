@@ -225,6 +225,42 @@ test("constant only in this oracle: a message quoting the request, an account- o
   ]);
 });
 
+test("request vars: the request's value at the param, the object of the path's id, and a call-site var that varies become {vars}", () => {
+  const msgs = [
+    ["No such customer: '<id:cus>'", "Received unknown parameter: colour", "At most 99 (it currently is '1000')."],
+    ["No such invoice: '<id:in>'", "Received unknown parameter: nickname", "At most 99 (it currently is '1000')."],
+  ];
+  const oracle = msgs.map((m, n) => rec(`r#${n + 1}`, false, m.map((message, i) => ({ ...st(i, 400, { error: { type: "invalid_request_error", message } }), params: { amount: 1000 } }))));
+  // The twin's own requests: renderError reads its vars from these, so the patcher does too.
+  const tw = (i: number, key: string, param: string, path: string, params: Record<string, unknown>) => ({ ...st(i, 400, { error: { param } }, key), path, params });
+  const twin = [
+    rec("r#1", false, [tw(0, "resource_missing", "id", "/v1/customers/cus_1AbCdEfGhIjK", {}), tw(1, "unknown", "colour", "/v1/customers", { colour: "x" }), tw(2, "too_large", "amount", "/v1/prices", { amount: 1000 })]),
+    rec("r#2", false, [tw(0, "resource_missing", "invoice", "/v1/invoices/in_2AbCdEfGhIjK", {}), tw(1, "unknown", "nickname", "/v1/customers", { nickname: "x" }), tw(2, "too_large", "amount", "/v1/prices", { amount: 1000 })]),
+  ];
+  const keys = ["resource_missing", "unknown", "too_large"];
+  const { candidates, notMechanical } = propose(
+    keys.flatMap((k, i) => ["r#1", "r#2"].map((s) => div(s, i, "$.error.message", "VALUE_MISMATCH", error(k, "message")))),
+    oracle,
+    twin,
+    new Set(),
+    {
+      ...data,
+      catalog: {
+        ...catalog,
+        unknown: { status: 400, type: "invalid_request_error", param: "{param}", message: "parity: unknown" },
+        too_large: { status: 400, type: "invalid_request_error", param: "amount", message: "parity: too_large" },
+      },
+    },
+  );
+  // "1000" is the same in both: a constant, yet the request's own value at the param, so {value} (no request-derived refusal).
+  assert.deepEqual(candidates.map((c) => [c.pointer, c.value]), [
+    ["/resource_missing/message", "No such {object}: '{value}'"],
+    ["/unknown/message", "Received unknown parameter: {param}"],
+    ["/too_large/message", "At most 99 (it currently is '{value}')."],
+  ]);
+  assert.deepEqual(notMechanical, []);
+});
+
 test("constant only for what the corpus covers: free text in a field, a generic key's message seen with one binding", () => {
   const oracle = [1, 2].map((n) =>
     rec(`g#${n}`, false, [

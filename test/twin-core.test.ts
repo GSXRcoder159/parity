@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { encodeForm } from "../src/bench/run.ts";
 import { build } from "../src/twin/build.ts";
-import { CATALOG, TwinError, renderError } from "../src/twin/errors.ts";
+import { CATALOG, TwinError, renderError, requestVars } from "../src/twin/errors.ts";
 import { expand } from "../src/twin/expand.ts";
 import { parseForm } from "../src/twin/form.ts";
 import { list, search } from "../src/twin/list.ts";
 import { type Route, createTwin } from "../src/twin/server.ts";
 
 /** The catalog's current message for `key`: messages are the align loop's to seed (decision 0002 §4.3), so tests never pin the placeholder. */
-const msg = (key: string): string => CATALOG[key]!.message;
+/** The catalog message as rendered: `{var}`s filled from `vars` (a seeded message may quote the param or the request). */
+const msg = (key: string, vars: Record<string, string> = {}): string => CATALOG[key]!.message.replace(/\{(\w+)\}/g, (_, k: string) => vars[k]!);
 
 type Obj = Record<string, any>;
 type Twin = ReturnType<typeof createTwin>;
@@ -148,7 +149,7 @@ test("unknown parameters are rejected at any depth with bracket names", async ()
       type: "invalid_request_error",
       code: "parameter_unknown",
       param,
-      message: msg("parameter_unknown"),
+      message: msg("parameter_unknown", { param }),
       doc_url: "https://stripe.com/docs/error-codes/parameter-unknown",
       request_log_url: `https://dashboard.stripe.com/test/logs/${r.headers["Request-Id"]}`,
     });
@@ -203,6 +204,28 @@ test("every catalog key the twin raises renders with the vars its call sites pas
   // The scan is not vacuous: core, validation and resource keys, the ternary's both arms, and the direct TwinError.
   for (const k of ["parameter_unknown", "parameter_invalid", "expand_invalid", "resource_missing_400", "payment_method_unattachable", "card_declined", "api_error"])
     assert.ok(rendered.has(k), k);
+});
+
+test("requestVars: the value at the param (nested too), else the path's id, and the object an id names; \"\" when none", () => {
+  const req = (params: Record<string, unknown>, path = "/v1/prices") => ({ params, path });
+  assert.deepEqual(requestVars("recurring[interval]", req({ recurring: { interval: "hourly" } })), { value: "hourly", object: "" });
+  assert.deepEqual(requestVars("amount", req({ amount: 7 })), { value: "7", object: "" });
+  assert.deepEqual(requestVars("starting_after", req({ starting_after: "cus_Missing1" }, "/v1/customers")), { value: "cus_Missing1", object: "customer" });
+  assert.deepEqual(requestVars("id", req({}, "/v1/webhook_endpoints/we_1AbcDef?x=1")), { value: "we_1AbcDef", object: "webhook endpoint" });
+  // An id whose prefix no oracle message has named: its value, no guessed name; a test token is not an id.
+  assert.deepEqual(requestVars("id", req({}, "/v1/payment_intents/pi_3AbcDef")), { value: "pi_3AbcDef", object: "" });
+  assert.deepEqual(requestVars("payment_method", req({}, "/v1/payment_methods/pm_card_visa/attach")), { value: "", object: "" });
+  assert.deepEqual(requestVars(undefined, req({}, "/v1/invoices/create_preview")), { value: "", object: "" });
+  assert.deepEqual(requestVars("id", undefined), { value: "", object: "" });
+  // A call-site var wins over the request's.
+  const saved = CATALOG.resource_missing!.message;
+  CATALOG.resource_missing!.message = "No such {object}: '{value}'";
+  try {
+    assert.equal(renderError(new TwinError("resource_missing", { param: "id" }), "req_1", req({}, "/v1/subscriptions/sub_9XyzAbc")).body.error.message, "No such subscription: 'sub_9XyzAbc'");
+    assert.equal(renderError(new TwinError("resource_missing", { param: "id", value: "v" }), "req_1", req({}, "/v1/subscriptions/sub_9XyzAbc")).body.error.message, "No such subscription: 'v'");
+  } finally {
+    CATALOG.resource_missing!.message = saved;
+  }
 });
 
 test("renderError: doc_url hyphenates the code; an unfilled placeholder is a bug, not text", async (t) => {

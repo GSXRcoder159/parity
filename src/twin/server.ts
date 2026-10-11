@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import http from "node:http";
 import { build } from "./build.ts";
-import { TwinError, fail, renderError } from "./errors.ts";
+import { TwinError, fail, renderError, type ErrorRequest } from "./errors.ts";
 import { expand } from "./expand.ts";
 import { parseForm } from "./form.ts";
 import { API_VERSION, type Changes, type Emit, Store, newId } from "./store.ts";
@@ -149,10 +149,11 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
     });
     // A bug (a non-TwinError, or a catalog entry the call site cannot render) is logged and becomes a 500. The 500 is
     // rendered here, not through the catalog, so a broken catalog cannot loop.
+    const request: ErrorRequest = { params: {}, path: req.path };
     const error = (e: unknown): TwinResponse => {
       if (!(e instanceof TwinError)) console.error(e);
       try {
-        const { status, body, errorKey } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId);
+        const { status, body, errorKey } = renderError(e instanceof TwinError ? e : new TwinError("api_error"), requestId, request);
         return respond(status, body, errorKey);
       } catch (bug) {
         console.error(bug);
@@ -178,6 +179,7 @@ export function createTwin(opts: { routes?: Route[]; webhookBackoffMs?: number[]
       if (!match) return fail("unrecognized_url");
 
       const raw = { ...parseForm(req.query ?? ""), ...(method === "POST" ? parseForm(req.body ?? "") : {}) };
+      request.params = raw;
       const params = validate(match.operation, raw);
 
       // Validation errors above are never stored, like the real API: only requests that reach a handler are.
