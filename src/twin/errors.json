@@ -2,7 +2,7 @@
   "api_error": { "status": 500, "type": "api_error", "message": "parity: api_error" },
   "api_key_invalid": { "status": 401, "type": "invalid_request_error", "message": "parity: api_key_invalid" },
   "api_key_missing": { "status": 401, "type": "invalid_request_error", "message": "parity: api_key_missing" },
-  "card_declined": { "status": 402, "type": "card_error", "code": "card_declined", "message": "parity: card_declined" },
+  "card_declined": { "status": 402, "type": "card_error", "code": "card_declined", "message": "Your card was declined." },
   "charge_already_refunded": { "status": 400, "type": "invalid_request_error", "code": "charge_already_refunded", "message": "parity: charge_already_refunded" },
   "customer_no_payment_method": { "status": 400, "type": "invalid_request_error", "code": "resource_missing", "message": "parity: customer_no_payment_method" },
   "decimal_too_precise": { "status": 400, "type": "invalid_request_error", "param": "{param}", "message": "parity: decimal_too_precise" },
