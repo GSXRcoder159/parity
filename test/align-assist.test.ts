@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TEMPLATES } from "../templates/index.ts";
-import { ASSIST_EFFORT, ASSIST_LOCI, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, cooldowns, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
+import { ASSIST_EFFORT, ASSIST_LOCI, ASSIST_MAX_TOKENS, CONTRACT, assist, assistText, clusters, cooldowns, normalizeWithParams, parseReply, sh, type AssistResult, type Run } from "../src/align/assist.ts";
 import { nodeImage, type Judged, type Scores } from "../src/align/gate.ts";
 import { align, type AlignResult } from "../src/align/index.ts";
 import { CapRefused, capUsd, complete, costUsd, readLlmLedger, type LlmEntry } from "../src/align/llm.ts";
@@ -381,6 +381,29 @@ test("assist: a locus whose sealed-log proposal is still an open align/assisted-
   // PR #7 merged or closed: no longer open, so a is tried again.
   const later = await assist(r, { repo: REPO, dataDir, runId: "run-closed", k: 1, env, run: withOpen(open.slice(1)), now: NOW });
   assert.deepEqual(later.outcomes.map((o) => [o.locus, o.result]), [["GET /v1/unserved/{id}", "no-owner"]]);
+});
+
+test("clusters: one per object type and per error key, the most train steps unlocked first (not the most divergences); a fraud/risk field holds its step back", () => {
+  const d = (seq: string, step: number, path: string, locus: Locus, heldOut = false): Triaged => ({ seq, step, path, cls: "VALUE_MISMATCH", template: "t", heldOut, locus });
+  const card = (f: string): Locus => ({ kind: "field", objectType: "payment_method", fieldPath: `card.${f}` });
+  const err = (f: string): Locus => ({ kind: "error", errorKey: "k", field: f });
+  const events: Locus = { kind: "events", template: "t", steps: [] };
+  const divergences = [
+    // Two card fields diverging together at one step: one cluster, which alone unlocks the step, except where a fraud
+    // field (never the LLM's to fix) diverges there too.
+    ...["a#1", "a#2", "a#3"].flatMap((s) => [d(s, 0, "$.card.x", card("x")), d(s, 0, "$.card.y", card("y"))]),
+    d("a#1", 0, "$.card.checks", card("checks")),
+    ...["b#1", "b#2"].flatMap((s) => [d(s, 1, "$.error.message", err("message")), d(s, 1, "$.error.advice_code", err("advice_code"))]),
+    ...["c#1", "c#2", "c#3", "c#4", "c#5", "c#6", "c#7"].map((s) => d(s, -1, "$", events)), // event loci own no step
+    d("h#1", 0, "$.error.message", err("message"), true), // held out: never counted
+  ];
+  const notMechanical = [card("x"), card("y"), card("checks"), err("message"), err("advice_code"), events].map((locus) => ({ locus, reason: "r", divergences: 0 }));
+  const order = clusters({ divergences, notMechanical, gate: { blocked: [] } as unknown as AlignResult["gate"] });
+  assert.deepEqual(order.map((c) => [c.locus, c.steps, c.divergences.length]), [
+    [card("x, card.y"), 2, 6],
+    [err("advice_code, message"), 2, 4],
+    [events, 0, 7],
+  ]);
 });
 
 test("cooldowns: any 2 consecutive non-productive attempts (bad-reply of any kind, gate-failed) under the current contract cool a locus 7 days, with the reason; a proposed one resets the streak; older contracts' entries are ignored", () => {

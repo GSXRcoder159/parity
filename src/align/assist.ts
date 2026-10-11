@@ -41,6 +41,10 @@ interface Cluster {
   reason: string;
   /** Its train divergences (noise excluded). */
   divergences: Triaged[];
+  /** Train steps whose only divergences are this locus's: the L3 steps fixing it alone unlocks. */
+  steps: number;
+  /** groupOf: the cluster's stable name. */
+  group: string;
 }
 
 /**
@@ -51,17 +55,48 @@ const risky = (path: string): boolean => segments(path).some((s) => FRAUD_OR_RIS
 const scrub = (v: unknown): unknown =>
   Array.isArray(v) ? v.map(scrub) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !FRAUD_OR_RISK.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
 
-/** Non-mechanical train loci worth a code change, most train divergences first. Noise and fraud/risk loci are skipped. */
-function clusters(r: AlignResult): Cluster[] {
+/**
+ * One assist cluster per object type (field loci) and per error key: one handler's gap often spans several fields. The
+ * group is the cluster's stable name (cooldowns, open PRs), whichever fields it holds that night; an event or route
+ * locus keeps its `where` name, as logged before clusters were grouped.
+ */
+const groupOf = (l: Locus): string => (l.kind === "field" ? `field|${l.objectType}` : l.kind === "error" ? `error|${l.errorKey}` : where(l));
+/** The cluster's locus: its members' field paths (or error fields), sorted and joined, so `where` names them all. */
+function merged(ls: Locus[]): Locus {
+  const l = ls[0]!;
+  const names = (f: (x: Locus) => string) => [...new Set(ls.map(f))].sort().join(", ");
+  if (l.kind === "field") return { ...l, fieldPath: names((x) => (x as typeof l).fieldPath) };
+  if (l.kind === "error") return { ...l, field: names((x) => (x as typeof l).field) };
+  return l;
+}
+
+/**
+ * Non-mechanical train loci worth a code change, grouped (groupOf), the most train steps unlocked first: steps whose
+ * every divergence is in the cluster, so fixing it alone passes them at L3 (an event locus owns no step). Ties: most
+ * train divergences. Noise and fraud/risk loci are skipped (a fraud/risk divergence still holds its step back).
+ */
+export function clusters(r: Pick<AlignResult, "divergences" | "notMechanical" | "gate">): Cluster[] {
   const train = r.divergences.filter((d) => !d.heldOut && d.cls !== "NONDETERMINISTIC");
+  const owners = new Map<string, Set<string>>();
+  // A fraud/risk field is never shown to the LLM, so it is no cluster's to fix: it owns its step apart.
+  const owner = (d: Triaged) => (d.locus.kind === "field" && risky(`.${d.locus.fieldPath}`) ? "fraud-or-risk" : groupOf(d.locus));
+  for (const d of train) if (d.step >= 0) owners.set(`${d.seq}|${d.step}`, (owners.get(`${d.seq}|${d.step}`) ?? new Set()).add(owner(d)));
+  const unlocks = new Map<string, number>();
+  for (const s of owners.values()) if (s.size === 1) unlocks.set([...s][0]!, (unlocks.get([...s][0]!) ?? 0) + 1);
   const loci = [
     ...r.notMechanical.filter((n) => !/^(noise|fraud)/.test(n.reason)).map((n) => ({ locus: n.locus, reason: n.reason })),
     ...r.gate.blocked.map((j) => ({ locus: j.candidate.locus, reason: "blocked-by-code: the data edit changed nothing" })),
   ].filter((l) => !(l.locus.kind === "field" && risky(`.${l.locus.fieldPath}`))); // e.g. "no template" is decided before the fraud check
-  return loci
-    .map((l) => ({ ...l, divergences: train.filter((d) => locusKey(d.locus) === locusKey(l.locus)) }))
+  const groups = new Map<string, typeof loci>();
+  for (const l of loci) groups.set(groupOf(l.locus), [...(groups.get(groupOf(l.locus)) ?? []), l]);
+  return [...groups]
+    .map(([g, ls]) => {
+      const keys = new Set(ls.map((l) => locusKey(l.locus)));
+      const reason = [...new Set(ls.map((l) => l.reason))].join("; ");
+      return { locus: merged(ls.map((l) => l.locus)), reason, divergences: train.filter((d) => keys.has(locusKey(d.locus))), steps: unlocks.get(g) ?? 0, group: g };
+    })
     .filter((c) => c.divergences.length)
-    .sort((a, b) => b.divergences.length - a.divergences.length || (locusKey(a.locus) < locusKey(b.locus) ? -1 : 1));
+    .sort((a, b) => b.steps - a.steps || b.divergences.length - a.divergences.length || (locusKey(a.locus) < locusKey(b.locus) ? -1 : 1));
 }
 
 const RESOURCES = new URL("../twin/resources/", import.meta.url);
@@ -259,6 +294,9 @@ export interface Outcome {
   locus: string;
   reason: string;
   divergences: number;
+  /** Train steps fixing the locus alone unlocks at L3 (the queue's order), and its cluster's stable name; absent before 2026-10-07. */
+  steps?: number;
+  group?: string;
   result: "proposed" | "gate-failed" | "bad-reply" | "llm-error" | "no-owner" | "cap" | "pr-failed" | "cooldown" | "open-pr";
   detail?: string;
   seq?: string;
@@ -327,7 +365,8 @@ export function cooldowns(log: string, now: Date): Map<string, string> {
     const outcomes = a?.contract === CONTRACT ? a.outcomes : []; // an older contract's outcomes say nothing of this one
     for (const x of outcomes.filter((x) => ATTEMPTS.has(x.result))) {
       const why = x.detail === "stop_reason max_tokens" ? "max_tokens" : x.result === "bad-reply" || x.result === "gate-failed" ? x.result : undefined;
-      tries.set(x.locus, [...(tries.get(x.locus) ?? []), { ts: e.ts, why }]);
+      const k = x.group ?? x.locus; // an entry from before clusters were grouped: its where name
+      tries.set(k, [...(tries.get(k) ?? []), { ts: e.ts, why }]);
     }
   }
   const out = new Map<string, string>();
@@ -347,7 +386,7 @@ export function cooldowns(log: string, now: Date): Map<string, string> {
 export const prKey = (d: Record<string, unknown>): string => `${String(d.branch)}#${String(d.pr).split("/").pop()}`;
 
 /**
- * Loci whose sealed-log assisted proposal is still an open align/assisted-* PR (`gh pr list`), each with its `open-pr`
+ * Clusters (by groupOf) whose sealed-log assisted proposal is still an open align/assisted-* PR (`gh pr list`), each with its `open-pr`
  * detail: a second proposal for the locus would compete with the one waiting for review. No proposal logged: gh is not asked.
  */
 export function openPrs(log: string, run: Run, repo: string): Map<string, string> {
@@ -355,7 +394,7 @@ export function openPrs(log: string, run: Run, repo: string): Map<string, string
   if (!proposed.length) return new Map();
   const prs = JSON.parse(run("gh", ["pr", "list", "--state", "open", "--json", "number,headRefName", "--limit", "200"], repo)) as { number: number; headRefName: string }[];
   const open = new Set(prs.filter((p) => p.headRefName.startsWith("align/assisted-")).map((p) => prKey({ branch: p.headRefName, pr: p.number })));
-  return new Map(proposed.filter((d) => open.has(prKey(d))).map((d) => [where(d.locus as Locus), `its proposal ${String(d.pr)} is still open: review it first`]));
+  return new Map(proposed.filter((d) => open.has(prKey(d))).map((d) => [groupOf(d.locus as Locus), `its proposal ${String(d.pr)} is still open: review it first`]));
 }
 
 /**
@@ -405,13 +444,13 @@ export async function assist(
   let tried = 0;
   for (const c of all) {
     if (tried === (o.k ?? ASSIST_LOCI)) break;
-    const [result, detail] = open.has(where(c.locus)) ? (["open-pr", open.get(where(c.locus))] as const) : (["cooldown", cool.get(where(c.locus))] as const);
+    const [result, detail] = open.has(c.group) ? (["open-pr", open.get(c.group)] as const) : (["cooldown", cool.get(c.group)] as const);
     if (detail) {
-      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result, detail, cost_usd: 0 });
+      res.outcomes.push({ locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, steps: c.steps, group: c.group, result, detail, cost_usd: 0 });
       continue; // the next locus takes the slot
     }
     tried++;
-    const out: Outcome = { locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, result: "no-owner", cost_usd: 0 };
+    const out: Outcome = { locus: where(c.locus), reason: c.reason, divergences: c.divergences.length, steps: c.steps, group: c.group, result: "no-owner", cost_usd: 0 };
     res.outcomes.push(out);
     const ce = counterexample(c, r.divergences, oracle, twin);
     out.seq = ce.seq;
