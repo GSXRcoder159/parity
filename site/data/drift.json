@@ -2441,5 +2441,54 @@
     "template": "clock-period-rollover",
     "path": "$.status_details.advancing.target_frozen_time",
     "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "GET /v1/invoices",
+    "template": "card-declined",
+    "path": "$.data[0].webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "GET /v1/invoices",
+    "template": "subscription-update-price",
+    "path": "$.data[0].webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "GET /v1/invoices",
+    "template": "subscription-update-price",
+    "path": "$.data[1].webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "GET /v1/invoices/$s1.latest_invoice",
+    "template": "invoice-send-invoice",
+    "path": "$.webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "GET /v1/subscriptions/$s1.id",
+    "template": "expand-paths",
+    "path": "$.latest_invoice.webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "POST /v1/invoices/$s1.latest_invoice/finalize",
+    "template": "invoice-send-invoice",
+    "path": "$.webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-12",
+    "endpoint": "POST /v1/invoices/$s1.latest_invoice/pay",
+    "template": "invoice-send-invoice",
+    "path": "$.webhooks_delivered_at",
+    "cls": "VALUE_MISMATCH"
   }
 ]

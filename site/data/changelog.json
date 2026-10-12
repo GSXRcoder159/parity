@@ -383,5 +383,24 @@
     "pr": 13,
     "file": "src/twin/billing.ts",
     "divergencesRemoved": 367
+  },
+  {
+    "date": "2026-10-11",
+    "class": "surface-added",
+    "note": "loop change: request-derived message vars ({value}, {object}) let the mechanical pass seed messages that quote the request; the next automatic message patches follow from it (rulings, Align throughput)",
+    "commit": "83f20587d69a6efb8036b6e311061a2e53af5b2f",
+    "divergencesRemoved": 0
+  },
+  {
+    "date": "2026-10-12",
+    "class": "automatic",
+    "file": "src/twin/errors.json",
+    "pointers": [
+      "/unit_amount_too_large/message",
+      "/parameter_unknown/message",
+      "/resource_missing/message"
+    ],
+    "commit": "0d41e480a9f255383483a6eba76480b6eae976f0",
+    "divergencesRemoved": 300
   }
 ]
