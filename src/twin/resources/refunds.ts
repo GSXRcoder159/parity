@@ -60,7 +60,8 @@ export const routes: Route[] = [
     (ctx, { params }) => {
       const { charge, payment_intent } = params;
       const hit = (r: Obj) => (!charge || r.charge === charge) && (!payment_intent || r.payment_intent === payment_intent);
-      return { body: list(ctx.all("refund").filter(hit), params, "/v1/refunds") };
+      const filtered = ctx.all("refund").filter(hit);
+      return { body: { ...list(filtered, params, "/v1/refunds"), count: filtered.length } };
     },
     "get /v1/refunds",
   ],
