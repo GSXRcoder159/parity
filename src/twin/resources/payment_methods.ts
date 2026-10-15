@@ -40,7 +40,21 @@ export const routes: Route[] = [
       const { behavior, decline_code, ...details } = card;
       if (behavior === "attach_declined") ctx.fail("card_declined", {}, { decline_code });
       const pm = ctx.build("payment_method", { id: ctx.id("pm"), created: ctx.now(), customer: customer.id, type: "card" });
-      pm.card = { ...(pm.card as Obj), ...details, display_brand: DISPLAY_BRAND[details.brand] ?? details.brand, networks: { available: [details.brand], preferred: null } };
+      const now = new Date(ctx.now() * 1000);
+      const expMonth = now.getUTCMonth() + 1;
+      const expYear = now.getUTCFullYear() + 1; // test cards expire one year on (every train oracle card)
+      let h = 0;
+      for (let i = 0; i < token.length; i++) h = (h * 31 + token.charCodeAt(i)) | 0;
+      const fingerprint = Math.abs(h).toString(36).padStart(16, "0").slice(0, 16);
+      pm.card = {
+        ...(pm.card as Obj),
+        ...details,
+        display_brand: DISPLAY_BRAND[details.brand] ?? details.brand,
+        networks: { available: [details.brand], preferred: null },
+        exp_month: expMonth,
+        exp_year: expYear,
+        fingerprint,
+      };
       return { body: pm, emits: [{ type: "payment_method.attached", object: pm }] };
     },
     "post /v1/payment_methods/{payment_method}/attach",
