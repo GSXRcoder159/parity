@@ -192,6 +192,7 @@ export function subInvoice(ctx: Ctx, sub: Obj, customer: Obj, id: string, lines:
     test_clock: customer.test_clock ?? null,
     total,
     total_excluding_tax: total,
+    webhooks_delivered_at: at,
     ...fields,
   });
 }
