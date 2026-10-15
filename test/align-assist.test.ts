@@ -436,7 +436,8 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
   // Oracle: every customer's description set to its name: a per-sequence value no data file can seed, so only code can
   // fix it.
   const oracle = await twinOracle((o) => (o.object === "customer" && !o.deleted ? { ...o, description: o.name ?? null } : o));
-  // Fraud and risk fields (0001 R8) in a train response, as a field and nested in another field's value: they must reach
+  // Fraud and risk fields (0001 R8) in a train response, as a field and nested in another field's value (normalization v1.9 drops
+  // both, leaving `payment` a customer field the twin lacks, in the cluster): they must reach
   // neither the prompt nor the PR. Train only: in the held-out customers they would block the L3 match below.
   const RISK = "RISKMARK";
   Object.assign(oracle.find((r) => r.seq === "customer-crud#1")!.steps[0]!.body as object, {
@@ -492,7 +493,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.deepEqual([o!.result, o!.file, o!.seq, o!.pr, o!.branch], ["proposed", FILE, "customer-crud#1", "https://github.com/example/parity/pull/7", "align/assisted-2026-09-26-1"]);
     assert.ok(o!.gate!.after.trainDivergences < o!.gate!.before.trainDivergences);
     assert.ok(o!.gate!.after.heldOut.L3.k > o!.gate!.before.heldOut.L3.k, "the held-out customers match too");
-    assert.match(assistText(ok), /^ {2}proposed · \d+ · customer description · src\/twin\/resources\/customers\.ts · \$0\.0070 · https:\/\/github\.com\/example\/parity\/pull\/7$/m);
+    assert.match(assistText(ok), /^ {2}proposed · \d+ · customer description, payment · src\/twin\/resources\/customers\.ts · \$0\.0070 · https:\/\/github\.com\/example\/parity\/pull\/7$/m);
     // The LLM's file was scored only in the container: first a start check of the pinned image, then score-twin there,
     // with the twin's recordings for the mechanical pass on top of it (which proposes nothing here: no gate run).
     assert.deepEqual(dockerCalls[0], ["run", "--rm", "--network", "none", nodeImage(), "node", "--version"]);
@@ -530,7 +531,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     const ce = user.slice(user.indexOf("## Counterexample"));
     for (const text of [ce, body]) {
       assert.ok(!text.includes(RISK) && !/outcome|checks|risk_level|seller_message|cvc_check/.test(text), "no fraud or risk field, key or value");
-      assert.match(text, /^- step 0 \$\.payment MISSING_FIELD expected \{"card":\{"brand":"visa"\}\} actual undefined$/m);
+      assert.match(text, /^\* step 0 \$\.payment MISSING_FIELD expected \{"card":\{"brand":"visa"\}\} actual undefined$/m);
       assert.match(
         text,
         /^params: \{"email":"jenny\+<run>@example\.com","name":"Parity \d+","metadata":\{"parity":"customer-crud","referred_by":"<id:cus>","plan":"<id:price>"\},"payment_method":"<id:pm>","invoice_settings":\{"default_payment_method":"<id:pm>"\}\}$/m,
@@ -545,7 +546,7 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.equal(git("worktree", "list").split("\n").length, 1, "the worktree is removed");
     assert.equal(git("diff", "--name-only", head, "align/assisted-2026-09-26-1"), FILE);
     assert.equal(git("show", `align/assisted-2026-09-26-1:${FILE}`) + "\n", fixed);
-    assert.match(git("log", "-1", "--format=%B", "align/assisted-2026-09-26-1"), /^align: assisted patch to src\/twin\/resources\/customers\.ts \(customer description\)\n\nProposed by claude-sonnet-5 from train sequence customer-crud#1/);
+    assert.match(git("log", "-1", "--format=%B", "align/assisted-2026-09-26-1"), /^align: assisted patch to src\/twin\/resources\/customers\.ts \(customer description, payment\)\n\nProposed by claude-sonnet-5 from train sequence customer-crud#1/);
     assert.ok(!git("log", "-1", "--format=%B", "align/assisted-2026-09-26-1").includes("Parity "), "no response values in the commit");
     assert.match(git("ls-remote", "--heads", "origin"), /refs\/heads\/align\/assisted-2026-09-26-1$/m);
 
@@ -604,8 +605,8 @@ test("assist end to end: a code-only divergence goes to the LLM (train only), a 
     assert.equal(api.requests.length, 4, "sent once");
     assert.equal(dockerCalls.filter((a) => a.includes("score-twin")).length, scored);
     const last = readLlmLedger(join(data, "budget/llm.jsonl")).at(-1)!;
-    assert.deepEqual([last.purpose, last.stop_reason, last.cost_usd], ["assist customer description", "max_tokens", 0.24556]);
-    assert.match(assistText(cut), /^ {2}bad-reply · \d+ · customer description · \$0\.2456 · stop_reason max_tokens$/m);
+    assert.deepEqual([last.purpose, last.stop_reason, last.cost_usd], ["assist customer description, payment", "max_tokens", 0.24556]);
+    assert.match(assistText(cut), /^ {2}bad-reply · \d+ · customer description, payment · \$0\.2456 · stop_reason max_tokens$/m);
     assert.equal(gh.length, 1, "no PR");
 
     // A SEARCH that is not in the file: a bad-reply naming it, ledgered, never scored, no PR.

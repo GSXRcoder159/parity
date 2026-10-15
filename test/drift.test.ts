@@ -78,14 +78,15 @@ test("drift: changes outside the noise set are reported by endpoint, template, p
     line("events", "$", "EVENT_SET_MISMATCH"),
   ]);
   assert.equal(r.compared, 2);
-  assert.equal(r.withheld, 4, "risk_level in 2 steps of 2 sequences");
+  // Normalization v1.9 drops fraud and risk fields before the comparison: none is left to withhold.
+  assert.equal(r.withheld, 0, "risk_level dropped by normalization v1.9");
   assert.equal(r.file, `drift/${DATE}.md`);
 
   const md = readFileSync(join(root, r.file!), "utf8");
   assert.match(md, /^# Drift 2026-10-04$/m);
   assert.match(md, /^\| `POST \/v1\/customers` \| customer-crud \| `\$\.tax_exempt` \| VALUE_MISMATCH \| 2 \|$/m);
   assert.match(md, /^\| `events` \| customer-crud \| `\$` \| EVENT_SET_MISMATCH \| 1 \|$/m);
-  assert.match(md, /^4 divergences on fraud or risk fields are withheld/m);
+  assert.doesNotMatch(md, /fraud or risk|RISKMARK|risk_level/);
   const feed = readFileSync(join(root, "site/data/drift.json"), "utf8");
   assert.deepEqual(JSON.parse(feed), [older, ...r.items]);
   for (const text of [md, feed]) {

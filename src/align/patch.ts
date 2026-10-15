@@ -5,6 +5,7 @@
 // fraud or risk field, which the public templates must not carry. Every other train locus is returned as not
 // mechanical, with the reason (input to the assisted pass).
 import { isDeepStrictEqual } from "node:util";
+import { FRAUD_OR_RISK } from "../bench/normalize.ts";
 import { ID } from "../bench/run.ts";
 import { requestVars } from "../twin/errors.ts";
 import type { Recording, StepRecord } from "../types.ts";
@@ -50,11 +51,8 @@ const RENDERED = new Set([...ERROR_FIELDS, "doc_url", "request_log_url"]);
  */
 // ponytail: fixed name list; drop a name once the rolling oracle spans accounts/months and the determinism check rejects it on its own.
 const ACCOUNT_OR_TIME = new Set(["account_country", "account_name", "calculated_statement_descriptor", "exp_month", "exp_year"]);
-/**
- * Fraud and risk fields ("information Stripe uses for security or fraud prevention", 0001 §(c)/R8): never published in
- * any form, so never seeded into the public templates. `checks` holds card verification results (cvc, address).
- */
-export const FRAUD_OR_RISK = new Set(["fraud_details", "outcome", "risk_level", "risk_score", "checks", "radar_options"]);
+// Fraud and risk fields (0001 R8): one list, the normalization's (v1.9 drops them from the comparison too).
+export { FRAUD_OR_RISK };
 /**
  * An API type default is an enum token (lowercase, digits, `_.-`). Any other text (prose, labels, country or descriptor
  * codes) is set by the request, the account or the context, e.g. a charge description that follows its invoice's reason.

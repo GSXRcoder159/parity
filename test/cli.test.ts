@@ -49,7 +49,7 @@ test("compare writes <out>.md and <out>.json; normalized ids match, --raw ids di
   const norm = cli(["compare", "--oracle", "a.jsonl", "--target", "b.jsonl", "--out", "out/norm"], dir);
   assert.equal(norm.status, 0, norm.stderr);
   const nj = JSON.parse(readFileSync(join(dir, "out/norm.json"), "utf8"));
-  assert.equal(nj.normalization, "v1.8");
+  assert.equal(nj.normalization, "v1.9");
   assert.equal(nj.score.overall.L3.p, 1);
   assert.deepEqual(nj.results.map((r: { seq: string }) => r.seq), ["customer-crud#1", "customer-crud#2"]);
   assert.match(readFileSync(join(dir, "out/norm.md"), "utf8"), /^# ParityBench: b\.jsonl vs a\.jsonl/);
@@ -201,7 +201,7 @@ test("score-twin: replays the oracle against an in-process twin at each sequence
   assert.match(r.stdout, /^\*\*Summary:\*\* L1 100\.0% .* L4 100\.0% \[[\d.–]+\] \(6\)/m);
   assert.match(r.stderr, /^score-twin: 6 sequences, \d+ requests: twin [\d.]+ s, compare [\d.]+ s; wrote out\/score\.json$/m);
   const j = JSON.parse(readFileSync(join(dir, "out/score.json"), "utf8"));
-  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.8", 6]);
+  assert.deepEqual([j.target, j.normalization, j.score.overall.L4.k], ["twin", "v1.9", 6]);
   assert.ok(j.results.every((x: { eventsMatch: boolean; eventsSkipped: boolean }) => x.eventsMatch && !x.eventsSkipped), "the twin's events are compared");
 
   const only = await cliAsync(["score-twin", "--oracle", "oracle.jsonl", "--templates", "subscription-create,customer-crud"], dir);

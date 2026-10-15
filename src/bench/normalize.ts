@@ -1,10 +1,16 @@
-// Normalization v1.8: rewrites run-specific values (ids, timestamps, calendar months plus hours or after a trial, dates in text, a declined
+// Normalization v1.9: drops fraud and risk fields; rewrites run-specific values (ids, timestamps, calendar months plus hours or after a trial, dates in text, a declined
 // invoice's retry day, nonces, secrets, hosted URLs, per-account and simulated card-network opaques, test-card expiry, dashboard
 // links, the unclaimed-sandbox banner) so two faithful runs compare equal. List order is compared as returned. Published with every score.
 import type { Recording } from "../types.ts";
 import { runNonce } from "./run.ts";
 
-export const NORMALIZATION_VERSION = "v1.8";
+export const NORMALIZATION_VERSION = "v1.9";
+
+/**
+ * Fraud and risk fields ("information Stripe uses for security or fraud prevention", 0001 §(c)/R8): never published in
+ * any form, so never seeded into the public templates, and (v1.9) not compared. `checks` holds card verification results (cvc, address).
+ */
+export const FRAUD_OR_RISK = new Set(["fraud_details", "outcome", "risk_level", "risk_score", "checks", "radar_options"]);
 
 export const RULES: { name: string; rationale: string }[] = [
   {
@@ -55,7 +61,7 @@ export const RULES: { name: string; rationale: string }[] = [
   {
     name: "card-network-opaques",
     rationale:
-      "Simulated card-network values are random per charge: `authorization_code`, `network_transaction_id` and `transaction_link_id` (charge `payment_method_details.card`) and `risk_score` (`outcome`; a fraud/risk field, never published per decision 0001 R8) → `<opaque>` wherever they are non-null. Hides: a wrong value, format or type in those fields (a null-vs-value difference is still compared).",
+      "Simulated card-network values are random per charge: `authorization_code`, `network_transaction_id` and `transaction_link_id` (charge `payment_method_details.card`) and `risk_score` (`outcome`; a fraud/risk field, never published per decision 0001 R8; moot since v1.9, which drops `outcome` by rule fraud-or-risk) → `<opaque>` wherever they are non-null. Hides: a wrong value, format or type in those fields (a null-vs-value difference is still compared).",
   },
   {
     name: "card-expiry",
@@ -66,6 +72,11 @@ export const RULES: { name: string; rationale: string }[] = [
     name: "card-eci",
     rationale:
       "A Visa charge's `payment_method_details.card.electronic_commerce_indicator` takes one of two values that nothing in the sequence selects (same test card, no 3DS; #8 in the 2026-09-28 noise pair). v1.4: it becomes `<opaque>` wherever it is non-null (Mastercard charges carry null). Hides: a wrong ECI value, format or type (a null-vs-value difference is still compared). 3DS's own `three_d_secure.electronic_commerce_indicator` is not rewritten.",
+  },
+  {
+    name: "fraud-or-risk",
+    rationale:
+      "v1.9: fraud and risk fields (`checks`, `outcome`, `risk_level`, `risk_score`, `fraud_details`, `radar_options`) are dropped at any depth, from both sides. Decision 0001 R8 bars publishing them in any form, so the twin's public templates never carry the sandbox's values (its card `checks`, a charge's `outcome` and `fraud_details` are null) and comparing them measures that rule, not the twin: under v1.8 they were 507 train divergences on 447 steps (`card.checks` 427), none of them the step's only divergence. Hides: anything in those fields, absent or present, including a charge `outcome`'s non-risk parts (`network_status`, `type`, `reason`, `seller_message`) and card `checks`' cvc and address results; and in drift, a sandbox change in them (drift's withheld count, which counted them unpublished, is now 0).",
   },
   {
     name: "request-log-url",
@@ -229,6 +240,7 @@ export function normalizeRecording(r: Recording): Recording {
     if (Array.isArray(v)) return v.map(walk);
     if (!isObj(v)) return v;
     // Dropped keys (v is part of the structuredClone below, so deleting is safe).
+    for (const k of FRAUD_OR_RISK) delete v[k];
     if (isObj(v.error)) delete v.error.request_log_url;
     const card = v.object === "refund" && isObj(v.destination_details) ? v.destination_details.card : undefined;
     if (isObj(card)) for (const k of REFUND_REFERENCE) delete card[k];

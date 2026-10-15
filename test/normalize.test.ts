@@ -30,8 +30,8 @@ const rec = (steps: StepRecord[], events: StripeEvent[] = []): Recording => ({
 const body = (r: Recording, i: number): any => r.steps[i]!.body;
 
 test("every rule has a name and a rationale naming the bug class it could hide", () => {
-  assert.equal(NORMALIZATION_VERSION, "v1.8");
-  assert.equal(RULES.length, 16);
+  assert.equal(NORMALIZATION_VERSION, "v1.9");
+  assert.equal(RULES.length, 17);
   for (const r of RULES) assert.match(r.rationale, /Hides:/, r.name);
 });
 
@@ -190,8 +190,7 @@ test("v1.2: request_log_url dropped under error only; updated is a timestamp; ca
   assert.deepEqual(body(r, 0), { object: "product", created: "<t:~0>", updated: "<t:+2h>", request_log_url: "https://x.example/keep" });
   assert.deepEqual(body(r, 1), { error: { type: "invalid_request_error" } });
   assert.deepEqual(body(r, 2), {
-    object: "charge",
-    outcome: { risk_level: "normal", risk_score: "<opaque>" },
+    object: "charge", // v1.9: `outcome` (fraud or risk) is dropped, its risk_score with it
     payment_method_details: { card: { authorization_code: "<opaque>", network_transaction_id: "<opaque>", transaction_link_id: null, brand: "visa" } },
   });
 });
@@ -486,4 +485,15 @@ test("normalizeRecording normalizes step params like bodies, on the bodies' anch
   assert.deepEqual(r, before);
   assert.deepEqual(raw, before);
   assert.notEqual(raw.steps[0], r.steps[0]);
+});
+
+test("v1.9: fraud and risk fields are dropped at any depth, present or null; their siblings stay", () => {
+  const r = normalizeRecording(
+    rec([
+      step(0, { object: "payment_method", card: { brand: "visa", checks: { cvc_check: "pass" } } }),
+      step(1, { object: "charge", outcome: null, fraud_details: {}, radar_options: {}, data: [{ risk_level: "normal", risk_score: 12, paid: true }] }),
+    ]),
+  );
+  assert.deepEqual(body(r, 0), { object: "payment_method", card: { brand: "visa" } });
+  assert.deepEqual(body(r, 1), { object: "charge", data: [{ paid: true }] });
 });
