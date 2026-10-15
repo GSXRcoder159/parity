@@ -29,6 +29,7 @@ export const routes: Route[] = [
         ctx.build("refund", {
           id: ctx.id("re"),
           amount: amount ?? refundable,
+          balance_transaction: ctx.id("txn"),
           charge: charge.id,
           created: ctx.now(),
           currency: charge.currency,
