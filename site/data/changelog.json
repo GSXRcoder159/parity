@@ -402,5 +402,70 @@
     ],
     "commit": "0d41e480a9f255383483a6eba76480b6eae976f0",
     "divergencesRemoved": 300
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 14,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 375
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 15,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 255
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 16,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 267
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 17,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 17
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 22,
+    "file": "src/twin/resources/refunds.ts",
+    "divergencesRemoved": 60
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 23,
+    "file": "src/twin/billing.ts",
+    "divergencesRemoved": 7
+  },
+  {
+    "date": "2026-10-15",
+    "class": "automatic",
+    "file": "src/twin/errors.json",
+    "pointers": [
+      "/card_declined/message"
+    ],
+    "divergencesRemoved": 47
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 26,
+    "file": "src/twin/resources/refunds.ts",
+    "divergencesRemoved": 20
+  },
+  {
+    "date": "2026-10-15",
+    "class": "assisted",
+    "pr": 27,
+    "file": "src/twin/resources/payment_methods.ts",
+    "divergencesRemoved": 1281
   }
 ]
