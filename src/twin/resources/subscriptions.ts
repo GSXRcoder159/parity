@@ -169,11 +169,15 @@ export function change(ctx: Ctx, sub: Obj, p: Obj, puts: Obj[]): { after: Obj; p
     // is undocumented; unobserved until B1. With the reset, every item restarts now on its own period (below).
     const dup = !old && items.some((x) => (x.price as Obj).id === price.id);
     const other = recurrence(price) !== recurrence(like);
-    if (price.currency !== like.currency || dup || (other && !reset)) ctx.fail("not_implemented");
+    if (price.currency !== like.currency || dup) ctx.fail("not_implemented");
     moved ||= other;
     const next = old
       ? assign({ ...old, plan: plan(ctx, price), price, quantity: it.quantity ?? old.quantity }, it, ["metadata"])
       : newItem(ctx, it, price, sub.id, { start: before[0]!.current_period_start, end: before[0]!.current_period_end });
+    if (other && !reset) {
+      const r = price.recurring as Obj;
+      next.current_period_end = addInterval(next.current_period_start as number, r.interval as string, r.interval_count as number);
+    }
     if (!old || (old.price as Obj).id !== price.id || old.quantity !== next.quantity) changed.push([old, next]);
     if (old) items[at] = next;
     else items.push(next);
