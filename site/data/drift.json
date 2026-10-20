@@ -2693,5 +2693,54 @@
     "template": "clock-declined-renewal",
     "path": "$.status_details.advancing.target_frozen_time",
     "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].allowed_payment_method_types",
+    "cls": "VALUE_MISMATCH"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.blik",
+    "cls": "EXTRA_FIELD"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.kakao_pay",
+    "cls": "EXTRA_FIELD"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.naver_pay",
+    "cls": "EXTRA_FIELD"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.pix",
+    "cls": "EXTRA_FIELD"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.samsung_pay",
+    "cls": "EXTRA_FIELD"
+  },
+  {
+    "date": "2026-10-20",
+    "endpoint": "GET /v1/payment_intents",
+    "template": "refund-full",
+    "path": "$.data[0].payment_method_options.satispay",
+    "cls": "EXTRA_FIELD"
   }
 ]
